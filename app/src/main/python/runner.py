@@ -4,6 +4,34 @@ import io
 import os
 import sys
 import traceback
+import json
+
+def complete(source, cursor, project_dir):
+    """Return Jedi's best local completion as JSON. Runs fully offline."""
+    try:
+        import jedi
+        before = source[:cursor]
+        line = before.count('\n') + 1
+        column = len(before.rsplit('\n', 1)[-1])
+        path = os.path.join(project_dir, 'main.py')
+        items = jedi.Script(source, path=path).complete(line, column)
+        if not items:
+            return '{}'
+        item = items[0]
+        suffix = item.complete
+        cursor_back = 0
+        if item.type in ('function', 'class') and not suffix.endswith(')'):
+            suffix += '()'
+            cursor_back = 1
+        return json.dumps({
+            'label': item.name + ('()' if cursor_back else ''),
+            'suffix': suffix,
+            'cursor_back': cursor_back,
+            'type': item.type,
+            'doc': item.docstring(raw=True)[:240]
+        })
+    except Exception:
+        return '{}'
 
 class _Stream(io.TextIOBase):
     def __init__(self, bridge, error=False):

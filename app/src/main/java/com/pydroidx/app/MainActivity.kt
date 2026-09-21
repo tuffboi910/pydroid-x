@@ -117,6 +117,29 @@ class IdeViewModel : ViewModel() {
     var settingsQuery by mutableStateOf("")
     var customFontPath by mutableStateOf("")
     var fontStatus by mutableStateOf("100-font vault ready")
+    var editorTextHex by mutableStateOf("#D4D4D4")
+    var commentHex by mutableStateOf("#6A9955")
+    var stringHex by mutableStateOf("#CE9178")
+    var numberHex by mutableStateOf("#B5CEA8")
+    var keywordHex by mutableStateOf("#C586C0")
+    var functionHex by mutableStateOf("#DCDCAA")
+    var variableHex by mutableStateOf("#9CDCFE")
+    var consoleTextHex by mutableStateOf("#E6F5FF")
+    var consoleBackgroundHex by mutableStateOf("#030303")
+    var toolbarHex by mutableStateOf("#050505")
+    var tabBarHex by mutableStateOf("#050505")
+    var userBubbleHex by mutableStateOf("#082F36")
+    var helperBubbleHex by mutableStateOf("#00E5FF")
+    var runButtonHex by mutableStateOf("#00E676")
+    var stopButtonHex by mutableStateOf("#FF3D71")
+    var headerHeight by mutableFloatStateOf(68f)
+    var tabHeight by mutableFloatStateOf(42f)
+    var toolbarHeight by mutableFloatStateOf(52f)
+    var bubbleRadius by mutableFloatStateOf(16f)
+    var bubbleWidth by mutableFloatStateOf(310f)
+    var pageDotSize by mutableFloatStateOf(8f)
+    var showHeader by mutableStateOf(true)
+    var showFileInfo by mutableStateOf(true)
     private val stdin = LinkedBlockingQueue<String?>()
     @Volatile private var worker: Thread? = null
     private var autosaveJob: Job? = null
@@ -160,6 +183,25 @@ class IdeViewModel : ViewModel() {
         motionIntensity = settings.getFloat("motion_intensity", 0.5f)
         motionEnabled = settings.getBoolean("motion_enabled", true)
         customFontPath = settings.getString("custom_font_path", "") ?: ""
+        editorTextHex=settings.getString("editor_text_hex","#D4D4D4")?:"#D4D4D4"
+        commentHex=settings.getString("comment_hex","#6A9955")?:"#6A9955"
+        stringHex=settings.getString("string_hex","#CE9178")?:"#CE9178"
+        numberHex=settings.getString("number_hex","#B5CEA8")?:"#B5CEA8"
+        keywordHex=settings.getString("keyword_hex","#C586C0")?:"#C586C0"
+        functionHex=settings.getString("function_hex","#DCDCAA")?:"#DCDCAA"
+        variableHex=settings.getString("variable_hex","#9CDCFE")?:"#9CDCFE"
+        consoleTextHex=settings.getString("console_text_hex","#E6F5FF")?:"#E6F5FF"
+        consoleBackgroundHex=settings.getString("console_background_hex","#030303")?:"#030303"
+        toolbarHex=settings.getString("toolbar_hex","#050505")?:"#050505"
+        tabBarHex=settings.getString("tab_bar_hex","#050505")?:"#050505"
+        userBubbleHex=settings.getString("user_bubble_hex","#082F36")?:"#082F36"
+        helperBubbleHex=settings.getString("helper_bubble_hex","#00E5FF")?:"#00E5FF"
+        runButtonHex=settings.getString("run_button_hex","#00E676")?:"#00E676"
+        stopButtonHex=settings.getString("stop_button_hex","#FF3D71")?:"#FF3D71"
+        headerHeight=settings.getFloat("header_height",68f);tabHeight=settings.getFloat("tab_height",42f)
+        toolbarHeight=settings.getFloat("toolbar_height",52f);bubbleRadius=settings.getFloat("bubble_radius",16f)
+        bubbleWidth=settings.getFloat("bubble_width",310f);pageDotSize=settings.getFloat("page_dot_size",8f)
+        showHeader=settings.getBoolean("show_header",true);showFileInfo=settings.getBoolean("show_file_info",true)
         hasAiKey = !aiKeys.load().isNullOrBlank()
         projectDir = File(context.filesDir, "projects/default").apply { mkdirs() }
         val main = File(projectDir, "main.py")
@@ -240,6 +282,16 @@ class IdeViewModel : ViewModel() {
             .putString("motion_style",motionStyle).putFloat("motion_speed",motionSpeed)
             .putFloat("motion_intensity",motionIntensity).putBoolean("motion_enabled",motionEnabled).apply()
         settings.edit().putString("custom_font_path",customFontPath).apply()
+        settings.edit().putString("editor_text_hex",editorTextHex).putString("comment_hex",commentHex)
+            .putString("string_hex",stringHex).putString("number_hex",numberHex).putString("keyword_hex",keywordHex)
+            .putString("function_hex",functionHex).putString("variable_hex",variableHex)
+            .putString("console_text_hex",consoleTextHex).putString("console_background_hex",consoleBackgroundHex)
+            .putString("toolbar_hex",toolbarHex).putString("tab_bar_hex",tabBarHex)
+            .putString("user_bubble_hex",userBubbleHex).putString("helper_bubble_hex",helperBubbleHex)
+            .putString("run_button_hex",runButtonHex).putString("stop_button_hex",stopButtonHex)
+            .putFloat("header_height",headerHeight).putFloat("tab_height",tabHeight).putFloat("toolbar_height",toolbarHeight)
+            .putFloat("bubble_radius",bubbleRadius).putFloat("bubble_width",bubbleWidth).putFloat("page_dot_size",pageDotSize)
+            .putBoolean("show_header",showHeader).putBoolean("show_file_info",showFileInfo).apply()
     }
     fun installVaultFont(context: Context, displayName: String, slug: String) {
         if (fontStatus.startsWith("Downloading")) return
@@ -309,6 +361,13 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var showLineNumbers = true
     private var showCurrentLine = true
     private var userPadding = 20
+    private var editorTextColor=AndroidColor.rgb(212,212,212)
+    private var commentColor=AndroidColor.rgb(106,153,85)
+    private var stringColor=AndroidColor.rgb(206,145,120)
+    private var numberColor=AndroidColor.rgb(181,206,168)
+    private var keywordColor=AndroidColor.rgb(197,134,192)
+    private var functionColor=AndroidColor.rgb(220,220,170)
+    private var variableColor=AndroidColor.rgb(156,220,254)
     private val gutterWidth get() = if(showLineNumbers) (52 * resources.displayMetrics.density).toInt() else 0
     private val completions = linkedMapOf(
         "print" to "print()", "input" to "input()", "range" to "range()", "len" to "len()",
@@ -407,7 +466,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                          padding: Float, animateTyping: Boolean, animationMs: Float,
                          highlightDelay: Float, cursor: String, autocomplete: Boolean,
                          ghostBrightness: Float, lineNumbers: Boolean, currentLine: Boolean,
-                         customFontPath: String) {
+                         customFontPath: String, palette: List<String>) {
         textSize = font
         setHorizontallyScrolling(!wrap)
         isHorizontalScrollBarEnabled = !wrap
@@ -417,6 +476,11 @@ private class PythonEditorView(context: Context) : EditText(context) {
         ghostAlpha = (ghostBrightness * 255).toInt().coerceIn(35,210)
         showLineNumbers = lineNumbers
         showCurrentLine = currentLine
+        fun parsed(index:Int,fallback:Int)=runCatching{AndroidColor.parseColor(palette[index])}.getOrDefault(fallback)
+        editorTextColor=parsed(0,AndroidColor.rgb(212,212,212));commentColor=parsed(1,AndroidColor.rgb(106,153,85))
+        stringColor=parsed(2,AndroidColor.rgb(206,145,120));numberColor=parsed(3,AndroidColor.rgb(181,206,168))
+        keywordColor=parsed(4,AndroidColor.rgb(197,134,192));functionColor=parsed(5,AndroidColor.rgb(220,220,170))
+        variableColor=parsed(6,AndroidColor.rgb(156,220,254));setTextColor(editorTextColor)
         typeface = if(customFontPath.isNotBlank() && File(customFontPath).exists()) {
             runCatching { Typeface.createFromFile(customFontPath) }.getOrDefault(Typeface.MONOSPACE)
         } else when(family) { "Sans" -> Typeface.SANS_SERIF; "Serif" -> Typeface.SERIF; else -> Typeface.MONOSPACE }
@@ -431,7 +495,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
         if (syntax) highlightNow() else {
             val editable = text
             editable?.getSpans(0, editable.length, ForegroundColorSpan::class.java)?.forEach { editable.removeSpan(it) }
-            setTextColor(AndroidColor.rgb(212,212,212))
+            setTextColor(editorTextColor)
         }
         updateGhostSuggestion()
     }
@@ -537,7 +601,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
             when {
                 source[i] == '#' -> {
                     while (i < source.length && source[i] != '\n') i++
-                    color(start, i, AndroidColor.rgb(106, 153, 85))
+                    color(start, i, commentColor)
                 }
                 source[i] == '\'' || source[i] == '"' -> {
                     val quote = source[i]
@@ -549,11 +613,11 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         if (!triple && source[i] == quote) { i++; break }
                         i++
                     }
-                    color(start, i, AndroidColor.rgb(206, 145, 120))
+                    color(start, i, stringColor)
                 }
                 source[i].isDigit() -> {
                     while (i < source.length && (source[i].isDigit() || source[i] in ".xXabcdefABCDEF_")) i++
-                    color(start, i, AndroidColor.rgb(181, 206, 168))
+                    color(start, i, numberColor)
                 }
                 source[i].isLetter() || source[i] == '_' -> {
                     while (i < source.length && (source[i].isLetterOrDigit() || source[i] == '_')) i++
@@ -562,10 +626,10 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     while (lookAhead < source.length && source[lookAhead].isWhitespace()) lookAhead++
                     val next = source.getOrNull(lookAhead)
                     val tokenColor = when {
-                        word in keywords -> AndroidColor.rgb(197, 134, 192)
+                        word in keywords -> keywordColor
                         word in constants -> AndroidColor.rgb(86, 156, 214)
-                        word in builtins || next == '(' -> AndroidColor.rgb(220, 220, 170)
-                        else -> AndroidColor.rgb(156, 220, 254)
+                        word in builtins || next == '(' -> functionColor
+                        else -> variableColor
                     }
                     color(start, i, tokenColor)
                 }
@@ -600,17 +664,17 @@ private class PythonEditorView(context: Context) : EditText(context) {
 
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=bg)) {
         Column(Modifier.fillMaxSize().background(bg).imePadding()) {
-            Row(
-                Modifier.fillMaxWidth().height((68 * vm.uiScale).dp).padding(start=12.dp,end=12.dp,top=12.dp,bottom=6.dp),
+            if(vm.showHeader) Row(
+                Modifier.fillMaxWidth().height((vm.headerHeight * vm.uiScale).dp).padding(start=12.dp,end=12.dp,top=12.dp,bottom=6.dp),
                 horizontalArrangement=Arrangement.spacedBy(10.dp),
                 verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
             ) {
                 Text("PyDroid X",color=text,fontSize=(18*vm.uiScale).sp,modifier=Modifier.weight(1f))
-                Button(onClick={vm.run()},enabled=!vm.running,colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF00E676),contentColor=Color.Black)){Text("▶ Run")}
-                Button(onClick={vm.stop()},enabled=vm.running,colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFFF3D71),contentColor=Color.Black)){Text("■ Stop")}
+                Button(onClick={vm.run()},enabled=!vm.running,colors=ButtonDefaults.buttonColors(containerColor=safeColor(vm.runButtonHex,0xFF00E676),contentColor=Color.Black)){Text("▶ Run")}
+                Button(onClick={vm.stop()},enabled=vm.running,colors=ButtonDefaults.buttonColors(containerColor=safeColor(vm.stopButtonHex,0xFFFF3D71),contentColor=Color.Black)){Text("■ Stop")}
             }
             Row(
-                Modifier.fillMaxWidth().height(42.dp).background(Color(0xFF050505)),
+                Modifier.fillMaxWidth().height(vm.tabHeight.dp).background(safeColor(vm.tabBarHex,0xFF050505)),
                 horizontalArrangement=Arrangement.Center,
                 verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
             ) {
@@ -645,7 +709,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                 }
                 Box(motionModifier) { when(page) {
                     0 -> Column(Modifier.fillMaxSize().background(bg)) {
-                        Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp,modifier=Modifier.padding(10.dp,6.dp))
+                        if(vm.showFileInfo) Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp,modifier=Modifier.padding(10.dp,6.dp))
                         AndroidView(
                             factory={context->PythonEditorView(context).also{view->
                                 editorView=view
@@ -658,11 +722,12 @@ private class PythonEditorView(context: Context) : EditText(context) {
                                 view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting,vm.fontName,
                                     vm.lineSpacing,vm.editorPadding,vm.typingAnimation,vm.animationDuration,
                                     vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness,
-                                    vm.lineNumbers,vm.highlightCurrentLine,vm.customFontPath)
+                                    vm.lineNumbers,vm.highlightCurrentLine,vm.customFontPath,
+                                    listOf(vm.editorTextHex,vm.commentHex,vm.stringHex,vm.numberHex,vm.keywordHex,vm.functionHex,vm.variableHex))
                             },
                             modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
                         )
-                        if(vm.showToolbar) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(Color(0xFF050505)).padding(4.dp),horizontalArrangement=Arrangement.spacedBy(4.dp)){
+                        if(vm.showToolbar) Row(Modifier.fillMaxWidth().height(vm.toolbarHeight.dp).horizontalScroll(rememberScrollState()).background(safeColor(vm.toolbarHex,0xFF050505)).padding(4.dp),horizontalArrangement=Arrangement.spacedBy(4.dp)){
                             listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach{key->TextButton(onClick={if(key=="Tab" && editorView?.acceptGhostSuggestion()==true) Unit else editorView?.insertAtCursor(if(key=="Tab")"    " else key)}){Text(key)}}
                         }
                     }
@@ -671,7 +736,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             Text("CONSOLE",color=accent,fontSize=16.sp,modifier=Modifier.weight(1f))
                             TextButton(onClick={vm.output=""}){Text("Clear")}
                         }
-                        Text(vm.output.ifEmpty{"Ready"},color=text,fontFamily=when(vm.fontName){"Sans"->FontFamily.SansSerif;"Serif"->FontFamily.Serif;else->FontFamily.Monospace},fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(Color(0xFF030303)).padding(12.dp).animateContentSize().verticalScroll(rememberScrollState()))
+                        Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE6F5FF),fontFamily=when(vm.fontName){"Sans"->FontFamily.SansSerif;"Serif"->FontFamily.Serif;else->FontFamily.Monospace},fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(safeColor(vm.consoleBackgroundHex,0xFF030303)).padding(12.dp).animateContentSize().verticalScroll(rememberScrollState()))
                         if(vm.waitingInput) Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
                             TextField(vm.input,{vm.input=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Program input")})
                             Button(onClick={vm.submitInput()}){Text("Send")}
@@ -691,10 +756,10 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             vm.aiMessages.forEach { message ->
                                 Row(Modifier.fillMaxWidth(),horizontalArrangement=if(message.fromUser) Arrangement.End else Arrangement.Start) {
                                     Surface(
-                                        color=if(message.fromUser) Color(0xFF082F36) else accent,
+                                        color=if(message.fromUser) safeColor(vm.userBubbleHex,0xFF082F36) else safeColor(vm.helperBubbleHex,0xFF00E5FF),
                                         contentColor=if(message.fromUser) Color(0xFF9FF8FF) else Color.Black,
-                                        shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
-                                        modifier=Modifier.widthIn(max=310.dp)
+                                        shape=androidx.compose.foundation.shape.RoundedCornerShape(vm.bubbleRadius.dp),
+                                        modifier=Modifier.widthIn(max=vm.bubbleWidth.dp)
                                     ) {
                                         Text(message.text,fontSize=14.sp,modifier=Modifier.padding(horizontal=14.dp,vertical=11.dp))
                                     }
@@ -730,6 +795,23 @@ private class PythonEditorView(context: Context) : EditText(context) {
                                 FilterChip(selected=vm.backgroundHex==hex,onClick={vm.backgroundHex=hex;vm.saveAppearance()},label={Box(Modifier.size(22.dp).background(swatch,androidx.compose.foundation.shape.CircleShape))})
                             }
                         }
+                        Text("EDITOR TOKEN COLORS",color=accent,fontSize=12.sp)
+                        ColorSetting("Editor text",vm.editorTextHex){vm.editorTextHex=it;vm.saveAppearance()}
+                        ColorSetting("Comments",vm.commentHex){vm.commentHex=it;vm.saveAppearance()}
+                        ColorSetting("Strings",vm.stringHex){vm.stringHex=it;vm.saveAppearance()}
+                        ColorSetting("Numbers",vm.numberHex){vm.numberHex=it;vm.saveAppearance()}
+                        ColorSetting("Keywords",vm.keywordHex){vm.keywordHex=it;vm.saveAppearance()}
+                        ColorSetting("Functions",vm.functionHex){vm.functionHex=it;vm.saveAppearance()}
+                        ColorSetting("Variables",vm.variableHex){vm.variableHex=it;vm.saveAppearance()}
+                        Text("COMPONENT COLORS",color=accent,fontSize=12.sp)
+                        ColorSetting("Console text",vm.consoleTextHex){vm.consoleTextHex=it;vm.saveAppearance()}
+                        ColorSetting("Console background",vm.consoleBackgroundHex){vm.consoleBackgroundHex=it;vm.saveAppearance()}
+                        ColorSetting("Keyboard toolbar",vm.toolbarHex){vm.toolbarHex=it;vm.saveAppearance()}
+                        ColorSetting("Tab bar",vm.tabBarHex){vm.tabBarHex=it;vm.saveAppearance()}
+                        ColorSetting("Your chat bubble",vm.userBubbleHex){vm.userBubbleHex=it;vm.saveAppearance()}
+                        ColorSetting("Helper bubble",vm.helperBubbleHex){vm.helperBubbleHex=it;vm.saveAppearance()}
+                        ColorSetting("Run button",vm.runButtonHex){vm.runButtonHex=it;vm.saveAppearance()}
+                        ColorSetting("Stop button",vm.stopButtonHex){vm.stopButtonHex=it;vm.saveAppearance()}
                         Text("MOTION",color=accent,fontSize=12.sp)
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(7.dp)){
                             listOf("Fluid spring","Soft fade","Subtle scale","Shared element","Smooth blur reveal","Layered depth","Gentle parallax","Card expansion","Natural sheet","Magnetic snap","Interactive swipe","Content morph","Keyboard lift").forEach{motion->
@@ -739,6 +821,20 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         Text("Motion intensity  ${(vm.motionIntensity*100).toInt()}%",color=text)
                         Slider(vm.motionIntensity,{vm.motionIntensity=it;vm.saveAppearance()},valueRange=0.1f..1f)
                         SettingSwitch("Interface motion",vm.motionEnabled){vm.motionEnabled=it;vm.saveAppearance()}
+                        Text("Header height  ${vm.headerHeight.toInt()} dp",color=text)
+                        Slider(vm.headerHeight,{vm.headerHeight=it;vm.saveAppearance()},valueRange=48f..110f)
+                        Text("Tab bar height  ${vm.tabHeight.toInt()} dp",color=text)
+                        Slider(vm.tabHeight,{vm.tabHeight=it;vm.saveAppearance()},valueRange=32f..72f)
+                        Text("Keyboard toolbar height  ${vm.toolbarHeight.toInt()} dp",color=text)
+                        Slider(vm.toolbarHeight,{vm.toolbarHeight=it;vm.saveAppearance()},valueRange=38f..90f)
+                        Text("Chat bubble corners  ${vm.bubbleRadius.toInt()} dp",color=text)
+                        Slider(vm.bubbleRadius,{vm.bubbleRadius=it;vm.saveAppearance()},valueRange=0f..36f)
+                        Text("Chat bubble width  ${vm.bubbleWidth.toInt()} dp",color=text)
+                        Slider(vm.bubbleWidth,{vm.bubbleWidth=it;vm.saveAppearance()},valueRange=180f..420f)
+                        Text("Page dot size  ${vm.pageDotSize.toInt()} dp",color=text)
+                        Slider(vm.pageDotSize,{vm.pageDotSize=it;vm.saveAppearance()},valueRange=3f..16f)
+                        SettingSwitch("Show top header",vm.showHeader){vm.showHeader=it;vm.saveAppearance()}
+                        SettingSwitch("Show file information",vm.showFileInfo){vm.showFileInfo=it;vm.saveAppearance()}
                         Text("Editor font  ${vm.editorFontSize.toInt()} sp",color=text)
                         Slider(vm.editorFontSize,{vm.editorFontSize=it;vm.saveAppearance()},valueRange=12f..28f,steps=15)
                         Text("Terminal font  ${vm.terminalFontSize.toInt()} sp",color=text)
@@ -782,7 +878,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                 } }
             }
             if(vm.showPageDots) Row(Modifier.fillMaxWidth().height(22.dp),horizontalArrangement=Arrangement.Center,verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-                repeat(4){index->Box(Modifier.padding(horizontal=3.dp).size(if(index==pager.currentPage)8.dp else 5.dp).background(if(index==pager.currentPage)accent else Color.DarkGray,androidx.compose.foundation.shape.CircleShape))}
+                repeat(4){index->Box(Modifier.padding(horizontal=3.dp).size(if(index==pager.currentPage)vm.pageDotSize.dp else (vm.pageDotSize*0.62f).dp).background(if(index==pager.currentPage)accent else Color.DarkGray,androidx.compose.foundation.shape.CircleShape))}
             }
             Text("w astro",color=Color(0xFF181818),fontSize=7.sp,modifier=Modifier.fillMaxWidth().padding(bottom=2.dp),textAlign=androidx.compose.ui.text.style.TextAlign.Center)
         }
@@ -816,5 +912,18 @@ private class PythonEditorView(context: Context) : EditText(context) {
     Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
         Text(label,color=Color(0xFFE6F5FF),modifier=Modifier.weight(1f))
         Switch(checked=checked,onCheckedChange=onChange)
+    }
+}
+
+@Composable private fun ColorSetting(label:String,value:String,onChange:(String)->Unit){
+    val colors=listOf("#FFFFFF","#D4D4D4","#6A9955","#CE9178","#B5CEA8","#C586C0","#DCDCAA","#9CDCFE","#00E5FF","#0A84FF","#30D158","#BF5AF2","#FF375F","#FFD60A","#FF9F0A","#000000")
+    Column(verticalArrangement=Arrangement.spacedBy(5.dp)){
+        Text("$label  $value",color=Color(0xFFE6F5FF),fontSize=13.sp)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)){
+            colors.forEach{hex->
+                val swatch=runCatching{Color(AndroidColor.parseColor(hex))}.getOrDefault(Color.White)
+                FilterChip(selected=value==hex,onClick={onChange(hex)},label={Box(Modifier.size(18.dp).background(swatch,androidx.compose.foundation.shape.CircleShape))})
+            }
+        }
     }
 }

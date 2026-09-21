@@ -1,7 +1,9 @@
 package com.pydroidx.app
 
 import android.os.Bundle
+import android.app.Activity
 import android.content.Context
+import android.widget.Toast
 import android.graphics.Color as AndroidColor
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -16,6 +18,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.widget.EditText
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -662,6 +665,16 @@ private class PythonEditorView(context: Context) : EditText(context) {
         aiScroll.animateScrollTo(aiScroll.maxValue)
     }
     var showAdvancedAi by remember { mutableStateOf(false) }
+    var lastBackPress by remember { mutableLongStateOf(0L) }
+
+    BackHandler(enabled=!showAiSettings) {
+        val now=android.os.SystemClock.elapsedRealtime()
+        if(now-lastBackPress<2000L) (context as? Activity)?.finish()
+        else {
+            lastBackPress=now
+            Toast.makeText(context,"Swipe back again to exit",Toast.LENGTH_SHORT).show()
+        }
+    }
 
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=bg)) {
         Column(Modifier.fillMaxSize().background(bg).imePadding()) {
@@ -671,7 +684,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                 verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
             ) {
                 Text("PyDroid X",color=text,fontSize=(18*vm.uiScale).sp,modifier=Modifier.weight(1f))
-                Button(onClick={vm.run()},enabled=!vm.running,colors=ButtonDefaults.buttonColors(containerColor=safeColor(vm.runButtonHex,0xFF00E676),contentColor=Color.Black)){Text("▶ Run")}
+                Button(onClick={vm.run();scope.launch{pager.animateScrollToPage(1)}},enabled=!vm.running,colors=ButtonDefaults.buttonColors(containerColor=safeColor(vm.runButtonHex,0xFF00E676),contentColor=Color.Black)){Text("▶ Run")}
                 Button(onClick={vm.stop()},enabled=vm.running,colors=ButtonDefaults.buttonColors(containerColor=safeColor(vm.stopButtonHex,0xFFFF3D71),contentColor=Color.Black)){Text("■ Stop")}
             }
             Row(

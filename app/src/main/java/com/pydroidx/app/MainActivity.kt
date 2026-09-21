@@ -19,11 +19,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.chaquo.python.Python
 import java.io.File
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.concurrent.thread
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class IdeViewModel : ViewModel() {
     var code by mutableStateOf("print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n")
@@ -34,6 +39,7 @@ class IdeViewModel : ViewModel() {
     var runtimeVersion by mutableStateOf("Loading Python…")
     private val stdin = LinkedBlockingQueue<String?>()
     @Volatile private var worker: Thread? = null
+    private var autosaveJob: Job? = null
     lateinit var projectDir: File
 
     fun initialize(dir: File) {
@@ -42,7 +48,24 @@ class IdeViewModel : ViewModel() {
         if (main.exists()) code = main.readText() else main.writeText(code)
         thread { runtimeVersion = Python.getInstance().getModule("runner").callAttr("version").toString() }
     }
-    fun save() = File(projectDir, "main.py").writeText(code)
+    fun updateCode(value: String) {
+        code = value
+        autosaveJob?.cancel()
+        autosaveJob = viewModelScope.launch {
+            delay(500)
+            val snapshot = code
+            launch(Dispatchers.IO) {
+                if (::projectDir.isInitialized) File(projectDir, "main.py").writeText(snapshot)
+            }
+        }
+    }
+    fun save() {
+        autosaveJob?.cancel()
+        val snapshot = code
+        viewModelScope.launch(Dispatchers.IO) {
+            if (::projectDir.isInitialized) File(projectDir, "main.py").writeText(snapshot)
+        }
+    }
     fun run() {
         if (running) return
         save(); output = ""; running = true
@@ -78,7 +101,7 @@ class MainActivity : ComponentActivity() {
                 OutlinedButton(onClick={vm.stop()}, enabled=vm.running) { Text("Stop") }
             }
             if (!keyboardVisible) Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}", color=Color.Gray, fontSize=11.sp, modifier=Modifier.padding(10.dp,6.dp))
-            BasicTextField(value=vm.code, onValueChange={vm.code=it; vm.save()}, textStyle=TextStyle(color=text,fontFamily=FontFamily.Monospace,fontSize=16.sp,lineHeight=22.sp), modifier=Modifier.weight(1f).fillMaxWidth().padding(10.dp))
+            BasicTextField(value=vm.code, onValueChange=vm::updateCode, textStyle=TextStyle(color=text,fontFamily=FontFamily.Monospace,fontSize=16.sp,lineHeight=22.sp), modifier=Modifier.weight(1f).fillMaxWidth().padding(10.dp))
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(panel).padding(4.dp), horizontalArrangement=Arrangement.spacedBy(4.dp)) {
                 listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach { key -> TextButton(onClick={ vm.code += if(key=="Tab") "    " else key }) { Text(key) } }
             }

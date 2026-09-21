@@ -17,6 +17,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.chaquo.python.Python
@@ -67,6 +68,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable fun PyDroidX(vm: IdeViewModel) {
     val bg = Color(0xFF0B0E14); val panel = Color(0xFF11151E); val text = Color(0xFFD8DEE9); val accent = Color(0xFF7AA2F7)
+    val density = LocalDensity.current
+    val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
     MaterialTheme(colorScheme = darkColorScheme(primary = accent, background = bg, surface = panel)) {
         Column(Modifier.fillMaxSize().background(bg).imePadding()) {
             Row(Modifier.fillMaxWidth().height(52.dp).background(panel).padding(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -74,12 +77,12 @@ class MainActivity : ComponentActivity() {
                 Button(onClick={vm.run()}, enabled=!vm.running) { Text("Run") }
                 OutlinedButton(onClick={vm.stop()}, enabled=vm.running) { Text("Stop") }
             }
-            Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}", color=Color.Gray, fontSize=11.sp, modifier=Modifier.padding(10.dp,6.dp))
-            BasicTextField(value=vm.code, onValueChange={vm.code=it; vm.save()}, textStyle=TextStyle(color=text,fontFamily=FontFamily.Monospace,fontSize=16.sp,lineHeight=22.sp), modifier=Modifier.weight(1f).fillMaxWidth().padding(10.dp).verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()))
+            if (!keyboardVisible) Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}", color=Color.Gray, fontSize=11.sp, modifier=Modifier.padding(10.dp,6.dp))
+            BasicTextField(value=vm.code, onValueChange={vm.code=it; vm.save()}, textStyle=TextStyle(color=text,fontFamily=FontFamily.Monospace,fontSize=16.sp,lineHeight=22.sp), modifier=Modifier.weight(1f).fillMaxWidth().padding(10.dp))
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(panel).padding(4.dp), horizontalArrangement=Arrangement.spacedBy(4.dp)) {
                 listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach { key -> TextButton(onClick={ vm.code += if(key=="Tab") "    " else key }) { Text(key) } }
             }
-            Column(Modifier.fillMaxWidth().heightIn(min=150.dp,max=260.dp).background(Color(0xFF080A0F)).padding(8.dp)) {
+            if (!keyboardVisible) Column(Modifier.fillMaxWidth().heightIn(min=150.dp,max=260.dp).background(Color(0xFF080A0F)).padding(8.dp)) {
                 Row { Text("TERMINAL",color=accent,fontSize=12.sp,modifier=Modifier.weight(1f)); TextButton(onClick={vm.output=""}){Text("Clear")} }
                 Text(vm.output.ifEmpty{"Ready"},color=text,fontFamily=FontFamily.Monospace,fontSize=13.sp,modifier=Modifier.weight(1f).verticalScroll(rememberScrollState()))
                 if(vm.waitingInput) Row { TextField(vm.input,{vm.input=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Program input")}); Button(onClick={vm.submitInput()}){Text("Send")} }

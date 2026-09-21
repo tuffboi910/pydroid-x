@@ -28,6 +28,7 @@ chaquopy {
     defaultConfig {
         version = "3.14"
         pyc { src = false }
+        pip { install("jedi==0.19.2") }
     }
 }
 

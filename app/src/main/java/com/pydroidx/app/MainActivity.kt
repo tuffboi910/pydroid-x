@@ -657,6 +657,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
     var endpointDraft by remember { mutableStateOf(vm.aiEndpoint) }
     var modelDraft by remember { mutableStateOf(vm.aiModel) }
     var providerDraft by remember { mutableStateOf(vm.aiProvider) }
+    var settingsSection by remember { mutableStateOf("Overview") }
     LaunchedEffect(vm.aiMessages.size) {
         aiScroll.animateScrollTo(aiScroll.maxValue)
     }
@@ -778,9 +779,22 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             Button(onClick={vm.askAi()},enabled=!vm.aiBusy&&vm.aiPrompt.isNotBlank()){Text("Send")}
                         }
                     }
-                    else -> Column(Modifier.fillMaxSize().padding(18.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-                        Text("CUSTOMIZE",color=accent,fontSize=18.sp)
+                    else -> Column(Modifier.fillMaxSize().padding(horizontal=18.dp,vertical=12.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                            if(settingsSection!="Overview") TextButton(onClick={settingsSection="Overview"},contentPadding=PaddingValues(end=12.dp)){Text("‹ Back")}
+                            Column(Modifier.weight(1f)){Text(if(settingsSection=="Overview") "SETTINGS" else settingsSection.uppercase(),color=accent,fontSize=18.sp);Text(if(settingsSection=="Overview") "Make PyDroid X yours" else "Focused controls",color=Color.Gray,fontSize=11.sp)}
+                        }
                         TextField(vm.settingsQuery,{vm.settingsQuery=it},singleLine=true,modifier=Modifier.fillMaxWidth(),placeholder={Text("Search every setting…")})
+                        if(settingsSection=="Overview" && vm.settingsQuery.isBlank()){
+                            SettingsCategory("Appearance","Theme, accents and component colors",accent){settingsSection="Appearance"}
+                            SettingsCategory("Editor","Text, cursor, autocomplete and saving",accent){settingsSection="Editor"}
+                            SettingsCategory("Fonts","100 downloadable typefaces",accent){settingsSection="Fonts"}
+                            SettingsCategory("Motion","13 quiet interface animations",accent){settingsSection="Motion"}
+                            SettingsCategory("Layout","Header, tabs, toolbar and spacing",accent){settingsSection="Layout"}
+                            SettingsCategory("Console & Helper","Output and chat appearance",accent){settingsSection="Console & Helper"}
+                            SettingsCategory("System","Runtime and interface switches",accent){settingsSection="System"}
+                        }
+                        if(settingsSection=="Appearance" || vm.settingsQuery.isNotBlank()){
                         Text("ACCENT COLOR",color=accent,fontSize=12.sp)
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){
                             listOf("#00E5FF","#0A84FF","#30D158","#BF5AF2","#FF375F","#FFD60A","#FF9F0A","#FFFFFF").forEach{hex->
@@ -803,6 +817,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         ColorSetting("Keywords",vm.keywordHex){vm.keywordHex=it;vm.saveAppearance()}
                         ColorSetting("Functions",vm.functionHex){vm.functionHex=it;vm.saveAppearance()}
                         ColorSetting("Variables",vm.variableHex){vm.variableHex=it;vm.saveAppearance()}
+                        }
+                        if(settingsSection=="Console & Helper" || vm.settingsQuery.isNotBlank()){
                         Text("COMPONENT COLORS",color=accent,fontSize=12.sp)
                         ColorSetting("Console text",vm.consoleTextHex){vm.consoleTextHex=it;vm.saveAppearance()}
                         ColorSetting("Console background",vm.consoleBackgroundHex){vm.consoleBackgroundHex=it;vm.saveAppearance()}
@@ -812,6 +828,14 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         ColorSetting("Helper bubble",vm.helperBubbleHex){vm.helperBubbleHex=it;vm.saveAppearance()}
                         ColorSetting("Run button",vm.runButtonHex){vm.runButtonHex=it;vm.saveAppearance()}
                         ColorSetting("Stop button",vm.stopButtonHex){vm.stopButtonHex=it;vm.saveAppearance()}
+                        Text("Chat bubble corners  ${vm.bubbleRadius.toInt()} dp",color=text)
+                        Slider(vm.bubbleRadius,{vm.bubbleRadius=it;vm.saveAppearance()},valueRange=0f..36f)
+                        Text("Chat bubble width  ${vm.bubbleWidth.toInt()} dp",color=text)
+                        Slider(vm.bubbleWidth,{vm.bubbleWidth=it;vm.saveAppearance()},valueRange=180f..420f)
+                        Text("Terminal font  ${vm.terminalFontSize.toInt()} sp",color=text)
+                        Slider(vm.terminalFontSize,{vm.terminalFontSize=it;vm.saveAppearance()},valueRange=10f..24f,steps=13)
+                        }
+                        if(settingsSection=="Motion" || vm.settingsQuery.isNotBlank()){
                         Text("MOTION",color=accent,fontSize=12.sp)
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(7.dp)){
                             listOf("Fluid spring","Soft fade","Subtle scale","Shared element","Smooth blur reveal","Layered depth","Gentle parallax","Card expansion","Natural sheet","Magnetic snap","Interactive swipe","Content morph","Keyboard lift").forEach{motion->
@@ -821,40 +845,28 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         Text("Motion intensity  ${(vm.motionIntensity*100).toInt()}%",color=text)
                         Slider(vm.motionIntensity,{vm.motionIntensity=it;vm.saveAppearance()},valueRange=0.1f..1f)
                         SettingSwitch("Interface motion",vm.motionEnabled){vm.motionEnabled=it;vm.saveAppearance()}
+                        }
+                        if(settingsSection=="Layout" || vm.settingsQuery.isNotBlank()){
                         Text("Header height  ${vm.headerHeight.toInt()} dp",color=text)
                         Slider(vm.headerHeight,{vm.headerHeight=it;vm.saveAppearance()},valueRange=48f..110f)
                         Text("Tab bar height  ${vm.tabHeight.toInt()} dp",color=text)
                         Slider(vm.tabHeight,{vm.tabHeight=it;vm.saveAppearance()},valueRange=32f..72f)
                         Text("Keyboard toolbar height  ${vm.toolbarHeight.toInt()} dp",color=text)
                         Slider(vm.toolbarHeight,{vm.toolbarHeight=it;vm.saveAppearance()},valueRange=38f..90f)
-                        Text("Chat bubble corners  ${vm.bubbleRadius.toInt()} dp",color=text)
-                        Slider(vm.bubbleRadius,{vm.bubbleRadius=it;vm.saveAppearance()},valueRange=0f..36f)
-                        Text("Chat bubble width  ${vm.bubbleWidth.toInt()} dp",color=text)
-                        Slider(vm.bubbleWidth,{vm.bubbleWidth=it;vm.saveAppearance()},valueRange=180f..420f)
                         Text("Page dot size  ${vm.pageDotSize.toInt()} dp",color=text)
                         Slider(vm.pageDotSize,{vm.pageDotSize=it;vm.saveAppearance()},valueRange=3f..16f)
                         SettingSwitch("Show top header",vm.showHeader){vm.showHeader=it;vm.saveAppearance()}
                         SettingSwitch("Show file information",vm.showFileInfo){vm.showFileInfo=it;vm.saveAppearance()}
-                        Text("Editor font  ${vm.editorFontSize.toInt()} sp",color=text)
-                        Slider(vm.editorFontSize,{vm.editorFontSize=it;vm.saveAppearance()},valueRange=12f..28f,steps=15)
-                        Text("Terminal font  ${vm.terminalFontSize.toInt()} sp",color=text)
-                        Slider(vm.terminalFontSize,{vm.terminalFontSize=it;vm.saveAppearance()},valueRange=10f..24f,steps=13)
                         Text("Interface scale  ${(vm.uiScale*100).toInt()}%",color=text)
                         Slider(vm.uiScale,{vm.uiScale=it;vm.saveAppearance()},valueRange=0.85f..1.25f,steps=7)
-                        Text("Font family",color=text)
-                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("Monospace","Sans","Serif").forEach{font->FilterChip(selected=vm.fontName==font,onClick={vm.fontName=font;vm.customFontPath="";vm.saveAppearance()},label={Text(font)})}}
-                        Text("FONT VAULT  •  ${FONT_VAULT.size} REAL FONTS",color=accent,fontSize=12.sp)
-                        Text(vm.fontStatus,color=Color.Gray,fontSize=11.sp)
-                        FONT_VAULT.filter { vm.settingsQuery.isBlank() || it.first.contains(vm.settingsQuery,true) }.forEachIndexed { index,font ->
-                            Row(Modifier.fillMaxWidth().background(if(index%2==0) Color(0xFF050505) else Color.Transparent).padding(horizontal=8.dp,vertical=3.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-                                Column(Modifier.weight(1f)){Text(font.first,color=text,fontSize=14.sp);Text("Google Fonts · OFL",color=Color.DarkGray,fontSize=9.sp)}
-                                TextButton(onClick={vm.installVaultFont(context,font.first,font.second)},enabled=!vm.fontStatus.startsWith("Downloading")){Text(if(vm.fontName==font.first)"Installed" else "Download")}
-                            }
-                        }
-                        Text("Line spacing  ${"%.2f".format(vm.lineSpacing)}×",color=text)
-                        Slider(vm.lineSpacing,{vm.lineSpacing=it;vm.saveAppearance()},valueRange=0.9f..1.8f)
                         Text("Editor padding  ${vm.editorPadding.toInt()} px",color=text)
                         Slider(vm.editorPadding,{vm.editorPadding=it;vm.saveAppearance()},valueRange=0f..48f,steps=11)
+                        }
+                        if(settingsSection=="Editor" || vm.settingsQuery.isNotBlank()){
+                        Text("Editor font  ${vm.editorFontSize.toInt()} sp",color=text)
+                        Slider(vm.editorFontSize,{vm.editorFontSize=it;vm.saveAppearance()},valueRange=12f..28f,steps=15)
+                        Text("Line spacing  ${"%.2f".format(vm.lineSpacing)}×",color=text)
+                        Slider(vm.lineSpacing,{vm.lineSpacing=it;vm.saveAppearance()},valueRange=0.9f..1.8f)
                         Text("Highlight delay  ${vm.highlightDelay.toInt()} ms",color=text)
                         Slider(vm.highlightDelay,{vm.highlightDelay=it;vm.saveAppearance()},valueRange=80f..700f,steps=14)
                         Text("Autosave delay  ${vm.autosaveDelay.toInt()} ms",color=text)
@@ -869,11 +881,27 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         SettingSwitch("Line numbers",vm.lineNumbers){vm.lineNumbers=it;vm.saveAppearance()}
                         SettingSwitch("Highlight active line",vm.highlightCurrentLine){vm.highlightCurrentLine=it;vm.saveAppearance()}
                         SettingSwitch("Automatic saving",vm.autoSave){vm.autoSave=it;vm.saveAppearance()}
+                        }
+                        if(settingsSection=="Fonts" || (vm.settingsQuery.isNotBlank() && FONT_VAULT.any{it.first.contains(vm.settingsQuery,true)})){
+                        Text("Font family",color=text)
+                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("Monospace","Sans","Serif").forEach{font->FilterChip(selected=vm.fontName==font,onClick={vm.fontName=font;vm.customFontPath="";vm.saveAppearance()},label={Text(font)})}}
+                        Text("FONT VAULT  •  ${FONT_VAULT.size} REAL FONTS",color=accent,fontSize=12.sp)
+                        Text(vm.fontStatus,color=Color.Gray,fontSize=11.sp)
+                        FONT_VAULT.filter { vm.settingsQuery.isBlank() || it.first.contains(vm.settingsQuery,true) }.forEach { font ->
+                            Surface(color=Color(0xFF070707),shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),modifier=Modifier.fillMaxWidth()){
+                            Row(Modifier.fillMaxWidth().padding(horizontal=14.dp,vertical=8.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                                Column(Modifier.weight(1f)){Text(font.first,color=text,fontSize=14.sp);Text("Google Fonts · OFL",color=Color.DarkGray,fontSize=9.sp)}
+                                TextButton(onClick={vm.installVaultFont(context,font.first,font.second)},enabled=!vm.fontStatus.startsWith("Downloading")){Text(if(vm.fontName==font.first)"Installed" else "Download")}
+                            }}
+                        }
+                        }
+                        if(settingsSection=="System" || vm.settingsQuery.isNotBlank()){
                         SettingSwitch("Programming toolbar",vm.showToolbar){vm.showToolbar=it;vm.saveAppearance()}
                         SettingSwitch("Page indicator dots",vm.showPageDots){vm.showPageDots=it;vm.saveAppearance()}
                         HorizontalDivider(color=Color(0xFF202020))
                         Text("Swipe left or right anywhere outside active text editing to move between pages.",color=Color.Gray,fontSize=12.sp)
                         Text("Python  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp)
+                        }
                     }
                 } }
             }
@@ -912,6 +940,22 @@ private class PythonEditorView(context: Context) : EditText(context) {
     Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
         Text(label,color=Color(0xFFE6F5FF),modifier=Modifier.weight(1f))
         Switch(checked=checked,onCheckedChange=onChange)
+    }
+}
+
+@Composable private fun SettingsCategory(title:String,subtitle:String,accent:Color,onClick:()->Unit){
+    Surface(
+        onClick=onClick,
+        color=Color(0xFF070707),
+        shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+        modifier=Modifier.fillMaxWidth()
+    ){
+        Row(Modifier.padding(horizontal=16.dp,vertical=15.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+            Box(Modifier.size(9.dp).background(accent,androidx.compose.foundation.shape.CircleShape))
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)){Text(title,color=Color(0xFFE6F5FF),fontSize=15.sp);Text(subtitle,color=Color.Gray,fontSize=11.sp)}
+            Text("›",color=Color.Gray,fontSize=24.sp)
+        }
     }
 }
 

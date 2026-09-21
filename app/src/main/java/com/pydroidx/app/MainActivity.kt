@@ -4,16 +4,12 @@ import android.os.Bundle
 import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.graphics.Typeface
-import android.animation.ValueAnimator
 import android.graphics.drawable.GradientDrawable
 import android.text.Editable
 import android.text.InputType
 import android.text.Spannable
 import android.text.TextWatcher
 import android.text.style.ForegroundColorSpan
-import android.text.style.CharacterStyle
-import android.text.style.UpdateAppearance
-import android.text.TextPaint
 import android.view.Gravity
 import android.view.KeyEvent
 import android.graphics.Canvas
@@ -77,7 +73,7 @@ class IdeViewModel : ViewModel() {
     var fontName by mutableStateOf("Monospace")
     var lineSpacing by mutableFloatStateOf(1.12f)
     var editorPadding by mutableFloatStateOf(20f)
-    var typingAnimation by mutableStateOf(true)
+    var typingAnimation by mutableStateOf(false)
     var animationDuration by mutableFloatStateOf(120f)
     var highlightDelay by mutableFloatStateOf(220f)
     var autosaveDelay by mutableFloatStateOf(500f)
@@ -86,6 +82,8 @@ class IdeViewModel : ViewModel() {
     var cursorStyle by mutableStateOf("Cyan")
     var autocomplete by mutableStateOf(true)
     var ghostBrightness by mutableFloatStateOf(0.48f)
+    var lineNumbers by mutableStateOf(true)
+    var highlightCurrentLine by mutableStateOf(true)
     private val stdin = LinkedBlockingQueue<String?>()
     @Volatile private var worker: Thread? = null
     private var autosaveJob: Job? = null
@@ -105,7 +103,7 @@ class IdeViewModel : ViewModel() {
         fontName = settings.getString("font", "Monospace") ?: "Monospace"
         lineSpacing = settings.getFloat("line_spacing", 1.12f)
         editorPadding = settings.getFloat("editor_padding", 20f)
-        typingAnimation = settings.getBoolean("typing_animation", true)
+        typingAnimation = settings.getBoolean("typing_animation", false)
         animationDuration = settings.getFloat("animation_duration", 120f)
         highlightDelay = settings.getFloat("highlight_delay", 220f)
         autosaveDelay = settings.getFloat("autosave_delay", 500f)
@@ -114,6 +112,8 @@ class IdeViewModel : ViewModel() {
         cursorStyle = settings.getString("cursor", "Cyan") ?: "Cyan"
         autocomplete = settings.getBoolean("autocomplete", true)
         ghostBrightness = settings.getFloat("ghost_brightness", 0.48f)
+        lineNumbers = settings.getBoolean("line_numbers", true)
+        highlightCurrentLine = settings.getBoolean("current_line", true)
         hasAiKey = !aiKeys.load().isNullOrBlank()
         projectDir = File(context.filesDir, "projects/default").apply { mkdirs() }
         val main = File(projectDir, "main.py")
@@ -178,6 +178,7 @@ class IdeViewModel : ViewModel() {
             .putFloat("autosave_delay",autosaveDelay).putBoolean("toolbar",showToolbar)
             .putBoolean("page_dots",showPageDots).putString("cursor",cursorStyle).apply()
         settings.edit().putBoolean("autocomplete",autocomplete).putFloat("ghost_brightness",ghostBrightness).apply()
+        settings.edit().putBoolean("line_numbers",lineNumbers).putBoolean("current_line",highlightCurrentLine).apply()
     }
     fun save() {
         autosaveJob?.cancel()
@@ -214,18 +215,26 @@ private class PythonEditorView(context: Context) : EditText(context) {
     var requestSmartCompletion: ((String, Int, (String, Int) -> Unit) -> Unit)? = null
     private var applyingHighlight = false
     private var highlightingEnabled = true
-    private var typingAnimationEnabled = true
-    private var characterAnimationMs = 120L
     private var highlightDelayMs = 220L
     private var autocompleteEnabled = true
     private var ghostAlpha = 122
     private var ghostSuffix: String? = null
     private var ghostCursorBack = 0
     private var ghostPrefixStart = 0
+    private var showLineNumbers = true
+    private var showCurrentLine = true
+    private var userPadding = 20
+    private val gutterWidth get() = if(showLineNumbers) (52 * resources.displayMetrics.density).toInt() else 0
     private val completions = linkedMapOf(
         "print" to "print()", "input" to "input()", "range" to "range()", "len" to "len()",
         "str" to "str()", "int" to "int()", "float" to "float()", "list" to "list()",
-        "dict" to "dict()", "import" to "import ", "from" to "from ", "return" to "return ",
+        "dict" to "dict()", "set" to "set()", "tuple" to "tuple()", "bool" to "bool()",
+        "open" to "open()", "sum" to "sum()", "min" to "min()", "max" to "max()",
+        "abs" to "abs()", "all" to "all()", "any" to "any()", "enumerate" to "enumerate()",
+        "zip" to "zip()", "map" to "map()", "filter" to "filter()", "sorted" to "sorted()",
+        "reversed" to "reversed()", "type" to "type()", "isinstance" to "isinstance()",
+        "super" to "super()", "property" to "property()", "format" to "format()",
+        "import" to "import ", "from" to "from ", "return" to "return ",
         "def" to "def function():\n    pass", "class" to "class Name:\n    pass",
         "if" to "if condition:\n    pass", "elif" to "elif condition:\n    pass",
         "else" to "else:\n    pass", "for" to "for item in items:\n    pass",
@@ -238,6 +247,14 @@ private class PythonEditorView(context: Context) : EditText(context) {
         "raise", "return", "try", "while", "with", "yield"
     )
     private val constants = setOf("True", "False", "None", "NotImplemented", "Ellipsis")
+    private val builtins = setOf(
+        "abs","all","any","bin","bool","bytearray","bytes","callable","chr","classmethod",
+        "compile","complex","delattr","dict","dir","divmod","enumerate","eval","exec","filter",
+        "float","format","frozenset","getattr","globals","hasattr","hash","help","hex","id",
+        "input","int","isinstance","issubclass","iter","len","list","locals","map","max","memoryview",
+        "min","next","object","oct","open","ord","pow","print","property","range","repr","reversed",
+        "round","set","setattr","slice","sorted","staticmethod","str","sum","super","tuple","type","vars","zip"
+    )
     private val highlightRunnable = Runnable { highlightNow() }
     private val completionRunnable = Runnable {
         if (!autocompleteEnabled) return@Runnable
@@ -257,7 +274,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
 
     init {
         setBackgroundColor(AndroidColor.BLACK)
-        setTextColor(AndroidColor.rgb(230, 245, 255))
+        setTextColor(AndroidColor.rgb(212, 212, 212))
         setHintTextColor(AndroidColor.DKGRAY)
         typeface = Typeface.MONOSPACE
         textSize = 16f
@@ -274,7 +291,6 @@ private class PythonEditorView(context: Context) : EditText(context) {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 if (!applyingHighlight) {
                     onCodeChanged?.invoke(s?.toString().orEmpty())
-                    if (typingAnimationEnabled && count > 0) animateInsertedText(start, start + count)
                     removeCallbacks(highlightRunnable)
                     postDelayed(highlightRunnable, highlightDelayMs)
                     post { updateGhostSuggestion() }
@@ -305,20 +321,21 @@ private class PythonEditorView(context: Context) : EditText(context) {
     fun applyPreferences(font: Float, wrap: Boolean, syntax: Boolean, family: String, spacing: Float,
                          padding: Float, animateTyping: Boolean, animationMs: Float,
                          highlightDelay: Float, cursor: String, autocomplete: Boolean,
-                         ghostBrightness: Float) {
+                         ghostBrightness: Float, lineNumbers: Boolean, currentLine: Boolean) {
         textSize = font
         setHorizontallyScrolling(!wrap)
         isHorizontalScrollBarEnabled = !wrap
         highlightingEnabled = syntax
-        typingAnimationEnabled = animateTyping
-        characterAnimationMs = animationMs.toLong()
         highlightDelayMs = highlightDelay.toLong()
         autocompleteEnabled = autocomplete
         ghostAlpha = (ghostBrightness * 255).toInt().coerceIn(35,210)
+        showLineNumbers = lineNumbers
+        showCurrentLine = currentLine
         typeface = when(family) { "Sans" -> Typeface.SANS_SERIF; "Serif" -> Typeface.SERIF; else -> Typeface.MONOSPACE }
         setLineSpacing(0f, spacing)
         val pad = padding.toInt()
-        setPadding(pad, pad / 2, pad, pad / 2)
+        userPadding = pad
+        setPadding(gutterWidth + pad, pad / 2, pad, pad / 2)
         if (android.os.Build.VERSION.SDK_INT >= 29) {
             val cursorColor = when(cursor) { "Magenta" -> AndroidColor.rgb(255,77,255); "Green" -> AndroidColor.rgb(0,230,118); "White" -> AndroidColor.WHITE; else -> AndroidColor.rgb(0,229,255) }
             textCursorDrawable = GradientDrawable().apply { setColor(cursorColor); setSize(4, (this@PythonEditorView.textSize * 1.25f).toInt()) }
@@ -326,7 +343,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
         if (syntax) highlightNow() else {
             val editable = text
             editable?.getSpans(0, editable.length, ForegroundColorSpan::class.java)?.forEach { editable.removeSpan(it) }
-            setTextColor(AndroidColor.rgb(230,245,255))
+            setTextColor(AndroidColor.rgb(212,212,212))
         }
         updateGhostSuggestion()
     }
@@ -338,9 +355,14 @@ private class PythonEditorView(context: Context) : EditText(context) {
         var start = cursor
         while (start > 0 && (text[start-1].isLetterOrDigit() || text[start-1]=='_')) start--
         val prefix = text.substring(start,cursor)
-        val match = if(prefix.length >= 2) completions.entries.firstOrNull { it.key.startsWith(prefix) && it.value != prefix } else null
+        val projectNames = Regex("\\b(?:def|class)\\s+([A-Za-z_]\\w*)|\\b([A-Za-z_]\\w*)\\s*=")
+            .findAll(text).flatMap { it.groupValues.drop(1).asSequence() }.filter { it.isNotEmpty() }
+        val localMatch = if (prefix.isNotEmpty()) completions.entries.firstOrNull {
+            it.key.startsWith(prefix, ignoreCase = false) && it.key != prefix
+        } else null
+        val projectMatch = if (prefix.isNotEmpty()) projectNames.firstOrNull { it.startsWith(prefix) && it != prefix } else null
         ghostPrefixStart = start
-        ghostSuffix = match?.value?.removePrefix(prefix)
+        ghostSuffix = localMatch?.value?.removePrefix(prefix) ?: projectMatch?.removePrefix(prefix)
         ghostCursorBack = if (ghostSuffix?.endsWith("()") == true) 1 else 0
         invalidate()
     }
@@ -362,10 +384,44 @@ private class PythonEditorView(context: Context) : EditText(context) {
     }
 
     override fun onDraw(canvas: Canvas) {
+        val editorLayout = layout
+        if (editorLayout != null) {
+            if (showCurrentLine && selectionStart >= 0) {
+                val activeLine = editorLayout.getLineForOffset(selectionStart.coerceAtMost(text.length))
+                val top = editorLayout.getLineTop(activeLine) + totalPaddingTop - scrollY
+                val bottom = editorLayout.getLineBottom(activeLine) + totalPaddingTop - scrollY
+                canvas.drawRect(gutterWidth.toFloat(), top.toFloat(), width.toFloat(), bottom.toFloat(), Paint().apply {
+                    color = AndroidColor.rgb(8, 13, 20)
+                })
+            }
+            if (showLineNumbers) {
+                canvas.drawRect(0f, 0f, gutterWidth.toFloat(), height.toFloat(), Paint().apply {
+                    color = AndroidColor.rgb(3, 3, 3)
+                })
+                canvas.drawRect((gutterWidth - 1).toFloat(), 0f, gutterWidth.toFloat(), height.toFloat(), Paint().apply {
+                    color = AndroidColor.rgb(35, 35, 35)
+                })
+            }
+        }
         super.onDraw(canvas)
+        if (editorLayout != null && showLineNumbers) {
+            val numberPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = AndroidColor.rgb(110, 118, 129)
+                textSize = this@PythonEditorView.textSize * 0.78f
+                typeface = Typeface.MONOSPACE
+                textAlign = Paint.Align.RIGHT
+            }
+            val first = editorLayout.getLineForVertical((scrollY - totalPaddingTop).coerceAtLeast(0))
+            val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop).coerceAtLeast(0))
+            val right = gutterWidth - (10 * resources.displayMetrics.density)
+            for (lineNumber in first..last.coerceAtMost(editorLayout.lineCount - 1)) {
+                val baseline = editorLayout.getLineBaseline(lineNumber) + totalPaddingTop - scrollY
+                canvas.drawText((lineNumber + 1).toString(), right, baseline.toFloat(), numberPaint)
+            }
+        }
         val suffix=ghostSuffix ?: return
         val cursor=selectionStart
-        val currentLayout=layout ?: return
+        val currentLayout=editorLayout ?: return
         if(cursor<0 || cursor>text.length) return
         val line=currentLayout.getLineForOffset(cursor)
         val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -376,33 +432,6 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val x=currentLayout.getPrimaryHorizontal(cursor)+totalPaddingLeft-scrollX
         val y=currentLayout.getLineBaseline(line).toFloat()+totalPaddingTop-scrollY
         canvas.drawText(suffix.substringBefore('\n'),x,y,paint)
-    }
-
-    private fun animateInsertedText(start: Int, end: Int) {
-        val editable = text ?: return
-        if (start < 0 || end > editable.length || end <= start) return
-        val span = AnimatedCharacterSpan(this, characterAnimationMs) { editable.removeSpan(it) }
-        editable.setSpan(span, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-        span.start()
-    }
-
-    private class AnimatedCharacterSpan(
-        private val view: EditText,
-        private val durationMs: Long,
-        private val finished: (AnimatedCharacterSpan) -> Unit
-    ) : CharacterStyle(), UpdateAppearance {
-        private var alpha = 0
-        fun start() {
-            ValueAnimator.ofInt(0,255).apply {
-                duration = durationMs
-                addUpdateListener { alpha = it.animatedValue as Int; view.invalidate() }
-                addListener(object : android.animation.AnimatorListenerAdapter() {
-                    override fun onAnimationEnd(animation: android.animation.Animator) { finished(this@AnimatedCharacterSpan); view.invalidate() }
-                })
-                start()
-            }
-        }
-        override fun updateDrawState(tp: TextPaint) { tp.alpha = alpha }
     }
 
     private fun highlightNow() {
@@ -420,7 +449,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
             when {
                 source[i] == '#' -> {
                     while (i < source.length && source[i] != '\n') i++
-                    color(start, i, AndroidColor.rgb(57, 255, 136))
+                    color(start, i, AndroidColor.rgb(106, 153, 85))
                 }
                 source[i] == '\'' || source[i] == '"' -> {
                     val quote = source[i]
@@ -432,11 +461,11 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         if (!triple && source[i] == quote) { i++; break }
                         i++
                     }
-                    color(start, i, AndroidColor.rgb(255, 157, 77))
+                    color(start, i, AndroidColor.rgb(206, 145, 120))
                 }
                 source[i].isDigit() -> {
                     while (i < source.length && (source[i].isDigit() || source[i] in ".xXabcdefABCDEF_")) i++
-                    color(start, i, AndroidColor.rgb(182, 255, 106))
+                    color(start, i, AndroidColor.rgb(181, 206, 168))
                 }
                 source[i].isLetter() || source[i] == '_' -> {
                     while (i < source.length && (source[i].isLetterOrDigit() || source[i] == '_')) i++
@@ -445,10 +474,10 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     while (lookAhead < source.length && source[lookAhead].isWhitespace()) lookAhead++
                     val next = source.getOrNull(lookAhead)
                     val tokenColor = when {
-                        word in keywords -> AndroidColor.rgb(255, 77, 255)
-                        word in constants -> AndroidColor.rgb(92, 155, 255)
-                        next == '(' -> AndroidColor.rgb(255, 245, 102)
-                        else -> AndroidColor.rgb(106, 228, 255)
+                        word in keywords -> AndroidColor.rgb(197, 134, 192)
+                        word in constants -> AndroidColor.rgb(86, 156, 214)
+                        word in builtins || next == '(' -> AndroidColor.rgb(220, 220, 170)
+                        else -> AndroidColor.rgb(156, 220, 254)
                     }
                     color(start, i, tokenColor)
                 }
@@ -472,6 +501,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
     var keyDraft by remember { mutableStateOf("") }
     var endpointDraft by remember { mutableStateOf(vm.aiEndpoint) }
     var modelDraft by remember { mutableStateOf(vm.aiModel) }
+    var showAdvancedAi by remember { mutableStateOf(false) }
 
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=bg)) {
         Column(Modifier.fillMaxSize().background(bg).imePadding()) {
@@ -510,7 +540,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
                                 if(revision>0)view.setCodeIfDifferent(vm.code)
                                 view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting,vm.fontName,
                                     vm.lineSpacing,vm.editorPadding,vm.typingAnimation,vm.animationDuration,
-                                    vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness)
+                                    vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness,
+                                    vm.lineNumbers,vm.highlightCurrentLine)
                             },
                             modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
                         )
@@ -560,8 +591,6 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         Slider(vm.lineSpacing,{vm.lineSpacing=it;vm.saveAppearance()},valueRange=0.9f..1.8f)
                         Text("Editor padding  ${vm.editorPadding.toInt()} px",color=text)
                         Slider(vm.editorPadding,{vm.editorPadding=it;vm.saveAppearance()},valueRange=0f..48f,steps=11)
-                        Text("Typing animation  ${vm.animationDuration.toInt()} ms",color=text)
-                        Slider(vm.animationDuration,{vm.animationDuration=it;vm.saveAppearance()},valueRange=40f..320f,steps=13)
                         Text("Highlight delay  ${vm.highlightDelay.toInt()} ms",color=text)
                         Slider(vm.highlightDelay,{vm.highlightDelay=it;vm.saveAppearance()},valueRange=80f..700f,steps=14)
                         Text("Autosave delay  ${vm.autosaveDelay.toInt()} ms",color=text)
@@ -573,7 +602,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         SettingSwitch("Word wrap",vm.wordWrap){vm.wordWrap=it;vm.saveAppearance()}
                         SettingSwitch("Syntax highlighting",vm.syntaxHighlighting){vm.syntaxHighlighting=it;vm.saveAppearance()}
                         SettingSwitch("Ghost-text autocomplete",vm.autocomplete){vm.autocomplete=it;vm.saveAppearance()}
-                        SettingSwitch("Per-character animation",vm.typingAnimation){vm.typingAnimation=it;vm.saveAppearance()}
+                        SettingSwitch("Line numbers",vm.lineNumbers){vm.lineNumbers=it;vm.saveAppearance()}
+                        SettingSwitch("Highlight active line",vm.highlightCurrentLine){vm.highlightCurrentLine=it;vm.saveAppearance()}
                         SettingSwitch("Automatic saving",vm.autoSave){vm.autoSave=it;vm.saveAppearance()}
                         SettingSwitch("Programming toolbar",vm.showToolbar){vm.showToolbar=it;vm.saveAppearance()}
                         SettingSwitch("Page indicator dots",vm.showPageDots){vm.showPageDots=it;vm.saveAppearance()}
@@ -591,11 +621,17 @@ private class PythonEditorView(context: Context) : EditText(context) {
     if(showAiSettings) AlertDialog(
         onDismissRequest={showAiSettings=false},containerColor=Color(0xFF0A0A0A),title={Text("AI connection")},
         text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
-            Text("OpenAI-compatible provider. The API key is protected by Android Keystore.",fontSize=12.sp,color=Color.Gray)
-            TextField(keyDraft,{keyDraft=it},label={Text(if(vm.hasAiKey)"API key (saved)" else "API key")},singleLine=true,visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
-            TextField(endpointDraft,{endpointDraft=it},label={Text("Endpoint")},singleLine=true)
-            TextField(modelDraft,{modelDraft=it},label={Text("Model")},singleLine=true)
-            Row{TextButton(onClick={vm.askAi(true)}){Text("Test connection")};TextButton(onClick={vm.removeAiKey()}){Text("Remove key",color=Color(0xFFFF3D71))}}
+            Text("Paste your OpenAI API key — that’s it",fontSize=13.sp,color=Color(0xFFD4D4D4))
+            TextField(keyDraft,{keyDraft=it},label={Text(if(vm.hasAiKey)"New API key (optional)" else "API key")},singleLine=true,visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
+            TextButton(onClick={showAdvancedAi=!showAdvancedAi}){Text(if(showAdvancedAi)"Hide advanced" else "Advanced")}
+            if(showAdvancedAi){
+                TextField(endpointDraft,{endpointDraft=it},label={Text("Custom endpoint")},singleLine=true)
+                TextField(modelDraft,{modelDraft=it},label={Text("Model")},singleLine=true)
+            }
+            Row{
+                TextButton(onClick={vm.saveAiSettings(keyDraft,endpointDraft,modelDraft);keyDraft="";vm.askAi(true)}){Text("Save & test")}
+                if(vm.hasAiKey) TextButton(onClick={vm.removeAiKey()}){Text("Remove",color=Color(0xFFFF3D71))}
+            }
         }},
         confirmButton={Button(onClick={vm.saveAiSettings(keyDraft,endpointDraft,modelDraft);keyDraft="";showAiSettings=false}){Text("Save")}},
         dismissButton={TextButton(onClick={showAiSettings=false}){Text("Cancel")}}

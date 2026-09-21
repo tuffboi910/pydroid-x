@@ -18,6 +18,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -55,14 +57,28 @@ class IdeViewModel : ViewModel() {
     var aiModel by mutableStateOf("gpt-4o-mini")
     var shareCode by mutableStateOf(false)
     var hasAiKey by mutableStateOf(false)
+    var editorFontSize by mutableFloatStateOf(16f)
+    var terminalFontSize by mutableFloatStateOf(13f)
+    var uiScale by mutableFloatStateOf(1f)
+    var wordWrap by mutableStateOf(true)
+    var syntaxHighlighting by mutableStateOf(true)
+    var autoSave by mutableStateOf(true)
     private val stdin = LinkedBlockingQueue<String?>()
     @Volatile private var worker: Thread? = null
     private var autosaveJob: Job? = null
     lateinit var projectDir: File
     private lateinit var aiKeys: SecureAiKeyStore
+    private lateinit var settings: android.content.SharedPreferences
 
     fun initialize(context: Context) {
         aiKeys = SecureAiKeyStore(context.applicationContext)
+        settings = context.getSharedPreferences("ide_settings", Context.MODE_PRIVATE)
+        editorFontSize = settings.getFloat("editor_font", 16f)
+        terminalFontSize = settings.getFloat("terminal_font", 13f)
+        uiScale = settings.getFloat("ui_scale", 1f)
+        wordWrap = settings.getBoolean("word_wrap", true)
+        syntaxHighlighting = settings.getBoolean("syntax", true)
+        autoSave = settings.getBoolean("autosave", true)
         hasAiKey = !aiKeys.load().isNullOrBlank()
         projectDir = File(context.filesDir, "projects/default").apply { mkdirs() }
         val main = File(projectDir, "main.py")
@@ -94,6 +110,7 @@ class IdeViewModel : ViewModel() {
     }
     fun updateCode(value: String) {
         code = value
+        if (!autoSave) return
         autosaveJob?.cancel()
         autosaveJob = viewModelScope.launch {
             delay(500)
@@ -102,6 +119,12 @@ class IdeViewModel : ViewModel() {
                 if (::projectDir.isInitialized) File(projectDir, "main.py").writeText(snapshot)
             }
         }
+    }
+    fun saveAppearance() {
+        if (!::settings.isInitialized) return
+        settings.edit().putFloat("editor_font",editorFontSize).putFloat("terminal_font",terminalFontSize)
+            .putFloat("ui_scale",uiScale).putBoolean("word_wrap",wordWrap)
+            .putBoolean("syntax",syntaxHighlighting).putBoolean("autosave",autoSave).apply()
     }
     fun save() {
         autosaveJob?.cancel()
@@ -136,6 +159,7 @@ class MainActivity : ComponentActivity() {
 private class PythonEditorView(context: Context) : EditText(context) {
     var onCodeChanged: ((String) -> Unit)? = null
     private var applyingHighlight = false
+    private var highlightingEnabled = true
     private val keywords = setOf(
         "and", "as", "assert", "async", "await", "break", "case", "class", "continue",
         "def", "del", "elif", "else", "except", "finally", "for", "from", "global",
@@ -188,7 +212,20 @@ private class PythonEditorView(context: Context) : EditText(context) {
         text.replace(minOf(start, end), maxOf(start, end), value)
     }
 
+    fun applyPreferences(font: Float, wrap: Boolean, syntax: Boolean) {
+        textSize = font
+        setHorizontallyScrolling(!wrap)
+        isHorizontalScrollBarEnabled = !wrap
+        highlightingEnabled = syntax
+        if (syntax) highlightNow() else {
+            val editable = text
+            editable?.getSpans(0, editable.length, ForegroundColorSpan::class.java)?.forEach { editable.removeSpan(it) }
+            setTextColor(AndroidColor.rgb(230,245,255))
+        }
+    }
+
     private fun highlightNow() {
+        if (!highlightingEnabled) return
         val editable = text ?: return
         val source = editable.toString()
         applyingHighlight = true
@@ -242,81 +279,124 @@ private class PythonEditorView(context: Context) : EditText(context) {
 }
 
 @Composable fun PyDroidX(vm: IdeViewModel) {
-    val bg = Color.Black; val panel = Color.Black; val text = Color(0xFFE6F5FF); val accent = Color(0xFF00E5FF)
-    val density = LocalDensity.current
-    val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
+    val bg = Color.Black
+    val text = Color(0xFFE6F5FF)
+    val accent = Color(0xFF00E5FF)
     val revision = vm.editorRevision
+    val pager = rememberPagerState(pageCount = { 4 })
+    val scope = rememberCoroutineScope()
+    val pages = listOf("CODE", "TERMINAL", "AI", "SETTINGS")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
-    var bottomTab by remember { mutableStateOf("TERMINAL") }
     var showAiSettings by remember { mutableStateOf(false) }
     var keyDraft by remember { mutableStateOf("") }
     var endpointDraft by remember { mutableStateOf(vm.aiEndpoint) }
     var modelDraft by remember { mutableStateOf(vm.aiModel) }
-    MaterialTheme(colorScheme = darkColorScheme(primary = accent, background = bg, surface = panel)) {
+
+    MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=bg)) {
         Column(Modifier.fillMaxSize().background(bg).imePadding()) {
             Row(
-                Modifier.fillMaxWidth().height(68.dp).background(panel).padding(start=12.dp,end=12.dp,top=12.dp,bottom=6.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                Modifier.fillMaxWidth().height((68 * vm.uiScale).dp).padding(start=12.dp,end=12.dp,top=12.dp,bottom=6.dp),
+                horizontalArrangement=Arrangement.spacedBy(10.dp),
+                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
             ) {
-                Text("PyDroid X", color=text, fontSize=18.sp, modifier=Modifier.weight(1f))
-                Button(
-                    onClick={vm.run()}, enabled=!vm.running,
-                    colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF00E676),contentColor=Color.Black)
-                ) { Text("▶ Run") }
-                Button(
-                    onClick={vm.stop()}, enabled=vm.running,
-                    colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFFF3D71),contentColor=Color.Black)
-                ) { Text("■ Stop") }
+                Text("PyDroid X",color=text,fontSize=(18*vm.uiScale).sp,modifier=Modifier.weight(1f))
+                Button(onClick={vm.run()},enabled=!vm.running,colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF00E676),contentColor=Color.Black)){Text("▶ Run")}
+                Button(onClick={vm.stop()},enabled=vm.running,colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFFF3D71),contentColor=Color.Black)){Text("■ Stop")}
             }
-            if (!keyboardVisible) Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}", color=Color.Gray, fontSize=11.sp, modifier=Modifier.padding(10.dp,6.dp))
-            AndroidView(
-                factory = { context -> PythonEditorView(context).also { view -> editorView = view; view.onCodeChanged = vm::updateCode; view.setCodeIfDifferent(vm.code) } },
-                update = { if (revision > 0) it.setCodeIfDifferent(vm.code) },
-                modifier = Modifier.weight(3f).fillMaxWidth().background(Color.Black)
-            )
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(panel).padding(4.dp), horizontalArrangement=Arrangement.spacedBy(4.dp)) {
-                listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach { key -> TextButton(onClick={ editorView?.insertAtCursor(if(key=="Tab") "    " else key) }) { Text(key) } }
-            }
-            if (!keyboardVisible) Column(Modifier.fillMaxWidth().weight(1f).background(Color.Black).padding(8.dp)) {
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    TextButton(onClick={bottomTab="TERMINAL"}) { Text("TERMINAL", color=if(bottomTab=="TERMINAL") accent else Color.Gray, fontSize=12.sp) }
-                    TextButton(onClick={bottomTab="AI"}) { Text("AI ASSISTANT", color=if(bottomTab=="AI") accent else Color.Gray, fontSize=12.sp) }
-                    Spacer(Modifier.weight(1f))
-                    if(bottomTab=="TERMINAL") TextButton(onClick={vm.output=""}){Text("Clear")}
-                    else TextButton(onClick={showAiSettings=true}){Text(if(vm.hasAiKey) "Settings" else "Add key")}
-                }
-                if (bottomTab == "TERMINAL") {
-                    Text(vm.output.ifEmpty{"Ready"},color=text,fontFamily=FontFamily.Monospace,fontSize=13.sp,modifier=Modifier.weight(1f).verticalScroll(rememberScrollState()))
-                    if(vm.waitingInput) Row { TextField(vm.input,{vm.input=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Program input")}); Button(onClick={vm.submitInput()}){Text("Send")} }
-                } else {
-                    Text(vm.aiReply, color=text, fontSize=13.sp, modifier=Modifier.weight(1f).fillMaxWidth().background(Color(0xFF080808)).padding(10.dp).verticalScroll(rememberScrollState()))
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Checkbox(checked=vm.shareCode,onCheckedChange={vm.shareCode=it})
-                        Text("Share current code",color=Color.Gray,fontSize=11.sp)
-                        Spacer(Modifier.weight(1f))
-                        if(vm.aiBusy) CircularProgressIndicator(Modifier.size(20.dp),strokeWidth=2.dp)
-                    }
-                    Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) {
-                        TextField(vm.aiPrompt,{vm.aiPrompt=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Ask AI…")})
-                        Button(onClick={vm.askAi()},enabled=!vm.aiBusy && vm.aiPrompt.isNotBlank()){Text("Send")}
+            Row(
+                Modifier.fillMaxWidth().height(42.dp).background(Color(0xFF050505)),
+                horizontalArrangement=Arrangement.Center,
+                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                pages.forEachIndexed { index,label ->
+                    TextButton(onClick={scope.launch { pager.animateScrollToPage(index) }}) {
+                        Text(label,color=if(pager.currentPage==index) accent else Color(0xFF666666),fontSize=11.sp)
                     }
                 }
+            }
+            HorizontalPager(state=pager,modifier=Modifier.weight(1f).fillMaxWidth(),beyondViewportPageCount=1) { page ->
+                when(page) {
+                    0 -> Column(Modifier.fillMaxSize().background(bg)) {
+                        Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp,modifier=Modifier.padding(10.dp,6.dp))
+                        AndroidView(
+                            factory={context->PythonEditorView(context).also{view->editorView=view;view.onCodeChanged=vm::updateCode;view.setCodeIfDifferent(vm.code)}},
+                            update={view->
+                                if(revision>0)view.setCodeIfDifferent(vm.code)
+                                view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting)
+                            },
+                            modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
+                        )
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(Color(0xFF050505)).padding(4.dp),horizontalArrangement=Arrangement.spacedBy(4.dp)){
+                            listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach{key->TextButton(onClick={editorView?.insertAtCursor(if(key=="Tab")"    " else key)}){Text(key)}}
+                        }
+                    }
+                    1 -> Column(Modifier.fillMaxSize().padding(14.dp)) {
+                        Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                            Text("TERMINAL",color=accent,fontSize=16.sp,modifier=Modifier.weight(1f))
+                            TextButton(onClick={vm.output=""}){Text("Clear")}
+                        }
+                        Text(vm.output.ifEmpty{"Ready"},color=text,fontFamily=FontFamily.Monospace,fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(Color(0xFF030303)).padding(12.dp).verticalScroll(rememberScrollState()))
+                        if(vm.waitingInput) Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                            TextField(vm.input,{vm.input=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Program input")})
+                            Button(onClick={vm.submitInput()}){Text("Send")}
+                        }
+                    }
+                    2 -> Column(Modifier.fillMaxSize().padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                            Column(Modifier.weight(1f)){Text("AI ASSISTANT",color=accent,fontSize=16.sp);Text("Only shares code when you allow it",color=Color.Gray,fontSize=10.sp)}
+                            TextButton(onClick={showAiSettings=true}){Text(if(vm.hasAiKey)"Connection" else "Add key")}
+                        }
+                        Text(vm.aiReply,color=text,fontSize=14.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(Color(0xFF050505)).padding(14.dp).verticalScroll(rememberScrollState()))
+                        Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                            Checkbox(checked=vm.shareCode,onCheckedChange={vm.shareCode=it})
+                            Text("Share current file with provider",color=Color.Gray,fontSize=12.sp)
+                            Spacer(Modifier.weight(1f))
+                            if(vm.aiBusy)CircularProgressIndicator(Modifier.size(22.dp),strokeWidth=2.dp)
+                        }
+                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                            TextField(vm.aiPrompt,{vm.aiPrompt=it},modifier=Modifier.weight(1f),placeholder={Text("Ask about code or errors…")},maxLines=4)
+                            Button(onClick={vm.askAi()},enabled=!vm.aiBusy&&vm.aiPrompt.isNotBlank()){Text("Send")}
+                        }
+                    }
+                    else -> Column(Modifier.fillMaxSize().padding(18.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+                        Text("CUSTOMIZE",color=accent,fontSize=18.sp)
+                        Text("Editor font  ${vm.editorFontSize.toInt()} sp",color=text)
+                        Slider(vm.editorFontSize,{vm.editorFontSize=it;vm.saveAppearance()},valueRange=12f..28f,steps=15)
+                        Text("Terminal font  ${vm.terminalFontSize.toInt()} sp",color=text)
+                        Slider(vm.terminalFontSize,{vm.terminalFontSize=it;vm.saveAppearance()},valueRange=10f..24f,steps=13)
+                        Text("Interface scale  ${(vm.uiScale*100).toInt()}%",color=text)
+                        Slider(vm.uiScale,{vm.uiScale=it;vm.saveAppearance()},valueRange=0.85f..1.25f,steps=7)
+                        SettingSwitch("Word wrap",vm.wordWrap){vm.wordWrap=it;vm.saveAppearance()}
+                        SettingSwitch("Syntax highlighting",vm.syntaxHighlighting){vm.syntaxHighlighting=it;vm.saveAppearance()}
+                        SettingSwitch("Automatic saving",vm.autoSave){vm.autoSave=it;vm.saveAppearance()}
+                        HorizontalDivider(color=Color(0xFF202020))
+                        Text("Swipe left or right anywhere outside active text editing to move between pages.",color=Color.Gray,fontSize=12.sp)
+                        Text("Python  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp)
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().height(22.dp),horizontalArrangement=Arrangement.Center,verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                repeat(4){index->Box(Modifier.padding(horizontal=3.dp).size(if(index==pager.currentPage)8.dp else 5.dp).background(if(index==pager.currentPage)accent else Color.DarkGray,androidx.compose.foundation.shape.CircleShape))}
             }
         }
     }
-    if (showAiSettings) AlertDialog(
-        onDismissRequest={showAiSettings=false},
-        containerColor=Color(0xFF0A0A0A),
-        title={Text("AI connection")},
-        text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
-            Text("OpenAI-compatible provider. Your key is encrypted with Android Keystore and sent only to this endpoint.",fontSize=12.sp,color=Color.Gray)
-            TextField(keyDraft,{keyDraft=it},label={Text(if(vm.hasAiKey) "API key (saved)" else "API key")},singleLine=true,visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
-            TextField(endpointDraft,{endpointDraft=it},label={Text("Chat completions endpoint")},singleLine=true)
+    if(showAiSettings) AlertDialog(
+        onDismissRequest={showAiSettings=false},containerColor=Color(0xFF0A0A0A),title={Text("AI connection")},
+        text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
+            Text("OpenAI-compatible provider. The API key is protected by Android Keystore.",fontSize=12.sp,color=Color.Gray)
+            TextField(keyDraft,{keyDraft=it},label={Text(if(vm.hasAiKey)"API key (saved)" else "API key")},singleLine=true,visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
+            TextField(endpointDraft,{endpointDraft=it},label={Text("Endpoint")},singleLine=true)
             TextField(modelDraft,{modelDraft=it},label={Text("Model")},singleLine=true)
-            TextButton(onClick={vm.removeAiKey()}){Text("Remove saved key",color=Color(0xFFF85149))}
+            Row{TextButton(onClick={vm.askAi(true)}){Text("Test connection")};TextButton(onClick={vm.removeAiKey()}){Text("Remove key",color=Color(0xFFFF3D71))}}
         }},
-        confirmButton={Button(onClick={vm.saveAiSettings(keyDraft,endpointDraft,modelDraft); keyDraft=""; showAiSettings=false}){Text("Save")}},
+        confirmButton={Button(onClick={vm.saveAiSettings(keyDraft,endpointDraft,modelDraft);keyDraft="";showAiSettings=false}){Text("Save")}},
         dismissButton={TextButton(onClick={showAiSettings=false}){Text("Cancel")}}
     )
+}
+
+@Composable private fun SettingSwitch(label:String,checked:Boolean,onChange:(Boolean)->Unit){
+    Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+        Text(label,color=Color(0xFFE6F5FF),modifier=Modifier.weight(1f))
+        Switch(checked=checked,onCheckedChange=onChange)
+    }
 }

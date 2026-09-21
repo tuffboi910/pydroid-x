@@ -147,7 +147,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
 
     init {
         setBackgroundColor(AndroidColor.BLACK)
-        setTextColor(AndroidColor.rgb(212, 212, 212))
+        setTextColor(AndroidColor.rgb(230, 245, 255))
         setHintTextColor(AndroidColor.DKGRAY)
         typeface = Typeface.MONOSPACE
         textSize = 16f
@@ -202,7 +202,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
             when {
                 source[i] == '#' -> {
                     while (i < source.length && source[i] != '\n') i++
-                    color(start, i, AndroidColor.rgb(106, 153, 85))
+                    color(start, i, AndroidColor.rgb(57, 255, 136))
                 }
                 source[i] == '\'' || source[i] == '"' -> {
                     val quote = source[i]
@@ -214,11 +214,11 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         if (!triple && source[i] == quote) { i++; break }
                         i++
                     }
-                    color(start, i, AndroidColor.rgb(206, 145, 120))
+                    color(start, i, AndroidColor.rgb(255, 157, 77))
                 }
                 source[i].isDigit() -> {
                     while (i < source.length && (source[i].isDigit() || source[i] in ".xXabcdefABCDEF_")) i++
-                    color(start, i, AndroidColor.rgb(181, 206, 168))
+                    color(start, i, AndroidColor.rgb(182, 255, 106))
                 }
                 source[i].isLetter() || source[i] == '_' -> {
                     while (i < source.length && (source[i].isLetterOrDigit() || source[i] == '_')) i++
@@ -227,10 +227,10 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     while (lookAhead < source.length && source[lookAhead].isWhitespace()) lookAhead++
                     val next = source.getOrNull(lookAhead)
                     val tokenColor = when {
-                        word in keywords -> AndroidColor.rgb(197, 134, 192)
-                        word in constants -> AndroidColor.rgb(86, 156, 214)
-                        next == '(' -> AndroidColor.rgb(220, 220, 170)
-                        else -> AndroidColor.rgb(156, 220, 254)
+                        word in keywords -> AndroidColor.rgb(255, 77, 255)
+                        word in constants -> AndroidColor.rgb(92, 155, 255)
+                        next == '(' -> AndroidColor.rgb(255, 245, 102)
+                        else -> AndroidColor.rgb(106, 228, 255)
                     }
                     color(start, i, tokenColor)
                 }
@@ -242,7 +242,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
 }
 
 @Composable fun PyDroidX(vm: IdeViewModel) {
-    val bg = Color.Black; val panel = Color.Black; val text = Color(0xFFD4D4D4); val accent = Color(0xFF569CD6)
+    val bg = Color.Black; val panel = Color.Black; val text = Color(0xFFE6F5FF); val accent = Color(0xFF00E5FF)
     val density = LocalDensity.current
     val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
     val revision = vm.editorRevision
@@ -254,10 +254,20 @@ private class PythonEditorView(context: Context) : EditText(context) {
     var modelDraft by remember { mutableStateOf(vm.aiModel) }
     MaterialTheme(colorScheme = darkColorScheme(primary = accent, background = bg, surface = panel)) {
         Column(Modifier.fillMaxSize().background(bg).imePadding()) {
-            Row(Modifier.fillMaxWidth().height(52.dp).background(panel).padding(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("PyDroid X", color=text, fontSize=18.sp, modifier=Modifier.weight(1f).padding(top=14.dp))
-                Button(onClick={vm.run()}, enabled=!vm.running) { Text("Run") }
-                OutlinedButton(onClick={vm.stop()}, enabled=vm.running) { Text("Stop") }
+            Row(
+                Modifier.fillMaxWidth().height(68.dp).background(panel).padding(start=12.dp,end=12.dp,top=12.dp,bottom=6.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Text("PyDroid X", color=text, fontSize=18.sp, modifier=Modifier.weight(1f))
+                Button(
+                    onClick={vm.run()}, enabled=!vm.running,
+                    colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF00E676),contentColor=Color.Black)
+                ) { Text("▶ Run") }
+                Button(
+                    onClick={vm.stop()}, enabled=vm.running,
+                    colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFFF3D71),contentColor=Color.Black)
+                ) { Text("■ Stop") }
             }
             if (!keyboardVisible) Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}", color=Color.Gray, fontSize=11.sp, modifier=Modifier.padding(10.dp,6.dp))
             AndroidView(

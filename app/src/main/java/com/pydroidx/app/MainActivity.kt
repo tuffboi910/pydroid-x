@@ -50,6 +50,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 class IdeViewModel : ViewModel() {
     @Volatile var code = "print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n"
@@ -142,6 +143,18 @@ class IdeViewModel : ViewModel() {
             aiBusy = false
         }
     }
+    fun requestCompletion(source: String, cursor: Int, deliver: (String, Int) -> Unit) {
+        if (!autocomplete || !::projectDir.isInitialized) return
+        thread(name="PyDroidX-Jedi") {
+            runCatching {
+                val raw = Python.getInstance().getModule("runner")
+                    .callAttr("complete", source, cursor, projectDir.absolutePath).toString()
+                val json = JSONObject(raw)
+                val suffix = json.optString("suffix")
+                if (suffix.isNotEmpty()) deliver(suffix, json.optInt("cursor_back", 0))
+            }
+        }
+    }
     fun updateCode(value: String) {
         code = value
         if (!autoSave) return
@@ -198,6 +211,7 @@ class MainActivity : ComponentActivity() {
 
 private class PythonEditorView(context: Context) : EditText(context) {
     var onCodeChanged: ((String) -> Unit)? = null
+    var requestSmartCompletion: ((String, Int, (String, Int) -> Unit) -> Unit)? = null
     private var applyingHighlight = false
     private var highlightingEnabled = true
     private var typingAnimationEnabled = true
@@ -206,6 +220,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var autocompleteEnabled = true
     private var ghostAlpha = 122
     private var ghostSuffix: String? = null
+    private var ghostCursorBack = 0
     private var ghostPrefixStart = 0
     private val completions = linkedMapOf(
         "print" to "print()", "input" to "input()", "range" to "range()", "len" to "len()",
@@ -224,6 +239,21 @@ private class PythonEditorView(context: Context) : EditText(context) {
     )
     private val constants = setOf("True", "False", "None", "NotImplemented", "Ellipsis")
     private val highlightRunnable = Runnable { highlightNow() }
+    private val completionRunnable = Runnable {
+        if (!autocompleteEnabled) return@Runnable
+        val snapshot = text.toString()
+        val cursor = selectionStart
+        if (cursor < 0) return@Runnable
+        requestSmartCompletion?.invoke(snapshot, cursor) { suffix, cursorBack ->
+            post {
+                if (text.toString() == snapshot && selectionStart == cursor && suffix.isNotEmpty()) {
+                    ghostSuffix = suffix
+                    ghostCursorBack = cursorBack
+                    invalidate()
+                }
+            }
+        }
+    }
 
     init {
         setBackgroundColor(AndroidColor.BLACK)
@@ -248,6 +278,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     removeCallbacks(highlightRunnable)
                     postDelayed(highlightRunnable, highlightDelayMs)
                     post { updateGhostSuggestion() }
+                    removeCallbacks(completionRunnable)
+                    postDelayed(completionRunnable, 140)
                 }
             }
             override fun afterTextChanged(s: Editable?) = Unit
@@ -309,6 +341,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val match = if(prefix.length >= 2) completions.entries.firstOrNull { it.key.startsWith(prefix) && it.value != prefix } else null
         ghostPrefixStart = start
         ghostSuffix = match?.value?.removePrefix(prefix)
+        ghostCursorBack = if (ghostSuffix?.endsWith("()") == true) 1 else 0
         invalidate()
     }
 
@@ -316,7 +349,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val suffix = ghostSuffix ?: return false
         val cursor = selectionStart.coerceAtLeast(0)
         text.insert(cursor,suffix)
-        val newCursor = if(suffix.endsWith("()")) cursor + suffix.length - 1 else cursor + suffix.length
+        val newCursor = cursor + suffix.length - ghostCursorBack
         setSelection(newCursor.coerceAtMost(text.length))
         ghostSuffix=null
         invalidate()
@@ -467,7 +500,12 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     0 -> Column(Modifier.fillMaxSize().background(bg)) {
                         Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp,modifier=Modifier.padding(10.dp,6.dp))
                         AndroidView(
-                            factory={context->PythonEditorView(context).also{view->editorView=view;view.onCodeChanged=vm::updateCode;view.setCodeIfDifferent(vm.code)}},
+                            factory={context->PythonEditorView(context).also{view->
+                                editorView=view
+                                view.onCodeChanged=vm::updateCode
+                                view.requestSmartCompletion=vm::requestCompletion
+                                view.setCodeIfDifferent(vm.code)
+                            }},
                             update={view->
                                 if(revision>0)view.setCodeIfDifferent(vm.code)
                                 view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting,vm.fontName,

@@ -48,6 +48,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
+data class AiMessage(val fromUser: Boolean, val text: String)
+
 class IdeViewModel : ViewModel() {
     @Volatile var code = "print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n"
     var editorRevision by mutableIntStateOf(0)
@@ -59,6 +61,7 @@ class IdeViewModel : ViewModel() {
     var runtimeVersion by mutableStateOf("Loading Python…")
     var aiPrompt by mutableStateOf("")
     var aiReply by mutableStateOf("Ask about Python, your error, or your selected code")
+    val aiMessages = mutableStateListOf<AiMessage>()
     var aiBusy by mutableStateOf(false)
     var aiEndpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
     var aiModel by mutableStateOf("gpt-4o-mini")
@@ -145,13 +148,20 @@ class IdeViewModel : ViewModel() {
         if (key.isNullOrBlank()) { aiReply = "Open AI settings and add your API key"; return }
         val question = if (testOnly) "Reply with: Connection successful" else aiPrompt.trim()
         if (question.isBlank()) return
-        if (!testOnly) aiPrompt = ""
+        if (!testOnly) {
+            aiMessages.add(AiMessage(true, question))
+            aiPrompt = ""
+        }
         aiBusy = true
         aiReply = if (testOnly) "Testing connection…" else "Thinking…"
         thread(name = "PyDroidX-AI") {
             val result = runCatching { AiClient.chat(aiProvider, aiEndpoint, key, aiModel, question, if (!testOnly && shareCode) code else null) }
-            aiReply = result.getOrElse { "AI error: ${it.message ?: "Request failed"}" }
-            aiBusy = false
+            val answer = result.getOrElse { "AI error: ${it.message ?: "Request failed"}" }
+            viewModelScope.launch {
+                aiReply = answer
+                if (!testOnly) aiMessages.add(AiMessage(false, answer))
+                aiBusy = false
+            }
         }
     }
     fun requestCompletion(source: String, cursor: Int, deliver: (String, Int) -> Unit) {
@@ -506,6 +516,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
     val revision = vm.editorRevision
     val pager = rememberPagerState(pageCount = { 4 })
     val scope = rememberCoroutineScope()
+    val aiScroll = rememberScrollState()
     val pages = listOf("CODE", "TERMINAL", "AI", "SETTINGS")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
     var showAiSettings by remember { mutableStateOf(false) }
@@ -513,6 +524,9 @@ private class PythonEditorView(context: Context) : EditText(context) {
     var endpointDraft by remember { mutableStateOf(vm.aiEndpoint) }
     var modelDraft by remember { mutableStateOf(vm.aiModel) }
     var providerDraft by remember { mutableStateOf(vm.aiProvider) }
+    LaunchedEffect(vm.aiMessages.size) {
+        aiScroll.animateScrollTo(aiScroll.maxValue)
+    }
     var showAdvancedAi by remember { mutableStateOf(false) }
 
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=bg)) {
@@ -577,7 +591,26 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             Column(Modifier.weight(1f)){Text("AI ASSISTANT",color=accent,fontSize=16.sp);Text("Only shares code when you allow it",color=Color.Gray,fontSize=10.sp)}
                             TextButton(onClick={showAiSettings=true}){Text(if(vm.hasAiKey)"Connection" else "Add key")}
                         }
-                        Text(vm.aiReply,color=text,fontSize=14.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(Color(0xFF050505)).padding(14.dp).animateContentSize().verticalScroll(rememberScrollState()))
+                        Column(
+                            Modifier.weight(1f).fillMaxWidth().background(Color(0xFF050505))
+                                .padding(12.dp).verticalScroll(aiScroll),
+                            verticalArrangement=Arrangement.spacedBy(10.dp)
+                        ) {
+                            if(vm.aiMessages.isEmpty()) Text(vm.aiReply,color=Color.Gray,fontSize=14.sp)
+                            vm.aiMessages.forEach { message ->
+                                Row(Modifier.fillMaxWidth(),horizontalArrangement=if(message.fromUser) Arrangement.End else Arrangement.Start) {
+                                    Surface(
+                                        color=if(message.fromUser) Color(0xFF082F36) else accent,
+                                        contentColor=if(message.fromUser) Color(0xFF9FF8FF) else Color.Black,
+                                        shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                                        modifier=Modifier.widthIn(max=310.dp)
+                                    ) {
+                                        Text(message.text,fontSize=14.sp,modifier=Modifier.padding(horizontal=14.dp,vertical=11.dp))
+                                    }
+                                }
+                            }
+                            if(vm.aiBusy && vm.aiMessages.isNotEmpty()) Text("Thinking…",color=accent,fontSize=12.sp)
+                        }
                         Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                             Checkbox(checked=vm.shareCode,onCheckedChange={vm.shareCode=it})
                             Text("Share current file with provider",color=Color.Gray,fontSize=12.sp)

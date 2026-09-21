@@ -48,17 +48,49 @@ class IdeViewModel : ViewModel() {
     var waitingInput by mutableStateOf(false)
     var input by mutableStateOf("")
     var runtimeVersion by mutableStateOf("Loading Python…")
+    var aiPrompt by mutableStateOf("")
+    var aiReply by mutableStateOf("Ask about Python, your error, or your selected code")
+    var aiBusy by mutableStateOf(false)
+    var aiEndpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
+    var aiModel by mutableStateOf("gpt-4o-mini")
+    var shareCode by mutableStateOf(false)
+    var hasAiKey by mutableStateOf(false)
     private val stdin = LinkedBlockingQueue<String?>()
     @Volatile private var worker: Thread? = null
     private var autosaveJob: Job? = null
     lateinit var projectDir: File
+    private lateinit var aiKeys: SecureAiKeyStore
 
-    fun initialize(dir: File) {
-        projectDir = File(dir, "projects/default").apply { mkdirs() }
+    fun initialize(context: Context) {
+        aiKeys = SecureAiKeyStore(context.applicationContext)
+        hasAiKey = !aiKeys.load().isNullOrBlank()
+        projectDir = File(context.filesDir, "projects/default").apply { mkdirs() }
         val main = File(projectDir, "main.py")
         if (main.exists()) code = main.readText() else main.writeText(code)
         editorRevision++
         thread { runtimeVersion = Python.getInstance().getModule("runner").callAttr("version").toString() }
+    }
+    fun saveAiSettings(key: String, endpoint: String, model: String) {
+        if (key.isNotBlank()) aiKeys.save(key)
+        aiEndpoint = endpoint.trim()
+        aiModel = model.trim()
+        hasAiKey = !aiKeys.load().isNullOrBlank()
+    }
+    fun removeAiKey() { aiKeys.clear(); hasAiKey = false }
+    fun askAi(testOnly: Boolean = false) {
+        if (aiBusy) return
+        val key = aiKeys.load()
+        if (key.isNullOrBlank()) { aiReply = "Open AI settings and add your API key"; return }
+        val question = if (testOnly) "Reply with: Connection successful" else aiPrompt.trim()
+        if (question.isBlank()) return
+        if (!testOnly) aiPrompt = ""
+        aiBusy = true
+        aiReply = if (testOnly) "Testing connection…" else "Thinking…"
+        thread(name = "PyDroidX-AI") {
+            val result = runCatching { AiClient.chat(aiEndpoint, key, aiModel, question, if (!testOnly && shareCode) code else null) }
+            aiReply = result.getOrElse { "AI error: ${it.message ?: "Request failed"}" }
+            aiBusy = false
+        }
     }
     fun updateCode(value: String) {
         code = value
@@ -97,7 +129,7 @@ class IdeViewModel : ViewModel() {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { val vm: IdeViewModel = viewModel(); LaunchedEffect(Unit) { vm.initialize(filesDir) }; PyDroidX(vm) }
+        setContent { val vm: IdeViewModel = viewModel(); LaunchedEffect(Unit) { vm.initialize(applicationContext) }; PyDroidX(vm) }
     }
 }
 
@@ -215,6 +247,11 @@ private class PythonEditorView(context: Context) : EditText(context) {
     val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
     val revision = vm.editorRevision
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
+    var bottomTab by remember { mutableStateOf("TERMINAL") }
+    var showAiSettings by remember { mutableStateOf(false) }
+    var keyDraft by remember { mutableStateOf("") }
+    var endpointDraft by remember { mutableStateOf(vm.aiEndpoint) }
+    var modelDraft by remember { mutableStateOf(vm.aiModel) }
     MaterialTheme(colorScheme = darkColorScheme(primary = accent, background = bg, surface = panel)) {
         Column(Modifier.fillMaxSize().background(bg).imePadding()) {
             Row(Modifier.fillMaxWidth().height(52.dp).background(panel).padding(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -226,16 +263,50 @@ private class PythonEditorView(context: Context) : EditText(context) {
             AndroidView(
                 factory = { context -> PythonEditorView(context).also { view -> editorView = view; view.onCodeChanged = vm::updateCode; view.setCodeIfDifferent(vm.code) } },
                 update = { if (revision > 0) it.setCodeIfDifferent(vm.code) },
-                modifier = Modifier.weight(1f).fillMaxWidth().background(Color.Black)
+                modifier = Modifier.weight(3f).fillMaxWidth().background(Color.Black)
             )
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(panel).padding(4.dp), horizontalArrangement=Arrangement.spacedBy(4.dp)) {
                 listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach { key -> TextButton(onClick={ editorView?.insertAtCursor(if(key=="Tab") "    " else key) }) { Text(key) } }
             }
-            if (!keyboardVisible) Column(Modifier.fillMaxWidth().heightIn(min=150.dp,max=260.dp).background(Color.Black).padding(8.dp)) {
-                Row { Text("TERMINAL",color=accent,fontSize=12.sp,modifier=Modifier.weight(1f)); TextButton(onClick={vm.output=""}){Text("Clear")} }
-                Text(vm.output.ifEmpty{"Ready"},color=text,fontFamily=FontFamily.Monospace,fontSize=13.sp,modifier=Modifier.weight(1f).verticalScroll(rememberScrollState()))
-                if(vm.waitingInput) Row { TextField(vm.input,{vm.input=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Program input")}); Button(onClick={vm.submitInput()}){Text("Send")} }
+            if (!keyboardVisible) Column(Modifier.fillMaxWidth().weight(1f).background(Color.Black).padding(8.dp)) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    TextButton(onClick={bottomTab="TERMINAL"}) { Text("TERMINAL", color=if(bottomTab=="TERMINAL") accent else Color.Gray, fontSize=12.sp) }
+                    TextButton(onClick={bottomTab="AI"}) { Text("AI ASSISTANT", color=if(bottomTab=="AI") accent else Color.Gray, fontSize=12.sp) }
+                    Spacer(Modifier.weight(1f))
+                    if(bottomTab=="TERMINAL") TextButton(onClick={vm.output=""}){Text("Clear")}
+                    else TextButton(onClick={showAiSettings=true}){Text(if(vm.hasAiKey) "Settings" else "Add key")}
+                }
+                if (bottomTab == "TERMINAL") {
+                    Text(vm.output.ifEmpty{"Ready"},color=text,fontFamily=FontFamily.Monospace,fontSize=13.sp,modifier=Modifier.weight(1f).verticalScroll(rememberScrollState()))
+                    if(vm.waitingInput) Row { TextField(vm.input,{vm.input=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Program input")}); Button(onClick={vm.submitInput()}){Text("Send")} }
+                } else {
+                    Text(vm.aiReply, color=text, fontSize=13.sp, modifier=Modifier.weight(1f).fillMaxWidth().background(Color(0xFF080808)).padding(10.dp).verticalScroll(rememberScrollState()))
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Checkbox(checked=vm.shareCode,onCheckedChange={vm.shareCode=it})
+                        Text("Share current code",color=Color.Gray,fontSize=11.sp)
+                        Spacer(Modifier.weight(1f))
+                        if(vm.aiBusy) CircularProgressIndicator(Modifier.size(20.dp),strokeWidth=2.dp)
+                    }
+                    Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                        TextField(vm.aiPrompt,{vm.aiPrompt=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Ask AI…")})
+                        Button(onClick={vm.askAi()},enabled=!vm.aiBusy && vm.aiPrompt.isNotBlank()){Text("Send")}
+                    }
+                }
             }
         }
     }
+    if (showAiSettings) AlertDialog(
+        onDismissRequest={showAiSettings=false},
+        containerColor=Color(0xFF0A0A0A),
+        title={Text("AI connection")},
+        text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("OpenAI-compatible provider. Your key is encrypted with Android Keystore and sent only to this endpoint.",fontSize=12.sp,color=Color.Gray)
+            TextField(keyDraft,{keyDraft=it},label={Text(if(vm.hasAiKey) "API key (saved)" else "API key")},singleLine=true,visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
+            TextField(endpointDraft,{endpointDraft=it},label={Text("Chat completions endpoint")},singleLine=true)
+            TextField(modelDraft,{modelDraft=it},label={Text("Model")},singleLine=true)
+            TextButton(onClick={vm.removeAiKey()}){Text("Remove saved key",color=Color(0xFFF85149))}
+        }},
+        confirmButton={Button(onClick={vm.saveAiSettings(keyDraft,endpointDraft,modelDraft); keyDraft=""; showAiSettings=false}){Text("Save")}},
+        dismissButton={TextButton(onClick={showAiSettings=false}){Text("Cancel")}}
+    )
 }

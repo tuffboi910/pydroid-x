@@ -62,6 +62,7 @@ class IdeViewModel : ViewModel() {
     var aiBusy by mutableStateOf(false)
     var aiEndpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
     var aiModel by mutableStateOf("gpt-4o-mini")
+    var aiProvider by mutableStateOf("Auto")
     var shareCode by mutableStateOf(false)
     var hasAiKey by mutableStateOf(false)
     var editorFontSize by mutableFloatStateOf(16f)
@@ -112,6 +113,12 @@ class IdeViewModel : ViewModel() {
         cursorStyle = settings.getString("cursor", "Cyan") ?: "Cyan"
         autocomplete = settings.getBoolean("autocomplete", true)
         ghostBrightness = settings.getFloat("ghost_brightness", 0.48f)
+        aiEndpoint = settings.getString("ai_endpoint", null)
+            ?.trim()?.takeIf { it.startsWith("https://") }
+            ?: "https://api.openai.com/v1/chat/completions"
+        aiModel = settings.getString("ai_model", "gpt-4o-mini")
+            ?.trim()?.takeIf { it.isNotEmpty() } ?: "gpt-4o-mini"
+        aiProvider = settings.getString("ai_provider", "Auto") ?: "Auto"
         lineNumbers = settings.getBoolean("line_numbers", true)
         highlightCurrentLine = settings.getBoolean("current_line", true)
         hasAiKey = !aiKeys.load().isNullOrBlank()
@@ -121,10 +128,14 @@ class IdeViewModel : ViewModel() {
         editorRevision++
         thread { runtimeVersion = Python.getInstance().getModule("runner").callAttr("version").toString() }
     }
-    fun saveAiSettings(key: String, endpoint: String, model: String) {
+    fun saveAiSettings(key: String, endpoint: String, model: String, provider: String = aiProvider) {
         if (key.isNotBlank()) aiKeys.save(key)
-        aiEndpoint = endpoint.trim()
-        aiModel = model.trim()
+        aiProvider = provider
+        aiEndpoint = endpoint.trim().takeIf { it.startsWith("https://") }
+            ?: "https://api.openai.com/v1/chat/completions"
+        aiModel = model.trim().ifEmpty { "gpt-4o-mini" }
+        settings.edit().putString("ai_endpoint", aiEndpoint).putString("ai_model", aiModel)
+            .putString("ai_provider", aiProvider).apply()
         hasAiKey = !aiKeys.load().isNullOrBlank()
     }
     fun removeAiKey() { aiKeys.clear(); hasAiKey = false }
@@ -138,7 +149,7 @@ class IdeViewModel : ViewModel() {
         aiBusy = true
         aiReply = if (testOnly) "Testing connection…" else "Thinking…"
         thread(name = "PyDroidX-AI") {
-            val result = runCatching { AiClient.chat(aiEndpoint, key, aiModel, question, if (!testOnly && shareCode) code else null) }
+            val result = runCatching { AiClient.chat(aiProvider, aiEndpoint, key, aiModel, question, if (!testOnly && shareCode) code else null) }
             aiReply = result.getOrElse { "AI error: ${it.message ?: "Request failed"}" }
             aiBusy = false
         }
@@ -501,6 +512,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
     var keyDraft by remember { mutableStateOf("") }
     var endpointDraft by remember { mutableStateOf(vm.aiEndpoint) }
     var modelDraft by remember { mutableStateOf(vm.aiModel) }
+    var providerDraft by remember { mutableStateOf(vm.aiProvider) }
     var showAdvancedAi by remember { mutableStateOf(false) }
 
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=bg)) {
@@ -621,19 +633,24 @@ private class PythonEditorView(context: Context) : EditText(context) {
     if(showAiSettings) AlertDialog(
         onDismissRequest={showAiSettings=false},containerColor=Color(0xFF0A0A0A),title={Text("AI connection")},
         text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
-            Text("Paste your OpenAI API key — that’s it",fontSize=13.sp,color=Color(0xFFD4D4D4))
+            Text("Paste an API key — Auto detects popular providers",fontSize=13.sp,color=Color(0xFFD4D4D4))
             TextField(keyDraft,{keyDraft=it},label={Text(if(vm.hasAiKey)"New API key (optional)" else "API key")},singleLine=true,visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)){
+                listOf("Auto","OpenAI","Gemini","Claude","OpenRouter","Groq","Custom").forEach{provider->
+                    FilterChip(selected=providerDraft==provider,onClick={providerDraft=provider},label={Text(provider)})
+                }
+            }
             TextButton(onClick={showAdvancedAi=!showAdvancedAi}){Text(if(showAdvancedAi)"Hide advanced" else "Advanced")}
             if(showAdvancedAi){
                 TextField(endpointDraft,{endpointDraft=it},label={Text("Custom endpoint")},singleLine=true)
                 TextField(modelDraft,{modelDraft=it},label={Text("Model")},singleLine=true)
             }
             Row{
-                TextButton(onClick={vm.saveAiSettings(keyDraft,endpointDraft,modelDraft);keyDraft="";vm.askAi(true)}){Text("Save & test")}
+                TextButton(onClick={vm.saveAiSettings(keyDraft,endpointDraft,modelDraft,providerDraft);keyDraft="";vm.askAi(true)}){Text("Save & test")}
                 if(vm.hasAiKey) TextButton(onClick={vm.removeAiKey()}){Text("Remove",color=Color(0xFFFF3D71))}
             }
         }},
-        confirmButton={Button(onClick={vm.saveAiSettings(keyDraft,endpointDraft,modelDraft);keyDraft="";showAiSettings=false}){Text("Save")}},
+        confirmButton={Button(onClick={vm.saveAiSettings(keyDraft,endpointDraft,modelDraft,providerDraft);keyDraft="";showAiSettings=false}){Text("Save")}},
         dismissButton={TextButton(onClick={showAiSettings=false}){Text("Cancel")}}
     )
 }

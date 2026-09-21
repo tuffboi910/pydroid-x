@@ -4,12 +4,20 @@ import android.os.Bundle
 import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.graphics.Typeface
+import android.animation.ValueAnimator
+import android.graphics.drawable.GradientDrawable
 import android.text.Editable
 import android.text.InputType
 import android.text.Spannable
 import android.text.TextWatcher
 import android.text.style.ForegroundColorSpan
+import android.text.style.CharacterStyle
+import android.text.style.UpdateAppearance
+import android.text.TextPaint
 import android.view.Gravity
+import android.view.KeyEvent
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.widget.EditText
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,6 +26,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.*
@@ -63,6 +73,18 @@ class IdeViewModel : ViewModel() {
     var wordWrap by mutableStateOf(true)
     var syntaxHighlighting by mutableStateOf(true)
     var autoSave by mutableStateOf(true)
+    var fontName by mutableStateOf("Monospace")
+    var lineSpacing by mutableFloatStateOf(1.12f)
+    var editorPadding by mutableFloatStateOf(20f)
+    var typingAnimation by mutableStateOf(true)
+    var animationDuration by mutableFloatStateOf(120f)
+    var highlightDelay by mutableFloatStateOf(220f)
+    var autosaveDelay by mutableFloatStateOf(500f)
+    var showToolbar by mutableStateOf(true)
+    var showPageDots by mutableStateOf(true)
+    var cursorStyle by mutableStateOf("Cyan")
+    var autocomplete by mutableStateOf(true)
+    var ghostBrightness by mutableFloatStateOf(0.48f)
     private val stdin = LinkedBlockingQueue<String?>()
     @Volatile private var worker: Thread? = null
     private var autosaveJob: Job? = null
@@ -79,6 +101,18 @@ class IdeViewModel : ViewModel() {
         wordWrap = settings.getBoolean("word_wrap", true)
         syntaxHighlighting = settings.getBoolean("syntax", true)
         autoSave = settings.getBoolean("autosave", true)
+        fontName = settings.getString("font", "Monospace") ?: "Monospace"
+        lineSpacing = settings.getFloat("line_spacing", 1.12f)
+        editorPadding = settings.getFloat("editor_padding", 20f)
+        typingAnimation = settings.getBoolean("typing_animation", true)
+        animationDuration = settings.getFloat("animation_duration", 120f)
+        highlightDelay = settings.getFloat("highlight_delay", 220f)
+        autosaveDelay = settings.getFloat("autosave_delay", 500f)
+        showToolbar = settings.getBoolean("toolbar", true)
+        showPageDots = settings.getBoolean("page_dots", true)
+        cursorStyle = settings.getString("cursor", "Cyan") ?: "Cyan"
+        autocomplete = settings.getBoolean("autocomplete", true)
+        ghostBrightness = settings.getFloat("ghost_brightness", 0.48f)
         hasAiKey = !aiKeys.load().isNullOrBlank()
         projectDir = File(context.filesDir, "projects/default").apply { mkdirs() }
         val main = File(projectDir, "main.py")
@@ -113,7 +147,7 @@ class IdeViewModel : ViewModel() {
         if (!autoSave) return
         autosaveJob?.cancel()
         autosaveJob = viewModelScope.launch {
-            delay(500)
+            delay(autosaveDelay.toLong())
             val snapshot = code
             launch(Dispatchers.IO) {
                 if (::projectDir.isInitialized) File(projectDir, "main.py").writeText(snapshot)
@@ -125,6 +159,12 @@ class IdeViewModel : ViewModel() {
         settings.edit().putFloat("editor_font",editorFontSize).putFloat("terminal_font",terminalFontSize)
             .putFloat("ui_scale",uiScale).putBoolean("word_wrap",wordWrap)
             .putBoolean("syntax",syntaxHighlighting).putBoolean("autosave",autoSave).apply()
+        settings.edit().putString("font",fontName).putFloat("line_spacing",lineSpacing)
+            .putFloat("editor_padding",editorPadding).putBoolean("typing_animation",typingAnimation)
+            .putFloat("animation_duration",animationDuration).putFloat("highlight_delay",highlightDelay)
+            .putFloat("autosave_delay",autosaveDelay).putBoolean("toolbar",showToolbar)
+            .putBoolean("page_dots",showPageDots).putString("cursor",cursorStyle).apply()
+        settings.edit().putBoolean("autocomplete",autocomplete).putFloat("ghost_brightness",ghostBrightness).apply()
     }
     fun save() {
         autosaveJob?.cancel()
@@ -160,6 +200,22 @@ private class PythonEditorView(context: Context) : EditText(context) {
     var onCodeChanged: ((String) -> Unit)? = null
     private var applyingHighlight = false
     private var highlightingEnabled = true
+    private var typingAnimationEnabled = true
+    private var characterAnimationMs = 120L
+    private var highlightDelayMs = 220L
+    private var autocompleteEnabled = true
+    private var ghostAlpha = 122
+    private var ghostSuffix: String? = null
+    private var ghostPrefixStart = 0
+    private val completions = linkedMapOf(
+        "print" to "print()", "input" to "input()", "range" to "range()", "len" to "len()",
+        "str" to "str()", "int" to "int()", "float" to "float()", "list" to "list()",
+        "dict" to "dict()", "import" to "import ", "from" to "from ", "return" to "return ",
+        "def" to "def function():\n    pass", "class" to "class Name:\n    pass",
+        "if" to "if condition:\n    pass", "elif" to "elif condition:\n    pass",
+        "else" to "else:\n    pass", "for" to "for item in items:\n    pass",
+        "while" to "while condition:\n    pass", "try" to "try:\n    pass\nexcept Exception:\n    pass"
+    )
     private val keywords = setOf(
         "and", "as", "assert", "async", "await", "break", "case", "class", "continue",
         "def", "del", "elif", "else", "except", "finally", "for", "from", "global",
@@ -188,8 +244,10 @@ private class PythonEditorView(context: Context) : EditText(context) {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 if (!applyingHighlight) {
                     onCodeChanged?.invoke(s?.toString().orEmpty())
+                    if (typingAnimationEnabled && count > 0) animateInsertedText(start, start + count)
                     removeCallbacks(highlightRunnable)
-                    postDelayed(highlightRunnable, 220)
+                    postDelayed(highlightRunnable, highlightDelayMs)
+                    post { updateGhostSuggestion() }
                 }
             }
             override fun afterTextChanged(s: Editable?) = Unit
@@ -212,16 +270,106 @@ private class PythonEditorView(context: Context) : EditText(context) {
         text.replace(minOf(start, end), maxOf(start, end), value)
     }
 
-    fun applyPreferences(font: Float, wrap: Boolean, syntax: Boolean) {
+    fun applyPreferences(font: Float, wrap: Boolean, syntax: Boolean, family: String, spacing: Float,
+                         padding: Float, animateTyping: Boolean, animationMs: Float,
+                         highlightDelay: Float, cursor: String, autocomplete: Boolean,
+                         ghostBrightness: Float) {
         textSize = font
         setHorizontallyScrolling(!wrap)
         isHorizontalScrollBarEnabled = !wrap
         highlightingEnabled = syntax
+        typingAnimationEnabled = animateTyping
+        characterAnimationMs = animationMs.toLong()
+        highlightDelayMs = highlightDelay.toLong()
+        autocompleteEnabled = autocomplete
+        ghostAlpha = (ghostBrightness * 255).toInt().coerceIn(35,210)
+        typeface = when(family) { "Sans" -> Typeface.SANS_SERIF; "Serif" -> Typeface.SERIF; else -> Typeface.MONOSPACE }
+        setLineSpacing(0f, spacing)
+        val pad = padding.toInt()
+        setPadding(pad, pad / 2, pad, pad / 2)
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            val cursorColor = when(cursor) { "Magenta" -> AndroidColor.rgb(255,77,255); "Green" -> AndroidColor.rgb(0,230,118); "White" -> AndroidColor.WHITE; else -> AndroidColor.rgb(0,229,255) }
+            textCursorDrawable = GradientDrawable().apply { setColor(cursorColor); setSize(4, (this@PythonEditorView.textSize * 1.25f).toInt()) }
+        }
         if (syntax) highlightNow() else {
             val editable = text
             editable?.getSpans(0, editable.length, ForegroundColorSpan::class.java)?.forEach { editable.removeSpan(it) }
             setTextColor(AndroidColor.rgb(230,245,255))
         }
+        updateGhostSuggestion()
+    }
+
+    private fun updateGhostSuggestion() {
+        if (!autocompleteEnabled || !hasFocus()) { ghostSuffix=null; invalidate(); return }
+        val cursor = selectionStart
+        if (cursor < 0 || cursor > text.length) return
+        var start = cursor
+        while (start > 0 && (text[start-1].isLetterOrDigit() || text[start-1]=='_')) start--
+        val prefix = text.substring(start,cursor)
+        val match = if(prefix.length >= 2) completions.entries.firstOrNull { it.key.startsWith(prefix) && it.value != prefix } else null
+        ghostPrefixStart = start
+        ghostSuffix = match?.value?.removePrefix(prefix)
+        invalidate()
+    }
+
+    fun acceptGhostSuggestion(): Boolean {
+        val suffix = ghostSuffix ?: return false
+        val cursor = selectionStart.coerceAtLeast(0)
+        text.insert(cursor,suffix)
+        val newCursor = if(suffix.endsWith("()")) cursor + suffix.length - 1 else cursor + suffix.length
+        setSelection(newCursor.coerceAtMost(text.length))
+        ghostSuffix=null
+        invalidate()
+        return true
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if(keyCode==KeyEvent.KEYCODE_TAB && acceptGhostSuggestion()) return true
+        return super.onKeyDown(keyCode,event)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val suffix=ghostSuffix ?: return
+        val cursor=selectionStart
+        val currentLayout=layout ?: return
+        if(cursor<0 || cursor>text.length) return
+        val line=currentLayout.getLineForOffset(cursor)
+        val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color=AndroidColor.argb(ghostAlpha,190,200,210)
+            textSize=this@PythonEditorView.textSize
+            typeface=this@PythonEditorView.typeface
+        }
+        val x=currentLayout.getPrimaryHorizontal(cursor)+totalPaddingLeft-scrollX
+        val y=currentLayout.getLineBaseline(line).toFloat()+totalPaddingTop-scrollY
+        canvas.drawText(suffix.substringBefore('\n'),x,y,paint)
+    }
+
+    private fun animateInsertedText(start: Int, end: Int) {
+        val editable = text ?: return
+        if (start < 0 || end > editable.length || end <= start) return
+        val span = AnimatedCharacterSpan(this, characterAnimationMs) { editable.removeSpan(it) }
+        editable.setSpan(span, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        span.start()
+    }
+
+    private class AnimatedCharacterSpan(
+        private val view: EditText,
+        private val durationMs: Long,
+        private val finished: (AnimatedCharacterSpan) -> Unit
+    ) : CharacterStyle(), UpdateAppearance {
+        private var alpha = 0
+        fun start() {
+            ValueAnimator.ofInt(0,255).apply {
+                duration = durationMs
+                addUpdateListener { alpha = it.animatedValue as Int; view.invalidate() }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) { finished(this@AnimatedCharacterSpan); view.invalidate() }
+                })
+                start()
+            }
+        }
+        override fun updateDrawState(tp: TextPaint) { tp.alpha = alpha }
     }
 
     private fun highlightNow() {
@@ -322,12 +470,14 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             factory={context->PythonEditorView(context).also{view->editorView=view;view.onCodeChanged=vm::updateCode;view.setCodeIfDifferent(vm.code)}},
                             update={view->
                                 if(revision>0)view.setCodeIfDifferent(vm.code)
-                                view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting)
+                                view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting,vm.fontName,
+                                    vm.lineSpacing,vm.editorPadding,vm.typingAnimation,vm.animationDuration,
+                                    vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness)
                             },
                             modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
                         )
-                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(Color(0xFF050505)).padding(4.dp),horizontalArrangement=Arrangement.spacedBy(4.dp)){
-                            listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach{key->TextButton(onClick={editorView?.insertAtCursor(if(key=="Tab")"    " else key)}){Text(key)}}
+                        if(vm.showToolbar) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(Color(0xFF050505)).padding(4.dp),horizontalArrangement=Arrangement.spacedBy(4.dp)){
+                            listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach{key->TextButton(onClick={if(key=="Tab" && editorView?.acceptGhostSuggestion()==true) Unit else editorView?.insertAtCursor(if(key=="Tab")"    " else key)}){Text(key)}}
                         }
                     }
                     1 -> Column(Modifier.fillMaxSize().padding(14.dp)) {
@@ -335,7 +485,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             Text("TERMINAL",color=accent,fontSize=16.sp,modifier=Modifier.weight(1f))
                             TextButton(onClick={vm.output=""}){Text("Clear")}
                         }
-                        Text(vm.output.ifEmpty{"Ready"},color=text,fontFamily=FontFamily.Monospace,fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(Color(0xFF030303)).padding(12.dp).verticalScroll(rememberScrollState()))
+                        Text(vm.output.ifEmpty{"Ready"},color=text,fontFamily=when(vm.fontName){"Sans"->FontFamily.SansSerif;"Serif"->FontFamily.Serif;else->FontFamily.Monospace},fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(Color(0xFF030303)).padding(12.dp).animateContentSize().verticalScroll(rememberScrollState()))
                         if(vm.waitingInput) Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
                             TextField(vm.input,{vm.input=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Program input")})
                             Button(onClick={vm.submitInput()}){Text("Send")}
@@ -346,7 +496,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             Column(Modifier.weight(1f)){Text("AI ASSISTANT",color=accent,fontSize=16.sp);Text("Only shares code when you allow it",color=Color.Gray,fontSize=10.sp)}
                             TextButton(onClick={showAiSettings=true}){Text(if(vm.hasAiKey)"Connection" else "Add key")}
                         }
-                        Text(vm.aiReply,color=text,fontSize=14.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(Color(0xFF050505)).padding(14.dp).verticalScroll(rememberScrollState()))
+                        Text(vm.aiReply,color=text,fontSize=14.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(Color(0xFF050505)).padding(14.dp).animateContentSize().verticalScroll(rememberScrollState()))
                         Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                             Checkbox(checked=vm.shareCode,onCheckedChange={vm.shareCode=it})
                             Text("Share current file with provider",color=Color.Gray,fontSize=12.sp)
@@ -366,16 +516,36 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         Slider(vm.terminalFontSize,{vm.terminalFontSize=it;vm.saveAppearance()},valueRange=10f..24f,steps=13)
                         Text("Interface scale  ${(vm.uiScale*100).toInt()}%",color=text)
                         Slider(vm.uiScale,{vm.uiScale=it;vm.saveAppearance()},valueRange=0.85f..1.25f,steps=7)
+                        Text("Font family",color=text)
+                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("Monospace","Sans","Serif").forEach{font->FilterChip(selected=vm.fontName==font,onClick={vm.fontName=font;vm.saveAppearance()},label={Text(font)})}}
+                        Text("Line spacing  ${"%.2f".format(vm.lineSpacing)}×",color=text)
+                        Slider(vm.lineSpacing,{vm.lineSpacing=it;vm.saveAppearance()},valueRange=0.9f..1.8f)
+                        Text("Editor padding  ${vm.editorPadding.toInt()} px",color=text)
+                        Slider(vm.editorPadding,{vm.editorPadding=it;vm.saveAppearance()},valueRange=0f..48f,steps=11)
+                        Text("Typing animation  ${vm.animationDuration.toInt()} ms",color=text)
+                        Slider(vm.animationDuration,{vm.animationDuration=it;vm.saveAppearance()},valueRange=40f..320f,steps=13)
+                        Text("Highlight delay  ${vm.highlightDelay.toInt()} ms",color=text)
+                        Slider(vm.highlightDelay,{vm.highlightDelay=it;vm.saveAppearance()},valueRange=80f..700f,steps=14)
+                        Text("Autosave delay  ${vm.autosaveDelay.toInt()} ms",color=text)
+                        Slider(vm.autosaveDelay,{vm.autosaveDelay=it;vm.saveAppearance()},valueRange=150f..2000f,steps=18)
+                        Text("Ghost text brightness  ${(vm.ghostBrightness*100).toInt()}%",color=text)
+                        Slider(vm.ghostBrightness,{vm.ghostBrightness=it;vm.saveAppearance()},valueRange=0.15f..0.8f)
+                        Text("Cursor color",color=text)
+                        Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){listOf("Cyan","Magenta","Green","White").forEach{shade->FilterChip(selected=vm.cursorStyle==shade,onClick={vm.cursorStyle=shade;vm.saveAppearance()},label={Text(shade)})}}
                         SettingSwitch("Word wrap",vm.wordWrap){vm.wordWrap=it;vm.saveAppearance()}
                         SettingSwitch("Syntax highlighting",vm.syntaxHighlighting){vm.syntaxHighlighting=it;vm.saveAppearance()}
+                        SettingSwitch("Ghost-text autocomplete",vm.autocomplete){vm.autocomplete=it;vm.saveAppearance()}
+                        SettingSwitch("Per-character animation",vm.typingAnimation){vm.typingAnimation=it;vm.saveAppearance()}
                         SettingSwitch("Automatic saving",vm.autoSave){vm.autoSave=it;vm.saveAppearance()}
+                        SettingSwitch("Programming toolbar",vm.showToolbar){vm.showToolbar=it;vm.saveAppearance()}
+                        SettingSwitch("Page indicator dots",vm.showPageDots){vm.showPageDots=it;vm.saveAppearance()}
                         HorizontalDivider(color=Color(0xFF202020))
                         Text("Swipe left or right anywhere outside active text editing to move between pages.",color=Color.Gray,fontSize=12.sp)
                         Text("Python  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp)
                     }
                 }
             }
-            Row(Modifier.fillMaxWidth().height(22.dp),horizontalArrangement=Arrangement.Center,verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+            if(vm.showPageDots) Row(Modifier.fillMaxWidth().height(22.dp),horizontalArrangement=Arrangement.Center,verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                 repeat(4){index->Box(Modifier.padding(horizontal=3.dp).size(if(index==pager.currentPage)8.dp else 5.dp).background(if(index==pager.currentPage)accent else Color.DarkGray,androidx.compose.foundation.shape.CircleShape))}
             }
         }

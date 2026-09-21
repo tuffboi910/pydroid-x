@@ -82,7 +82,7 @@ class MainActivity : ComponentActivity() {
             Column(Modifier.fillMaxWidth().heightIn(min=150.dp,max=260.dp).background(Color(0xFF080A0F)).padding(8.dp)) {
                 Row { Text("TERMINAL",color=accent,fontSize=12.sp,modifier=Modifier.weight(1f)); TextButton(onClick={vm.output=""}){Text("Clear")} }
                 Text(vm.output.ifEmpty{"Ready"},color=text,fontFamily=FontFamily.Monospace,fontSize=13.sp,modifier=Modifier.weight(1f).verticalScroll(rememberScrollState()))
-                if(vm.waitingInput) Row { TextField(vm.input,{vm.input=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Program input")}); Button(onClick={vm.submitInput}){Text("Send")} }
+                if(vm.waitingInput) Row { TextField(vm.input,{vm.input=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Program input")}); Button(onClick={vm.submitInput()}){Text("Send")} }
             }
         }
     }

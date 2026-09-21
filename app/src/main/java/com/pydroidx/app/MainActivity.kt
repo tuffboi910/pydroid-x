@@ -1,25 +1,29 @@
 package com.pydroidx.app
 
 import android.os.Bundle
+import android.content.Context
+import android.graphics.Color as AndroidColor
+import android.graphics.Typeface
+import android.text.Editable
+import android.text.InputType
+import android.text.Spannable
+import android.text.TextWatcher
+import android.text.style.ForegroundColorSpan
+import android.view.Gravity
+import android.widget.EditText
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.input.OffsetMapping
-import androidx.compose.ui.text.input.TransformedText
-import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalDensity
@@ -36,7 +40,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class IdeViewModel : ViewModel() {
-    var code by mutableStateOf("print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n")
+    @Volatile var code = "print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n"
+    var editorRevision by mutableIntStateOf(0)
+        private set
     var output by mutableStateOf("")
     var running by mutableStateOf(false)
     var waitingInput by mutableStateOf(false)
@@ -51,6 +57,7 @@ class IdeViewModel : ViewModel() {
         projectDir = File(dir, "projects/default").apply { mkdirs() }
         val main = File(projectDir, "main.py")
         if (main.exists()) code = main.readText() else main.writeText(code)
+        editorRevision++
         thread { runtimeVersion = Python.getInstance().getModule("runner").callAttr("version").toString() }
     }
     fun updateCode(value: String) {
@@ -94,7 +101,9 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private object PythonSyntaxTransformation : VisualTransformation {
+private class PythonEditorView(context: Context) : EditText(context) {
+    var onCodeChanged: ((String) -> Unit)? = null
+    private var applyingHighlight = false
     private val keywords = setOf(
         "and", "as", "assert", "async", "await", "break", "case", "class", "continue",
         "def", "del", "elif", "else", "except", "finally", "for", "from", "global",
@@ -102,17 +111,66 @@ private object PythonSyntaxTransformation : VisualTransformation {
         "raise", "return", "try", "while", "with", "yield"
     )
     private val constants = setOf("True", "False", "None", "NotImplemented", "Ellipsis")
+    private val highlightRunnable = Runnable { highlightNow() }
 
-    override fun filter(text: AnnotatedString): TransformedText {
-        val source = text.text
-        val styled = AnnotatedString.Builder(source)
+    init {
+        setBackgroundColor(AndroidColor.BLACK)
+        setTextColor(AndroidColor.rgb(212, 212, 212))
+        setHintTextColor(AndroidColor.DKGRAY)
+        typeface = Typeface.MONOSPACE
+        textSize = 16f
+        gravity = Gravity.TOP or Gravity.START
+        setPadding(20, 12, 20, 12)
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+            InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        isSingleLine = false
+        setHorizontallyScrolling(true)
+        isVerticalScrollBarEnabled = true
+        isHorizontalScrollBarEnabled = true
+        addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (!applyingHighlight) {
+                    onCodeChanged?.invoke(s?.toString().orEmpty())
+                    removeCallbacks(highlightRunnable)
+                    postDelayed(highlightRunnable, 220)
+                }
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+    }
+
+    fun setCodeIfDifferent(value: String) {
+        if (text.toString() == value) return
+        applyingHighlight = true
+        val cursor = selectionStart.coerceAtLeast(0).coerceAtMost(value.length)
+        setText(value)
+        setSelection(cursor)
+        applyingHighlight = false
+        highlightNow()
+    }
+
+    fun insertAtCursor(value: String) {
+        val start = selectionStart.coerceAtLeast(0)
+        val end = selectionEnd.coerceAtLeast(0)
+        text.replace(minOf(start, end), maxOf(start, end), value)
+    }
+
+    private fun highlightNow() {
+        val editable = text ?: return
+        val source = editable.toString()
+        applyingHighlight = true
+        editable.getSpans(0, editable.length, ForegroundColorSpan::class.java).forEach(editable::removeSpan)
+        fun color(start: Int, end: Int, value: Int) {
+            if (end > start) editable.setSpan(ForegroundColorSpan(value), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
         var i = 0
         while (i < source.length) {
             val start = i
             when {
                 source[i] == '#' -> {
                     while (i < source.length && source[i] != '\n') i++
-                    styled.addStyle(SpanStyle(color = Color(0xFF6A9955)), start, i)
+                    color(start, i, AndroidColor.rgb(106, 153, 85))
                 }
                 source[i] == '\'' || source[i] == '"' -> {
                     val quote = source[i]
@@ -124,11 +182,11 @@ private object PythonSyntaxTransformation : VisualTransformation {
                         if (!triple && source[i] == quote) { i++; break }
                         i++
                     }
-                    styled.addStyle(SpanStyle(color = Color(0xFFCE9178)), start, i)
+                    color(start, i, AndroidColor.rgb(206, 145, 120))
                 }
                 source[i].isDigit() -> {
                     while (i < source.length && (source[i].isDigit() || source[i] in ".xXabcdefABCDEF_")) i++
-                    styled.addStyle(SpanStyle(color = Color(0xFFB5CEA8)), start, i)
+                    color(start, i, AndroidColor.rgb(181, 206, 168))
                 }
                 source[i].isLetter() || source[i] == '_' -> {
                     while (i < source.length && (source[i].isLetterOrDigit() || source[i] == '_')) i++
@@ -136,18 +194,18 @@ private object PythonSyntaxTransformation : VisualTransformation {
                     var lookAhead = i
                     while (lookAhead < source.length && source[lookAhead].isWhitespace()) lookAhead++
                     val next = source.getOrNull(lookAhead)
-                    val color = when {
-                        word in keywords -> Color(0xFFC586C0)
-                        word in constants -> Color(0xFF569CD6)
-                        next == '(' -> Color(0xFFDCDCAA)
-                        else -> Color(0xFF9CDCFE)
+                    val tokenColor = when {
+                        word in keywords -> AndroidColor.rgb(197, 134, 192)
+                        word in constants -> AndroidColor.rgb(86, 156, 214)
+                        next == '(' -> AndroidColor.rgb(220, 220, 170)
+                        else -> AndroidColor.rgb(156, 220, 254)
                     }
-                    styled.addStyle(SpanStyle(color = color), start, i)
+                    color(start, i, tokenColor)
                 }
                 else -> i++
             }
         }
-        return TransformedText(styled.toAnnotatedString(), OffsetMapping.Identity)
+        applyingHighlight = false
     }
 }
 
@@ -155,6 +213,8 @@ private object PythonSyntaxTransformation : VisualTransformation {
     val bg = Color.Black; val panel = Color.Black; val text = Color(0xFFD4D4D4); val accent = Color(0xFF569CD6)
     val density = LocalDensity.current
     val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
+    val revision = vm.editorRevision
+    var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
     MaterialTheme(colorScheme = darkColorScheme(primary = accent, background = bg, surface = panel)) {
         Column(Modifier.fillMaxSize().background(bg).imePadding()) {
             Row(Modifier.fillMaxWidth().height(52.dp).background(panel).padding(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -163,9 +223,13 @@ private object PythonSyntaxTransformation : VisualTransformation {
                 OutlinedButton(onClick={vm.stop()}, enabled=vm.running) { Text("Stop") }
             }
             if (!keyboardVisible) Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}", color=Color.Gray, fontSize=11.sp, modifier=Modifier.padding(10.dp,6.dp))
-            BasicTextField(value=vm.code, onValueChange=vm::updateCode, visualTransformation=PythonSyntaxTransformation, textStyle=TextStyle(color=text,fontFamily=FontFamily.Monospace,fontSize=16.sp,lineHeight=22.sp), modifier=Modifier.weight(1f).fillMaxWidth().background(Color.Black).padding(10.dp))
+            AndroidView(
+                factory = { context -> PythonEditorView(context).also { view -> editorView = view; view.onCodeChanged = vm::updateCode; view.setCodeIfDifferent(vm.code) } },
+                update = { if (revision > 0) it.setCodeIfDifferent(vm.code) },
+                modifier = Modifier.weight(1f).fillMaxWidth().background(Color.Black)
+            )
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(panel).padding(4.dp), horizontalArrangement=Arrangement.spacedBy(4.dp)) {
-                listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach { key -> TextButton(onClick={ vm.updateCode(vm.code + if(key=="Tab") "    " else key) }) { Text(key) } }
+                listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach { key -> TextButton(onClick={ editorView?.insertAtCursor(if(key=="Tab") "    " else key) }) { Text(key) } }
             }
             if (!keyboardVisible) Column(Modifier.fillMaxWidth().heightIn(min=150.dp,max=260.dp).background(Color.Black).padding(8.dp)) {
                 Row { Text("TERMINAL",color=accent,fontSize=12.sp,modifier=Modifier.weight(1f)); TextButton(onClick={vm.output=""}){Text("Clear")} }

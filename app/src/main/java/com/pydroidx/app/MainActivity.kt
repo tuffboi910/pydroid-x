@@ -35,6 +35,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -48,9 +49,26 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import org.json.JSONArray
 import kotlin.math.absoluteValue
+import java.net.URL
 
 data class AiMessage(val fromUser: Boolean, val text: String)
+
+private val FONT_VAULT = """
+Fira Code|firacode,JetBrains Mono|jetbrainsmono,Source Code Pro|sourcecodepro,IBM Plex Mono|ibmplexmono,Cascadia Code|cascadiacode,Victor Mono|victormono,Space Mono|spacemono,Inconsolata|inconsolata,Roboto Mono|robotomono,Noto Sans Mono|notosansmono,
+Anonymous Pro|anonymouspro,Cousine|cousine,Cutive Mono|cutivemono,DM Mono|dmmono,Fragment Mono|fragmentmono,Geist Mono|geistmono,Lekton|lekton,Major Mono Display|majormonodisplay,Martian Mono|martianmono,Nanum Gothic Coding|nanumgothiccoding,
+Nova Mono|novamono,Overpass Mono|overpassmono,PT Mono|ptmono,Red Hat Mono|redhatmono,Share Tech Mono|sharetechmono,Sono|sono,Spline Sans Mono|splinesansmono,Syne Mono|synemono,Ubuntu Mono|ubuntumono,Xanh Mono|xanhmono,
+Azeret Mono|azeretmono,B612 Mono|b612mono,BPdots|bpdots,Chivo Mono|chivomono,Code New Roman|codenewroman,Faculty Glyphic|facultyglyphic,Funnel Display|funneldisplay,Geist|geist,Golos Text|golostext,Google Sans Code|googlesanscode,
+Atkinson Hyperlegible Mono|atkinsonhyperlegiblemono,Intel One Mono|intelonemono,LXGW WenKai Mono TC|lxgwwenkaimonotc,Maple Mono|maplemono,M PLUS 1 Code|mplus1code,Monofett|monofett,Monomaniac One|monomaniacone,Monoton|monoton,OCR B|ocrb,Offside|offside,
+Oxygen Mono|oxygenmono,Playwrite US Modern|playwriteusmodern,Recursive|recursive,Roboto Flex|robotoflex,Schibsted Grotesk|schibstedgrotesk,Sixtyfour|sixtyfour,Sixtyfour Convergence|sixtyfourconvergence,Sometype Mono|sometypemono,Tektur|tektur,Tomorrow|tomorrow,
+Trispace|trispace,Ubuntu Sans Mono|ubuntusansmono,Unbounded|unbounded,Workbench|workbench,Young Serif|youngserif,Albert Sans|albertsans,Archivo|archivo,Archivo Black|archivoblack,Assistant|assistant,Barlow|barlow,
+Barlow Condensed|barlowcondensed,Barlow Semi Condensed|barlowsemicondensed,Be Vietnam Pro|bevietnampro,Bitter|bitter,Cabin|cabin,Commissioner|commissioner,DM Sans|dmsans,Exo 2|exo2,Inter|inter,Karla|karla,
+Manrope|manrope,Merriweather Sans|merriweathersans,Mohave|mohave,Montserrat|montserrat,Mulish|mulish,Nunito|nunito,Onest|onest,Open Sans|opensans,Outfit|outfit,Oxanium|oxanium,
+Plus Jakarta Sans|plusjakartasans,Prompt|prompt,Public Sans|publicsans,Quicksand|quicksand,Rajdhani|rajdhani,Raleway|raleway,Rubik|rubik,Sora|sora,Urbanist|urbanist,Work Sans|worksans
+""".trimIndent().replace("\n","").split(",").mapNotNull { item ->
+    val parts=item.trim().split("|"); if(parts.size==2) parts[0] to parts[1] else null
+}
 
 class IdeViewModel : ViewModel() {
     @Volatile var code = "print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n"
@@ -97,6 +115,8 @@ class IdeViewModel : ViewModel() {
     var motionIntensity by mutableFloatStateOf(0.5f)
     var motionEnabled by mutableStateOf(true)
     var settingsQuery by mutableStateOf("")
+    var customFontPath by mutableStateOf("")
+    var fontStatus by mutableStateOf("100-font vault ready")
     private val stdin = LinkedBlockingQueue<String?>()
     @Volatile private var worker: Thread? = null
     private var autosaveJob: Job? = null
@@ -139,6 +159,7 @@ class IdeViewModel : ViewModel() {
         motionSpeed = settings.getFloat("motion_speed", 1f)
         motionIntensity = settings.getFloat("motion_intensity", 0.5f)
         motionEnabled = settings.getBoolean("motion_enabled", true)
+        customFontPath = settings.getString("custom_font_path", "") ?: ""
         hasAiKey = !aiKeys.load().isNullOrBlank()
         projectDir = File(context.filesDir, "projects/default").apply { mkdirs() }
         val main = File(projectDir, "main.py")
@@ -218,6 +239,31 @@ class IdeViewModel : ViewModel() {
         settings.edit().putString("accent_hex",accentHex).putString("background_hex",backgroundHex)
             .putString("motion_style",motionStyle).putFloat("motion_speed",motionSpeed)
             .putFloat("motion_intensity",motionIntensity).putBoolean("motion_enabled",motionEnabled).apply()
+        settings.edit().putString("custom_font_path",customFontPath).apply()
+    }
+    fun installVaultFont(context: Context, displayName: String, slug: String) {
+        if (fontStatus.startsWith("Downloading")) return
+        fontStatus = "Downloading $displayName…"
+        thread(name="PyDroidX-Font") {
+            val result = runCatching {
+                val api = URL("https://api.github.com/repos/google/fonts/contents/ofl/$slug").openConnection().apply {
+                    setRequestProperty("User-Agent", "PyDroid-X")
+                    connectTimeout=15_000;readTimeout=30_000
+                }.getInputStream().bufferedReader().use { it.readText() }
+                val files = JSONArray(api)
+                val fontUrl = (0 until files.length()).asSequence().map { files.getJSONObject(it) }
+                    .firstOrNull { it.optString("name").endsWith(".ttf",true) }?.getString("download_url")
+                    ?: error("No Android font file found")
+                val dir=File(context.filesDir,"fonts").apply{mkdirs()}
+                val target=File(dir,"$slug.ttf")
+                URL(fontUrl).openStream().use { input -> target.outputStream().use { input.copyTo(it) } }
+                target.absolutePath
+            }
+            viewModelScope.launch {
+                result.onSuccess { path -> customFontPath=path;fontName=displayName;fontStatus="$displayName installed";saveAppearance() }
+                    .onFailure { fontStatus="Couldn’t install $displayName: ${it.message}" }
+            }
+        }
     }
     fun save() {
         autosaveJob?.cancel()
@@ -360,7 +406,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
     fun applyPreferences(font: Float, wrap: Boolean, syntax: Boolean, family: String, spacing: Float,
                          padding: Float, animateTyping: Boolean, animationMs: Float,
                          highlightDelay: Float, cursor: String, autocomplete: Boolean,
-                         ghostBrightness: Float, lineNumbers: Boolean, currentLine: Boolean) {
+                         ghostBrightness: Float, lineNumbers: Boolean, currentLine: Boolean,
+                         customFontPath: String) {
         textSize = font
         setHorizontallyScrolling(!wrap)
         isHorizontalScrollBarEnabled = !wrap
@@ -370,7 +417,9 @@ private class PythonEditorView(context: Context) : EditText(context) {
         ghostAlpha = (ghostBrightness * 255).toInt().coerceIn(35,210)
         showLineNumbers = lineNumbers
         showCurrentLine = currentLine
-        typeface = when(family) { "Sans" -> Typeface.SANS_SERIF; "Serif" -> Typeface.SERIF; else -> Typeface.MONOSPACE }
+        typeface = if(customFontPath.isNotBlank() && File(customFontPath).exists()) {
+            runCatching { Typeface.createFromFile(customFontPath) }.getOrDefault(Typeface.MONOSPACE)
+        } else when(family) { "Sans" -> Typeface.SANS_SERIF; "Serif" -> Typeface.SERIF; else -> Typeface.MONOSPACE }
         setLineSpacing(0f, spacing)
         val pad = padding.toInt()
         userPadding = pad
@@ -535,6 +584,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
     val revision = vm.editorRevision
     val pager = rememberPagerState(pageCount = { 4 })
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val aiScroll = rememberScrollState()
     val pages = listOf("PYTHON", "CONSOLE", "HELPER", "SETTINGS")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
@@ -608,7 +658,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                                 view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting,vm.fontName,
                                     vm.lineSpacing,vm.editorPadding,vm.typingAnimation,vm.animationDuration,
                                     vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness,
-                                    vm.lineNumbers,vm.highlightCurrentLine)
+                                    vm.lineNumbers,vm.highlightCurrentLine,vm.customFontPath)
                             },
                             modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
                         )
@@ -696,7 +746,15 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         Text("Interface scale  ${(vm.uiScale*100).toInt()}%",color=text)
                         Slider(vm.uiScale,{vm.uiScale=it;vm.saveAppearance()},valueRange=0.85f..1.25f,steps=7)
                         Text("Font family",color=text)
-                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("Monospace","Sans","Serif").forEach{font->FilterChip(selected=vm.fontName==font,onClick={vm.fontName=font;vm.saveAppearance()},label={Text(font)})}}
+                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("Monospace","Sans","Serif").forEach{font->FilterChip(selected=vm.fontName==font,onClick={vm.fontName=font;vm.customFontPath="";vm.saveAppearance()},label={Text(font)})}}
+                        Text("FONT VAULT  •  ${FONT_VAULT.size} REAL FONTS",color=accent,fontSize=12.sp)
+                        Text(vm.fontStatus,color=Color.Gray,fontSize=11.sp)
+                        FONT_VAULT.filter { vm.settingsQuery.isBlank() || it.first.contains(vm.settingsQuery,true) }.forEachIndexed { index,font ->
+                            Row(Modifier.fillMaxWidth().background(if(index%2==0) Color(0xFF050505) else Color.Transparent).padding(horizontal=8.dp,vertical=3.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                                Column(Modifier.weight(1f)){Text(font.first,color=text,fontSize=14.sp);Text("Google Fonts · OFL",color=Color.DarkGray,fontSize=9.sp)}
+                                TextButton(onClick={vm.installVaultFont(context,font.first,font.second)},enabled=!vm.fontStatus.startsWith("Downloading")){Text(if(vm.fontName==font.first)"Installed" else "Download")}
+                            }
+                        }
                         Text("Line spacing  ${"%.2f".format(vm.lineSpacing)}×",color=text)
                         Slider(vm.lineSpacing,{vm.lineSpacing=it;vm.saveAppearance()},valueRange=0.9f..1.8f)
                         Text("Editor padding  ${vm.editorPadding.toInt()} px",color=text)

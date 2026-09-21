@@ -35,6 +35,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -47,6 +48,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import kotlin.math.absoluteValue
 
 data class AiMessage(val fromUser: Boolean, val text: String)
 
@@ -88,6 +90,13 @@ class IdeViewModel : ViewModel() {
     var ghostBrightness by mutableFloatStateOf(0.48f)
     var lineNumbers by mutableStateOf(true)
     var highlightCurrentLine by mutableStateOf(true)
+    var accentHex by mutableStateOf("#00E5FF")
+    var backgroundHex by mutableStateOf("#000000")
+    var motionStyle by mutableStateOf("Fluid spring")
+    var motionSpeed by mutableFloatStateOf(1f)
+    var motionIntensity by mutableFloatStateOf(0.5f)
+    var motionEnabled by mutableStateOf(true)
+    var settingsQuery by mutableStateOf("")
     private val stdin = LinkedBlockingQueue<String?>()
     @Volatile private var worker: Thread? = null
     private var autosaveJob: Job? = null
@@ -124,6 +133,12 @@ class IdeViewModel : ViewModel() {
         aiProvider = settings.getString("ai_provider", "Auto") ?: "Auto"
         lineNumbers = settings.getBoolean("line_numbers", true)
         highlightCurrentLine = settings.getBoolean("current_line", true)
+        accentHex = settings.getString("accent_hex", "#00E5FF") ?: "#00E5FF"
+        backgroundHex = settings.getString("background_hex", "#000000") ?: "#000000"
+        motionStyle = settings.getString("motion_style", "Fluid spring") ?: "Fluid spring"
+        motionSpeed = settings.getFloat("motion_speed", 1f)
+        motionIntensity = settings.getFloat("motion_intensity", 0.5f)
+        motionEnabled = settings.getBoolean("motion_enabled", true)
         hasAiKey = !aiKeys.load().isNullOrBlank()
         projectDir = File(context.filesDir, "projects/default").apply { mkdirs() }
         val main = File(projectDir, "main.py")
@@ -200,6 +215,9 @@ class IdeViewModel : ViewModel() {
             .putBoolean("page_dots",showPageDots).putString("cursor",cursorStyle).apply()
         settings.edit().putBoolean("autocomplete",autocomplete).putFloat("ghost_brightness",ghostBrightness).apply()
         settings.edit().putBoolean("line_numbers",lineNumbers).putBoolean("current_line",highlightCurrentLine).apply()
+        settings.edit().putString("accent_hex",accentHex).putString("background_hex",backgroundHex)
+            .putString("motion_style",motionStyle).putFloat("motion_speed",motionSpeed)
+            .putFloat("motion_intensity",motionIntensity).putBoolean("motion_enabled",motionEnabled).apply()
     }
     fun save() {
         autosaveJob?.cancel()
@@ -510,14 +528,15 @@ private class PythonEditorView(context: Context) : EditText(context) {
 }
 
 @Composable fun PyDroidX(vm: IdeViewModel) {
-    val bg = Color.Black
+    fun safeColor(value:String,fallback:Long)=runCatching{Color(AndroidColor.parseColor(value))}.getOrDefault(Color(fallback))
+    val bg = safeColor(vm.backgroundHex,0xFF000000)
     val text = Color(0xFFE6F5FF)
-    val accent = Color(0xFF00E5FF)
+    val accent = safeColor(vm.accentHex,0xFF00E5FF)
     val revision = vm.editorRevision
     val pager = rememberPagerState(pageCount = { 4 })
     val scope = rememberCoroutineScope()
     val aiScroll = rememberScrollState()
-    val pages = listOf("CODE", "TERMINAL", "AI", "SETTINGS")
+    val pages = listOf("PYTHON", "CONSOLE", "HELPER", "SETTINGS")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
     var showAiSettings by remember { mutableStateOf(false) }
     var keyDraft by remember { mutableStateOf("") }
@@ -552,7 +571,29 @@ private class PythonEditorView(context: Context) : EditText(context) {
                 }
             }
             HorizontalPager(state=pager,modifier=Modifier.weight(1f).fillMaxWidth(),beyondViewportPageCount=1) { page ->
-                when(page) {
+                val rawOffset = (pager.currentPage - page) + pager.currentPageOffsetFraction
+                val distance = rawOffset.absoluteValue.coerceIn(0f,1f)
+                val motionModifier = Modifier.fillMaxSize().graphicsLayer {
+                    if(vm.motionEnabled) {
+                        val amount = vm.motionIntensity.coerceIn(0f,1f)
+                        when(vm.motionStyle) {
+                            "Soft fade" -> alpha = 1f - distance * 0.35f * amount
+                            "Subtle scale" -> { scaleX=1f-distance*0.05f*amount;scaleY=scaleX }
+                            "Shared element" -> { scaleX=1f-distance*0.03f*amount;scaleY=scaleX;alpha=1f-distance*0.12f*amount }
+                            "Smooth blur reveal" -> { alpha=1f-distance*0.25f*amount;scaleX=1f-distance*0.025f*amount;scaleY=scaleX }
+                            "Layered depth" -> { translationX=rawOffset*size.width*0.08f*amount;scaleX=1f-distance*0.06f*amount;scaleY=scaleX }
+                            "Gentle parallax" -> translationX=rawOffset*size.width*0.12f*amount
+                            "Card expansion" -> { scaleX=0.92f+0.08f*(1f-distance*amount);scaleY=scaleX;alpha=1f-distance*0.18f*amount }
+                            "Natural sheet" -> { translationY=distance*40f*amount;alpha=1f-distance*0.18f*amount }
+                            "Magnetic snap" -> { scaleX=1f-distance*0.018f*amount;scaleY=scaleX }
+                            "Content morph" -> { scaleX=1f-distance*0.04f*amount;scaleY=1f-distance*0.015f*amount;alpha=1f-distance*0.15f*amount }
+                            "Keyboard lift" -> translationY=-distance*18f*amount
+                            "Layer glide" -> { translationX=rawOffset*30f*amount;alpha=1f-distance*0.18f*amount }
+                            else -> { scaleX=1f-distance*0.02f*amount;scaleY=scaleX }
+                        }
+                    }
+                }
+                Box(motionModifier) { when(page) {
                     0 -> Column(Modifier.fillMaxSize().background(bg)) {
                         Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp,modifier=Modifier.padding(10.dp,6.dp))
                         AndroidView(
@@ -577,7 +618,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     }
                     1 -> Column(Modifier.fillMaxSize().padding(14.dp)) {
                         Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-                            Text("TERMINAL",color=accent,fontSize=16.sp,modifier=Modifier.weight(1f))
+                            Text("CONSOLE",color=accent,fontSize=16.sp,modifier=Modifier.weight(1f))
                             TextButton(onClick={vm.output=""}){Text("Clear")}
                         }
                         Text(vm.output.ifEmpty{"Ready"},color=text,fontFamily=when(vm.fontName){"Sans"->FontFamily.SansSerif;"Serif"->FontFamily.Serif;else->FontFamily.Monospace},fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(Color(0xFF030303)).padding(12.dp).animateContentSize().verticalScroll(rememberScrollState()))
@@ -588,7 +629,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     }
                     2 -> Column(Modifier.fillMaxSize().padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                         Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-                            Column(Modifier.weight(1f)){Text("AI ASSISTANT",color=accent,fontSize=16.sp);Text("Only shares code when you allow it",color=Color.Gray,fontSize=10.sp)}
+                            Column(Modifier.weight(1f)){Text("HELPER",color=accent,fontSize=16.sp);Text("Only shares code when you allow it",color=Color.Gray,fontSize=10.sp)}
                             TextButton(onClick={showAiSettings=true}){Text(if(vm.hasAiKey)"Connection" else "Add key")}
                         }
                         Column(
@@ -624,6 +665,30 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     }
                     else -> Column(Modifier.fillMaxSize().padding(18.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(14.dp)) {
                         Text("CUSTOMIZE",color=accent,fontSize=18.sp)
+                        TextField(vm.settingsQuery,{vm.settingsQuery=it},singleLine=true,modifier=Modifier.fillMaxWidth(),placeholder={Text("Search every setting…")})
+                        Text("ACCENT COLOR",color=accent,fontSize=12.sp)
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                            listOf("#00E5FF","#0A84FF","#30D158","#BF5AF2","#FF375F","#FFD60A","#FF9F0A","#FFFFFF").forEach{hex->
+                                val swatch=safeColor(hex,0xFF00E5FF)
+                                FilterChip(selected=vm.accentHex==hex,onClick={vm.accentHex=hex;vm.saveAppearance()},label={Box(Modifier.size(22.dp).background(swatch,androidx.compose.foundation.shape.CircleShape))})
+                            }
+                        }
+                        Text("BACKGROUND",color=accent,fontSize=12.sp)
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                            listOf("#000000","#030303","#080B10","#0B0F14","#101014","#111827","#160B1C").forEach{hex->
+                                val swatch=safeColor(hex,0xFF000000)
+                                FilterChip(selected=vm.backgroundHex==hex,onClick={vm.backgroundHex=hex;vm.saveAppearance()},label={Box(Modifier.size(22.dp).background(swatch,androidx.compose.foundation.shape.CircleShape))})
+                            }
+                        }
+                        Text("MOTION",color=accent,fontSize=12.sp)
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(7.dp)){
+                            listOf("Fluid spring","Soft fade","Subtle scale","Shared element","Smooth blur reveal","Layered depth","Gentle parallax","Card expansion","Natural sheet","Magnetic snap","Interactive swipe","Content morph","Keyboard lift").forEach{motion->
+                                FilterChip(selected=vm.motionStyle==motion,onClick={vm.motionStyle=motion;vm.saveAppearance()},label={Text(motion)})
+                            }
+                        }
+                        Text("Motion intensity  ${(vm.motionIntensity*100).toInt()}%",color=text)
+                        Slider(vm.motionIntensity,{vm.motionIntensity=it;vm.saveAppearance()},valueRange=0.1f..1f)
+                        SettingSwitch("Interface motion",vm.motionEnabled){vm.motionEnabled=it;vm.saveAppearance()}
                         Text("Editor font  ${vm.editorFontSize.toInt()} sp",color=text)
                         Slider(vm.editorFontSize,{vm.editorFontSize=it;vm.saveAppearance()},valueRange=12f..28f,steps=15)
                         Text("Terminal font  ${vm.terminalFontSize.toInt()} sp",color=text)
@@ -656,11 +721,12 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         Text("Swipe left or right anywhere outside active text editing to move between pages.",color=Color.Gray,fontSize=12.sp)
                         Text("Python  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp)
                     }
-                }
+                } }
             }
             if(vm.showPageDots) Row(Modifier.fillMaxWidth().height(22.dp),horizontalArrangement=Arrangement.Center,verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                 repeat(4){index->Box(Modifier.padding(horizontal=3.dp).size(if(index==pager.currentPage)8.dp else 5.dp).background(if(index==pager.currentPage)accent else Color.DarkGray,androidx.compose.foundation.shape.CircleShape))}
             }
+            Text("w astro",color=Color(0xFF181818),fontSize=7.sp,modifier=Modifier.fillMaxWidth().padding(bottom=2.dp),textAlign=androidx.compose.ui.text.style.TextAlign.Center)
         }
     }
     if(showAiSettings) AlertDialog(

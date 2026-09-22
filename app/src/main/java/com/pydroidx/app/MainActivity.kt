@@ -21,6 +21,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -33,6 +34,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -693,10 +695,17 @@ private class PythonEditorView(context: Context) : EditText(context) {
         }
     }
 
-    MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=bg)) {
-        Column(Modifier.fillMaxSize().background(bg).imePadding()) {
+    val glassShape=androidx.compose.foundation.shape.RoundedCornerShape(22.dp)
+    val glass=Color.White.copy(alpha=0.065f)
+    val glassEdge=Color.White.copy(alpha=0.16f)
+    val liquidBackground=Brush.verticalGradient(listOf(bg,accent.copy(alpha=0.10f),bg,bg))
+    MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=Color.Transparent,surfaceVariant=glass,outline=glassEdge)) {
+        Column(Modifier.fillMaxSize().background(liquidBackground).imePadding()) {
             if(vm.showHeader) Row(
-                Modifier.fillMaxWidth().height(((vm.headerHeight + 39f) * vm.uiScale).dp).padding(start=12.dp,end=12.dp,top=12.dp,bottom=6.dp),
+                Modifier.fillMaxWidth().height(((vm.headerHeight + 39f) * vm.uiScale).dp)
+                    .padding(start=10.dp,end=10.dp,top=10.dp,bottom=5.dp)
+                    .background(glass,glassShape).border(1.dp,glassEdge,glassShape)
+                    .padding(horizontal=12.dp,vertical=6.dp),
                 horizontalArrangement=Arrangement.spacedBy(10.dp),
                 verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
             ) {
@@ -707,7 +716,9 @@ private class PythonEditorView(context: Context) : EditText(context) {
                 }
             }
             Row(
-                Modifier.fillMaxWidth().height(vm.tabHeight.dp).background(safeColor(vm.tabBarHex,0xFF050505)),
+                Modifier.fillMaxWidth().height((vm.tabHeight+8).dp).padding(horizontal=10.dp,vertical=4.dp)
+                    .background(safeColor(vm.tabBarHex,0xFF050505).copy(alpha=0.72f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
+                    .border(1.dp,glassEdge,androidx.compose.foundation.shape.RoundedCornerShape(18.dp)),
                 horizontalArrangement=Arrangement.Center,
                 verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
             ) {
@@ -769,7 +780,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             Text("CONSOLE",color=accent,fontSize=16.sp,modifier=Modifier.weight(1f))
                             TextButton(onClick={vm.output=""}){Text("Clear")}
                         }
-                        Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE6F5FF),fontFamily=when(vm.fontName){"Sans"->FontFamily.SansSerif;"Serif"->FontFamily.Serif;else->FontFamily.Monospace},fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(safeColor(vm.consoleBackgroundHex,0xFF030303)).padding(12.dp).animateContentSize().verticalScroll(rememberScrollState()))
+                        Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE6F5FF),fontFamily=when(vm.fontName){"Sans"->FontFamily.SansSerif;"Serif"->FontFamily.Serif;else->FontFamily.Monospace},fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(safeColor(vm.consoleBackgroundHex,0xFF030303).copy(alpha=0.74f),glassShape).border(1.dp,glassEdge,glassShape).padding(12.dp).animateContentSize().verticalScroll(rememberScrollState()))
                         if(vm.waitingInput) Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
                             TextField(vm.input,{vm.input=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Program input")})
                             Button(onClick={vm.submitInput()}){Text("Send")}
@@ -781,7 +792,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             TextButton(onClick={showAiSettings=true}){Text(if(vm.hasAiKey)"Connection" else "Add key")}
                         }
                         Column(
-                            Modifier.weight(1f).fillMaxWidth().background(Color(0xFF050505))
+                            Modifier.weight(1f).fillMaxWidth().background(glass,glassShape).border(1.dp,glassEdge,glassShape)
                                 .padding(12.dp).verticalScroll(aiScroll),
                             verticalArrangement=Arrangement.spacedBy(10.dp)
                         ) {
@@ -789,7 +800,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             vm.aiMessages.forEach { message ->
                                 Row(Modifier.fillMaxWidth(),horizontalArrangement=if(message.fromUser) Arrangement.End else Arrangement.Start) {
                                     Surface(
-                                        color=if(message.fromUser) safeColor(vm.userBubbleHex,0xFF082F36) else safeColor(vm.helperBubbleHex,0xFF00E5FF),
+                                        color=(if(message.fromUser) safeColor(vm.userBubbleHex,0xFF082F36) else safeColor(vm.helperBubbleHex,0xFF00E5FF)).copy(alpha=0.82f),
                                         contentColor=if(message.fromUser) Color(0xFF9FF8FF) else Color.Black,
                                         shape=androidx.compose.foundation.shape.RoundedCornerShape(vm.bubbleRadius.dp),
                                         modifier=Modifier.widthIn(max=vm.bubbleWidth.dp)
@@ -924,7 +935,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         Text("FONT VAULT  •  ${FONT_VAULT.size} REAL FONTS",color=accent,fontSize=12.sp)
                         Text(vm.fontStatus,color=Color.Gray,fontSize=11.sp)
                         FONT_VAULT.filter { vm.settingsQuery.isBlank() || it.first.contains(vm.settingsQuery,true) }.forEach { font ->
-                            Surface(color=Color(0xFF070707),shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),modifier=Modifier.fillMaxWidth()){
+                            Surface(color=Color.White.copy(alpha=0.055f),shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.12f),androidx.compose.foundation.shape.RoundedCornerShape(14.dp))){
                             Row(Modifier.fillMaxWidth().padding(horizontal=14.dp,vertical=8.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                                 Column(Modifier.weight(1f)){Text(font.first,color=text,fontSize=14.sp);Text("Google Fonts · OFL",color=Color.DarkGray,fontSize=9.sp)}
                                 TextButton(onClick={vm.installVaultFont(context,font.first,font.second)},enabled=!vm.fontStatus.startsWith("Downloading")){Text(if(vm.fontName==font.first)"Installed" else "Download")}
@@ -980,11 +991,12 @@ private class PythonEditorView(context: Context) : EditText(context) {
 }
 
 @Composable private fun SettingsCategory(title:String,subtitle:String,accent:Color,onClick:()->Unit){
+    val shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp)
     Surface(
         onClick=onClick,
-        color=Color(0xFF070707),
-        shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
-        modifier=Modifier.fillMaxWidth()
+        color=Color.White.copy(alpha=0.06f),
+        shape=shape,
+        modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.14f),shape)
     ){
         Row(Modifier.padding(horizontal=16.dp,vertical=15.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
             Box(Modifier.size(9.dp).background(accent,androidx.compose.foundation.shape.CircleShape))

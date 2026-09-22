@@ -872,7 +872,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             Text("CONSOLE",color=accent,fontSize=16.sp,modifier=Modifier.weight(1f))
                             TextButton(onClick={vm.output=""}){Text("Clear")}
                             Button(
-                                onClick={if(vm.running) vm::stop else vm::run},
+                                onClick={if(vm.running) vm.stop() else vm.run()},
                                 colors=ButtonDefaults.buttonColors(
                                     containerColor=(if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676)).copy(alpha=0.86f),
                                     contentColor=Color.Black

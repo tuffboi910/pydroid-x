@@ -51,7 +51,9 @@ class SecureAiKeyStore(private val context: Context) {
     fun clear() = prefs.edit().clear().apply()
 }
 
-private class ProviderHttpException(val code: Int, message: String) : IllegalStateException(message)\n\nobject AiClient {
+private class ProviderHttpException(val code: Int, message: String) : IllegalStateException(message)
+
+object AiClient {
     fun chat(providerSetting: String, endpoint: String, apiKey: String, modelSetting: String, prompt: String, code: String?, history: List<AiMessage> = emptyList(), onStatus: (String) -> Unit = {}, onPartial: (String) -> Unit = {}): String {
         val promptText = buildString {
             val context = history.filter { it.text.isNotBlank() }.takeLast(12)

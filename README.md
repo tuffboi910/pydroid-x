@@ -1,6 +1,6 @@
-# PyDroid X
+# py4u
 
-PyDroid X is an open-source Android Python IDE focused on reliable local execution and phone-first editing
+py4u is an open-source Android Python IDE focused on reliable local execution and phone-first editing
 
 ## Current milestone
 

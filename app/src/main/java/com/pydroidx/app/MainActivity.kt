@@ -1922,7 +1922,7 @@ private fun pythonCodeColors(source:String):AnnotatedString=buildAnnotatedString
 }
 
 @Composable private fun MarkdownMessage(source:String,color:Color,modifier:Modifier=Modifier){
-    val fence=String(CharArray(3){96})
+    val fence=String(CharArray(3){96.toChar()})
     Column(modifier,verticalArrangement=Arrangement.spacedBy(6.dp)){
         var inCode=false
         var language="python"

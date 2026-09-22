@@ -80,7 +80,8 @@ import org.json.JSONArray
 import kotlin.math.absoluteValue
 import java.net.URL
 
-data class AiMessage(val fromUser: Boolean, val text: String)\ndata class AiSlotConfig(val index: Int, val label: String, val provider: String, val endpoint: String, val model: String, val key: String)
+data class AiMessage(val fromUser: Boolean, val text: String)
+data class AiSlotConfig(val index: Int, val label: String, val provider: String, val endpoint: String, val model: String, val key: String)
 data class CodeDiagnostic(val start: Int, val end: Int, val message: String)
 
 private val FONT_VAULT = """
@@ -1348,7 +1349,7 @@ private fun AchievementNotice(
                             selected=selectedAiSlot==index,
                             onClick={selectedAiSlot=index},
                             label={Text(label)},
-                            leadingIcon={if(vm.slotConfigured(index)) {{Text("✓",color=Color(0xFF00E676))}} else null},
+                            leadingIcon=if(vm.slotConfigured(index)) {{Text("✓",color=Color(0xFF00E676))}} else null,
                             modifier=Modifier.weight(1f)
                         )
                     }

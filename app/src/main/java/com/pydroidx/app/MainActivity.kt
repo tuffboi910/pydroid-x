@@ -414,6 +414,7 @@ class IdeViewModel : ViewModel() {
     }
     fun updateCode(value: String) {
         code = value
+        codeDiagnostics = emptyList()
         if (!autoSave) return
         autosaveJob?.cancel()
         autosaveJob = viewModelScope.launch {
@@ -642,11 +643,20 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     removeCallbacks(completionRunnable)
                     postDelayed(completionRunnable, 140)
                     removeCallbacks(diagnosticsRunnable)
-                    postDelayed(diagnosticsRunnable, 420)
+                    diagnostics = emptyList()
+                    invalidate()
+                    val inserted = s?.subSequence(start,(start + count).coerceAtMost(s.length))?.toString().orEmpty()
+                    if (inserted.contains('\n')) postDelayed(diagnosticsRunnable, 120)
                 }
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
+        setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus && text.isNotBlank()) {
+                removeCallbacks(diagnosticsRunnable)
+                postDelayed(diagnosticsRunnable, 120)
+            }
+        }
     }
 
     fun setCodeIfDifferent(value: String) {

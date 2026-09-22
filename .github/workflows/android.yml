@@ -21,6 +21,6 @@ jobs:
       - run: gradle :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
-          name: PyDroid-X-arm64-debug
+          name: PY4U-arm64-final
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

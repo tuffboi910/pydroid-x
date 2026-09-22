@@ -12,6 +12,9 @@ import android.text.InputType
 import android.text.Spannable
 import android.text.TextWatcher
 import android.text.style.ForegroundColorSpan
+import android.text.TextPaint
+import android.text.style.CharacterStyle
+import android.text.style.UpdateAppearance
 import android.view.Gravity
 import android.view.KeyEvent
 import android.graphics.Canvas
@@ -65,6 +68,13 @@ import kotlin.math.absoluteValue
 import java.net.URL
 
 data class AiMessage(val fromUser: Boolean, val text: String)
+data class CodeDiagnostic(val start: Int, val end: Int, val message: String)
+
+private class ErrorUnderlineSpan : CharacterStyle(), UpdateAppearance {
+    override fun updateDrawState(paint: TextPaint) {
+        paint.setUnderlineText(AndroidColor.rgb(255, 69, 88), 2.5f)
+    }
+}
 
 private val FONT_VAULT = """
 Fira Code|firacode,JetBrains Mono|jetbrainsmono,Source Code Pro|sourcecodepro,IBM Plex Mono|ibmplexmono,Cascadia Code|cascadiacode,Victor Mono|victormono,Space Mono|spacemono,Inconsolata|inconsolata,Roboto Mono|robotomono,Noto Sans Mono|notosansmono,
@@ -306,6 +316,20 @@ class IdeViewModel : ViewModel() {
             }
         }
     }
+    fun requestDiagnostics(source: String, deliver: (List<CodeDiagnostic>) -> Unit) {
+        thread(name="pAithon-Diagnostics") {
+            val diagnostics = runCatching {
+                val raw = Python.getInstance().getModule("runner").callAttr("diagnose", source).toString()
+                val values = JSONArray(raw)
+                (0 until values.length()).map { index ->
+                    values.getJSONObject(index).let {
+                        CodeDiagnostic(it.getInt("start"), it.getInt("end"), it.optString("message"))
+                    }
+                }
+            }.getOrDefault(emptyList())
+            deliver(diagnostics)
+        }
+    }
     fun updateCode(value: String) {
         code = value
         if (!autoSave) return
@@ -412,6 +436,7 @@ class MainActivity : ComponentActivity() {
 private class PythonEditorView(context: Context) : EditText(context) {
     var onCodeChanged: ((String) -> Unit)? = null
     var requestSmartCompletion: ((String, Int, (String, Int) -> Unit) -> Unit)? = null
+    var requestCodeDiagnostics: ((String, (List<CodeDiagnostic>) -> Unit) -> Unit)? = null
     private var applyingHighlight = false
     private var highlightingEnabled = true
     private var highlightDelayMs = 220L
@@ -462,11 +487,28 @@ private class PythonEditorView(context: Context) : EditText(context) {
         "round","set","setattr","slice","sorted","staticmethod","str","sum","super","tuple","type","vars","zip"
     )
     private val highlightRunnable = Runnable { highlightNow() }
+    private val diagnosticsRunnable = Runnable {
+        val snapshot = text.toString()
+        requestCodeDiagnostics?.invoke(snapshot) { issues ->
+            post {
+                if (text.toString() != snapshot) return@post
+                val editable = text ?: return@post
+                editable.getSpans(0, editable.length, ErrorUnderlineSpan::class.java).forEach(editable::removeSpan)
+                issues.forEach { issue ->
+                    val start = issue.start.coerceIn(0, editable.length)
+                    val end = issue.end.coerceIn(start, editable.length)
+                    if (end > start) editable.setSpan(ErrorUnderlineSpan(), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            }
+        }
+    }
     private val completionRunnable = Runnable {
         if (!autocompleteEnabled) return@Runnable
         val snapshot = text.toString()
         val cursor = selectionStart
         if (cursor < 0) return@Runnable
+        val currentLine = snapshot.substring(snapshot.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)) + 1, cursor)
+        if (currentLine.isBlank()) { ghostSuffix = null; invalidate(); return@Runnable }
         requestSmartCompletion?.invoke(snapshot, cursor) { suffix, cursorBack ->
             post {
                 if (text.toString() == snapshot && selectionStart == cursor && suffix.isNotEmpty()) {
@@ -502,6 +544,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     post { updateGhostSuggestion() }
                     removeCallbacks(completionRunnable)
                     postDelayed(completionRunnable, 140)
+                    removeCallbacks(diagnosticsRunnable)
+                    postDelayed(diagnosticsRunnable, 420)
                 }
             }
             override fun afterTextChanged(s: Editable?) = Unit
@@ -569,6 +613,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
         var start = cursor
         while (start > 0 && (text[start-1].isLetterOrDigit() || text[start-1]=='_')) start--
         val prefix = text.substring(start,cursor)
+        val lineStart = text.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)) + 1
+        if (text.substring(lineStart, cursor).isBlank()) { ghostSuffix=null; invalidate(); return }
         val projectNames = Regex("\\b(?:def|class)\\s+([A-Za-z_]\\w*)|\\b([A-Za-z_]\\w*)\\s*=")
             .findAll(text).flatMap { it.groupValues.drop(1).asSequence() }.filter { it.isNotEmpty() }
         val localMatch = if (prefix.isNotEmpty()) completions.entries.firstOrNull {
@@ -804,6 +850,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                                 editorView=view
                                 view.onCodeChanged=vm::updateCode
                                 view.requestSmartCompletion=vm::requestCompletion
+                                view.requestCodeDiagnostics=vm::requestDiagnostics
                                 view.setCodeIfDifferent(vm.code)
                             }},
                             update={view->
@@ -824,6 +871,16 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                             Text("CONSOLE",color=accent,fontSize=16.sp,modifier=Modifier.weight(1f))
                             TextButton(onClick={vm.output=""}){Text("Clear")}
+                            Button(
+                                onClick={if(vm.running) vm::stop else vm::run},
+                                colors=ButtonDefaults.buttonColors(
+                                    containerColor=(if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676)).copy(alpha=0.86f),
+                                    contentColor=Color.Black
+                                ),
+                                shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                                contentPadding=PaddingValues(horizontal=18.dp,vertical=8.dp),
+                                modifier=Modifier.border(1.dp,Color.White.copy(alpha=0.24f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
+                            ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
                         }
                         Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE6F5FF),fontFamily=when(vm.fontName){"Sans"->FontFamily.SansSerif;"Serif"->FontFamily.Serif;else->FontFamily.Monospace},fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(safeColor(vm.consoleBackgroundHex,0xFF030303).copy(alpha=0.74f),glassShape).border(1.dp,glassEdge,glassShape).padding(12.dp).animateContentSize().verticalScroll(rememberScrollState()))
                         if(vm.waitingInput) Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){

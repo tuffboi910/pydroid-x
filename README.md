@@ -1,6 +1,6 @@
-# py4u
+# PY4U
 
-py4u is an open-source Android Python IDE focused on reliable local execution and phone-first editing
+PY4U is an open-source Android Python IDE focused on reliable local execution and phone-first editing
 
 ## Current milestone
 

@@ -1026,16 +1026,41 @@ private fun AchievementNotice(
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=Color.Transparent,surfaceVariant=glass,outline=glassEdge)) {
         Column(Modifier.fillMaxSize().background(liquidBackground).imePadding()) {
             Row(
-                Modifier.fillMaxWidth().height((vm.tabHeight+8).dp).padding(horizontal=10.dp,vertical=4.dp)
-                    .background(safeColor(vm.tabBarHex,0xFF050505).copy(alpha=0.72f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
-                    .border(1.dp,glassEdge,androidx.compose.foundation.shape.RoundedCornerShape(18.dp)),
-                horizontalArrangement=Arrangement.Center,
+                Modifier.fillMaxWidth().padding(start=10.dp,end=10.dp,top=10.dp,bottom=8.dp),
+                horizontalArrangement=Arrangement.spacedBy(10.dp),
                 verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
             ) {
-                pages.forEachIndexed { index,label ->
-                    TextButton(onClick={scope.launch { pager.animateScrollToPage(index) }}) {
-                        Text(label,color=if(pager.currentPage==index) accent else Color(0xFF666666),fontSize=11.sp)
+                Row(
+                    Modifier.weight(1f).height((vm.tabHeight+8).dp)
+                        .background(safeColor(vm.tabBarHex,0xFF050505).copy(alpha=0.72f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
+                        .border(1.dp,glassEdge,androidx.compose.foundation.shape.RoundedCornerShape(18.dp)),
+                    horizontalArrangement=Arrangement.SpaceEvenly,
+                    verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    pages.forEachIndexed { index,label ->
+                        TextButton(
+                            onClick={scope.launch { pager.animateScrollToPage(index) }},
+                            contentPadding=PaddingValues(horizontal=5.dp,vertical=0.dp)
+                        ) {
+                            Text(label,color=if(pager.currentPage==index) accent else Color(0xFF666666),fontSize=10.sp)
+                        }
                     }
+                }
+                if(pager.currentPage==0) {
+                    Button(
+                        onClick={
+                            if(vm.running) vm.stop()
+                            else { vm.run(); scope.launch{pager.animateScrollToPage(1)} }
+                        },
+                        colors=ButtonDefaults.buttonColors(
+                            containerColor=(if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676)).copy(alpha=0.86f),
+                            contentColor=Color.Black
+                        ),
+                        shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                        contentPadding=PaddingValues(horizontal=17.dp,vertical=9.dp),
+                        modifier=Modifier.height((vm.tabHeight+8).dp)
+                            .border(1.dp,Color.White.copy(alpha=0.24f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
+                    ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
                 }
             }
             HorizontalPager(state=pager,modifier=Modifier.weight(1f).fillMaxWidth(),beyondViewportPageCount=1) { page ->
@@ -1063,29 +1088,6 @@ private fun AchievementNotice(
                 }
                 Box(motionModifier) { when(page) {
                     0 -> Column(Modifier.fillMaxSize().background(bg)) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(start=14.dp,end=14.dp,top=10.dp,bottom=8.dp),
-                            verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
-                        ) {
-                            Spacer(Modifier.weight(1f))
-                            if(vm.codeDiagnostics.isNotEmpty()) Text(
-                                "${vm.codeDiagnostics.size} error${if(vm.codeDiagnostics.size==1)"" else "s"}",
-                                color=Color(0xFFFF4558),fontSize=11.sp,modifier=Modifier.padding(end=10.dp)
-                            )
-                            Button(
-                                onClick={
-                                    if(vm.running) vm.stop()
-                                    else { vm.run(); scope.launch{pager.animateScrollToPage(1)} }
-                                },
-                                colors=ButtonDefaults.buttonColors(
-                                    containerColor=(if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676)).copy(alpha=0.86f),
-                                    contentColor=Color.Black
-                                ),
-                                shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
-                                contentPadding=PaddingValues(horizontal=20.dp,vertical=9.dp),
-                                modifier=Modifier.border(1.dp,Color.White.copy(alpha=0.24f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
-                            ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
-                        }
                         AndroidView(
                             factory={context->PythonEditorView(context).also{view->
                                 editorView=view

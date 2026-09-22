@@ -12,9 +12,8 @@ import android.text.InputType
 import android.text.Spannable
 import android.text.TextWatcher
 import android.text.style.ForegroundColorSpan
-import android.text.TextPaint
-import android.text.style.CharacterStyle
-import android.text.style.UpdateAppearance
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.graphics.Canvas
@@ -69,16 +68,6 @@ import java.net.URL
 
 data class AiMessage(val fromUser: Boolean, val text: String)
 data class CodeDiagnostic(val start: Int, val end: Int, val message: String)
-
-private class ErrorUnderlineSpan : CharacterStyle(), UpdateAppearance {
-    override fun updateDrawState(paint: TextPaint) {
-        paint.isUnderlineText = true
-        if (android.os.Build.VERSION.SDK_INT >= 29) {
-            paint.underlineColor = AndroidColor.rgb(255, 69, 88)
-            paint.underlineThickness = 2.5f
-        }
-    }
-}
 
 private val FONT_VAULT = """
 Fira Code|firacode,JetBrains Mono|jetbrainsmono,Source Code Pro|sourcecodepro,IBM Plex Mono|ibmplexmono,Cascadia Code|cascadiacode,Victor Mono|victormono,Space Mono|spacemono,Inconsolata|inconsolata,Roboto Mono|robotomono,Noto Sans Mono|notosansmono,
@@ -171,6 +160,7 @@ class IdeViewModel : ViewModel() {
     private val stopInputSignal = "\u0000PYDROIDX_STOP\u0000"
     @Volatile private var worker: Thread? = null
     private var autosaveJob: Job? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
     lateinit var projectDir: File
     private lateinit var aiKeys: SecureAiKeyStore
     private lateinit var settings: android.content.SharedPreferences
@@ -235,7 +225,11 @@ class IdeViewModel : ViewModel() {
         val main = File(projectDir, "main.py")
         if (main.exists()) code = main.readText() else main.writeText(code)
         editorRevision++
-        thread { runtimeVersion = Python.getInstance().getModule("runner").callAttr("version").toString() }
+        thread {
+            val version = runCatching { Python.getInstance().getModule("runner").callAttr("version").toString() }
+                .getOrDefault("Python unavailable")
+            mainHandler.post { runtimeVersion = version }
+        }
     }
     fun saveAiSettings(key: String, endpoint: String, model: String, provider: String = aiProvider) {
         if (key.isNotBlank()) aiKeys.save(key)
@@ -408,7 +402,15 @@ class IdeViewModel : ViewModel() {
         if (running) return
         save(); output = ""; running = true
         worker = thread(name = "PyDroidX-Python") {
-            Python.getInstance().getModule("runner").callAttr("run_code", code, "main.py", projectDir.absolutePath, Bridge())
+            runCatching {
+                Python.getInstance().getModule("runner").callAttr("run_code", code, "main.py", projectDir.absolutePath, Bridge())
+            }.onFailure { failure ->
+                mainHandler.post {
+                    output += "\nRuntime error: ${failure.message ?: "Python stopped unexpectedly"}\n"
+                    running = false
+                    waitingInput = false
+                }
+            }
         }
     }
     fun submitInput() { if (waitingInput) { stdin.offer(input); input = ""; waitingInput = false } }
@@ -420,13 +422,13 @@ class IdeViewModel : ViewModel() {
         waitingInput = false
     }
     inner class Bridge {
-        fun write(text: String, error: Boolean) { output += text }
+        fun write(text: String, error: Boolean) { mainHandler.post { output += text } }
         fun readLine(): String? {
-            waitingInput = true
+            mainHandler.post { waitingInput = true }
             return try { stdin.take().takeUnless { it == stopInputSignal } }
             catch (_: InterruptedException) { null }
         }
-        fun exited(code: Int) { output += "\n[Process exited with code $code]\n"; running = false; waitingInput = false }
+        fun exited(code: Int) { mainHandler.post { output += "\n[Process exited with code $code]\n"; running = false; waitingInput = false } }
     }
 }
 
@@ -449,6 +451,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var ghostSuffix: String? = null
     private var ghostCursorBack = 0
     private var ghostPrefixStart = 0
+    private var diagnostics: List<CodeDiagnostic> = emptyList()
     private var showLineNumbers = true
     private var showCurrentLine = true
     private var userPadding = 20
@@ -496,13 +499,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
         requestCodeDiagnostics?.invoke(snapshot) { issues ->
             post {
                 if (text.toString() != snapshot) return@post
-                val editable = text ?: return@post
-                editable.getSpans(0, editable.length, ErrorUnderlineSpan::class.java).forEach(editable::removeSpan)
-                issues.forEach { issue ->
-                    val start = issue.start.coerceIn(0, editable.length)
-                    val end = issue.end.coerceIn(start, editable.length)
-                    if (end > start) editable.setSpan(ErrorUnderlineSpan(), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                }
+                diagnostics = issues
+                invalidate()
             }
         }
     }
@@ -668,6 +666,36 @@ private class PythonEditorView(context: Context) : EditText(context) {
             }
         }
         super.onDraw(canvas)
+        if (editorLayout != null && diagnostics.isNotEmpty()) {
+            val errorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = AndroidColor.rgb(255, 69, 88)
+                strokeWidth = 2.2f * resources.displayMetrics.density
+                style = Paint.Style.STROKE
+            }
+            diagnostics.forEach { issue ->
+                val start = issue.start.coerceIn(0, text.length)
+                val end = issue.end.coerceIn(start, text.length)
+                if (end > start) {
+                    val firstLine = editorLayout.getLineForOffset(start)
+                    val lastLine = editorLayout.getLineForOffset((end - 1).coerceAtLeast(start))
+                    for (line in firstLine..lastLine) {
+                        val segmentStart = maxOf(start, editorLayout.getLineStart(line))
+                        val segmentEnd = minOf(end, editorLayout.getLineEnd(line))
+                        val left = editorLayout.getPrimaryHorizontal(segmentStart) + totalPaddingLeft - scrollX
+                        val right = editorLayout.getPrimaryHorizontal(segmentEnd) + totalPaddingLeft - scrollX
+                        val y = editorLayout.getLineBottom(line) + totalPaddingTop - scrollY - 2f
+                        var x = left
+                        var up = true
+                        while (x < right) {
+                            val next = minOf(x + 4f * resources.displayMetrics.density, right)
+                            canvas.drawLine(x, y + if(up) 0f else 2f, next, y + if(up) 2f else 0f, errorPaint)
+                            up = !up
+                            x = next
+                        }
+                    }
+                }
+            }
+        }
         if (editorLayout != null && showLineNumbers) {
             val numberPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = AndroidColor.rgb(110, 118, 129)

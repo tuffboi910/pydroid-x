@@ -72,7 +72,11 @@ data class CodeDiagnostic(val start: Int, val end: Int, val message: String)
 
 private class ErrorUnderlineSpan : CharacterStyle(), UpdateAppearance {
     override fun updateDrawState(paint: TextPaint) {
-        paint.setUnderlineText(AndroidColor.rgb(255, 69, 88), 2.5f)
+        paint.isUnderlineText = true
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            paint.underlineColor = AndroidColor.rgb(255, 69, 88)
+            paint.underlineThickness = 2.5f
+        }
     }
 }
 

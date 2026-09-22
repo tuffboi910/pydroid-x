@@ -33,22 +33,29 @@ class SecureAiKeyStore(private val context: Context) {
     fun save(value: String, slot: Int = 0) {
         if (value.isBlank()) { clear(slot); return }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key())
+        cipher.init(Cipher.ENCRYPT_MODE,key())
         prefs.edit()
-            .putString("value", Base64.encodeToString(cipher.doFinal(value.toByteArray()), Base64.NO_WRAP))
-            .putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+            .putString("value_$slot",Base64.encodeToString(cipher.doFinal(value.toByteArray()),Base64.NO_WRAP))
+            .putString("iv_$slot",Base64.encodeToString(cipher.iv,Base64.NO_WRAP))
             .apply()
     }
 
-    fun load(): String? = runCatching {
-        val encrypted = Base64.decode(prefs.getString("value", null), Base64.NO_WRAP)
-        val iv = Base64.decode(prefs.getString("iv", null), Base64.NO_WRAP)
+    fun load(slot: Int = 0): String? = runCatching {
+        val legacyValue = if (slot == 0) prefs.getString("value",null) else null
+        val legacyIv = if (slot == 0) prefs.getString("iv",null) else null
+        val encrypted = Base64.decode(prefs.getString("value_$slot",legacyValue),Base64.NO_WRAP)
+        val iv = Base64.decode(prefs.getString("iv_$slot",legacyIv),Base64.NO_WRAP)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
+        cipher.init(Cipher.DECRYPT_MODE,key(),GCMParameterSpec(128,iv))
         String(cipher.doFinal(encrypted))
     }.getOrNull()
 
-    fun clear(slot: Int = 0) = prefs.edit().remove("value_$slot").remove("iv_$slot").apply()
+    fun clear(slot: Int = 0) {
+        val editor=prefs.edit().remove("value_$slot").remove("iv_$slot")
+        if (slot == 0) editor.remove("value").remove("iv")
+        editor.apply()
+    }
+
 }
 
 private class ProviderHttpException(val code: Int, message: String) : IllegalStateException(message)

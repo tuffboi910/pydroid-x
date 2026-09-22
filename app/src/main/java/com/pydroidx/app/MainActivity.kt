@@ -337,7 +337,7 @@ class IdeViewModel : ViewModel() {
         }
     }
     fun requestDiagnostics(source: String, deliver: (List<CodeDiagnostic>) -> Unit) {
-        thread(name="pAithon-Diagnostics") {
+        thread(name="py4u-Diagnostics") {
             val diagnostics = runCatching {
                 val raw = Python.getInstance().getModule("runner").callAttr("diagnose", source).toString()
                 val values = JSONArray(raw)
@@ -398,7 +398,7 @@ class IdeViewModel : ViewModel() {
         thread(name="PyDroidX-Font") {
             val result = runCatching {
                 val api = URL("https://api.github.com/repos/google/fonts/contents/ofl/$slug").openConnection().apply {
-                    setRequestProperty("User-Agent", "PyDroid-X")
+                    setRequestProperty("User-Agent", "py4u")
                     connectTimeout=15_000;readTimeout=30_000
                 }.getInputStream().bufferedReader().use { it.readText() }
                 val files = JSONArray(api)
@@ -1104,7 +1104,7 @@ private fun AchievementNotice(
                     else -> Column(Modifier.fillMaxSize().padding(horizontal=18.dp,vertical=12.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(14.dp)) {
                         Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                             if(settingsSection!="Overview") TextButton(onClick={settingsSection="Overview"},contentPadding=PaddingValues(end=12.dp)){Text("‹ Back")}
-                            Column(Modifier.weight(1f)){Text(if(settingsSection=="Overview") "SETTINGS" else settingsSection.uppercase(),color=accent,fontSize=18.sp);Text(if(settingsSection=="Overview") "Make PyDroid X yours" else "Focused controls",color=Color.Gray,fontSize=11.sp)}
+                            Column(Modifier.weight(1f)){Text(if(settingsSection=="Overview") "SETTINGS" else settingsSection.uppercase(),color=accent,fontSize=18.sp);Text(if(settingsSection=="Overview") "Make py4u yours" else "Focused controls",color=Color.Gray,fontSize=11.sp)}
                         }
                         TextField(vm.settingsQuery,{vm.settingsQuery=it},singleLine=true,modifier=Modifier.fillMaxWidth(),placeholder={Text("Search every setting…")})
                         if(settingsSection=="Overview" && vm.settingsQuery.isBlank()){

@@ -26,6 +26,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -35,6 +36,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.animateFloatAsState
@@ -58,6 +60,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -387,7 +392,7 @@ class IdeViewModel : ViewModel() {
         editorRevision++
         save()
         pendingCode = null
-        aiMessages.add(AiMessage(false, "Applied to main.py ✓"))
+        aiMessages.add(AiMessage(false, "Applied to $currentFileName ✓"))
     }
     fun rejectPendingCode() { pendingCode = null }
     fun acceptTeaching() {
@@ -1082,54 +1087,79 @@ private fun AchievementNotice(
     onSecondary: () -> Unit
 ) {
     var visible by remember(title, badge) { mutableStateOf(false) }
+    var dragX by remember(title, badge) { mutableFloatStateOf(0f) }
     val scope = rememberCoroutineScope()
+    val threshold = with(LocalDensity.current) { 72.dp.toPx() }
     LaunchedEffect(title, badge) { visible = true }
     fun closeThen(action: () -> Unit) {
         visible = false
         scope.launch { delay(230); action() }
     }
-    AnimatedVisibility(
-        visible=visible,
-        enter=slideInVertically(initialOffsetY={-it})+fadeIn()+scaleIn(initialScale=0.94f),
-        exit=slideOutVertically(targetOffsetY={-it/2})+fadeOut()+scaleOut(targetScale=0.97f)
+    Popup(
+        alignment=androidx.compose.ui.Alignment.TopEnd,
+        offset=androidx.compose.ui.unit.IntOffset(-18,92),
+        properties=PopupProperties(focusable=false)
     ) {
-        val shape=androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
-        Surface(
-            color=Color(0xF20A0D10),
-            contentColor=Color.White,
-            shape=shape,
-            border=BorderStroke(1.dp,accent.copy(alpha=0.75f)),
-            shadowElevation=14.dp,
-            modifier=Modifier.fillMaxWidth()
+        AnimatedVisibility(
+            visible=visible,
+            enter=slideInVertically(initialOffsetY={-it})+fadeIn()+scaleIn(initialScale=0.94f),
+            exit=slideOutHorizontally(targetOffsetX={it})+fadeOut()+scaleOut(targetScale=0.97f)
         ) {
-            Column {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal=14.dp,vertical=12.dp),
-                    verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,
-                    horizontalArrangement=Arrangement.spacedBy(12.dp)
-                ) {
-                    Box(
-                        Modifier.size(44.dp).background(accent.copy(alpha=0.16f),androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                            .border(1.dp,accent.copy(alpha=0.8f),androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
-                        contentAlignment=androidx.compose.ui.Alignment.Center
-                    ) { Text("◆",color=accent,fontSize=22.sp) }
-                    Column(Modifier.weight(1f)) {
-                        Text(badge,color=accent,fontSize=9.sp,fontWeight=FontWeight.Bold,letterSpacing=1.2.sp)
-                        Text(title,color=Color.White,fontSize=15.sp,fontWeight=FontWeight.Bold,maxLines=1)
-                        Text(subtitle,color=Color(0xFFA9B0B8),fontSize=11.sp,maxLines=2)
+            val shape=androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+            Surface(
+                color=Color(0xF20A0D10),
+                contentColor=Color.White,
+                shape=shape,
+                border=BorderStroke(1.dp,accent.copy(alpha=0.72f)),
+                shadowElevation=18.dp,
+                modifier=Modifier.widthIn(min=285.dp,max=350.dp)
+                    .graphicsLayer { translationX=dragX }
+                    .pointerInput(title,badge) {
+                        detectHorizontalDragGestures(
+                            onDragEnd={
+                                if(dragX>=threshold) closeThen(onSecondary)
+                                else dragX=0f
+                            },
+                            onDragCancel={dragX=0f},
+                            onHorizontalDrag={change,amount->
+                                change.consume()
+                                dragX=(dragX+amount).coerceAtLeast(0f)
+                            }
+                        )
                     }
-                }
-                Box(Modifier.fillMaxWidth().height(2.dp).background(accent.copy(alpha=0.9f)))
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal=10.dp,vertical=6.dp),
-                    horizontalArrangement=Arrangement.End
-                ) {
-                    TextButton(onClick={closeThen(onSecondary)}) { Text(secondaryLabel,color=Color(0xFFB9C0C8)) }
-                    Button(
-                        onClick={closeThen(onPrimary)},
-                        colors=ButtonDefaults.buttonColors(containerColor=accent,contentColor=Color.Black),
-                        contentPadding=PaddingValues(horizontal=14.dp,vertical=6.dp)
-                    ) { Text(primaryLabel,fontWeight=FontWeight.Bold) }
+            ) {
+                Column {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal=12.dp,vertical=10.dp),
+                        verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,
+                        horizontalArrangement=Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            Modifier.size(40.dp).background(accent.copy(alpha=0.13f),androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                                .border(1.dp,accent.copy(alpha=0.75f),androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
+                            contentAlignment=androidx.compose.ui.Alignment.Center
+                        ) { Text("◆",color=accent,fontSize=20.sp) }
+                        Column(Modifier.weight(1f)) {
+                            Text(badge,color=accent,fontSize=8.sp,fontWeight=FontWeight.Bold,letterSpacing=1.1.sp)
+                            Text(title,color=Color.White,fontSize=14.sp,fontWeight=FontWeight.Bold,maxLines=1)
+                            Text(subtitle,color=Color(0xFFA9B0B8),fontSize=10.sp,maxLines=2)
+                            Text("Swipe right to ignore",color=Color(0xFF6F7780),fontSize=8.sp)
+                        }
+                    }
+                    Box(Modifier.fillMaxWidth().height(2.dp).background(accent.copy(alpha=0.85f)))
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal=8.dp,vertical=4.dp),
+                        horizontalArrangement=Arrangement.End
+                    ) {
+                        TextButton(onClick={closeThen(onSecondary)},contentPadding=PaddingValues(horizontal=10.dp,vertical=4.dp)) {
+                            Text(secondaryLabel,color=Color(0xFFB9C0C8),fontSize=11.sp)
+                        }
+                        Button(
+                            onClick={closeThen(onPrimary)},
+                            colors=ButtonDefaults.buttonColors(containerColor=accent,contentColor=Color.Black),
+                            contentPadding=PaddingValues(horizontal=12.dp,vertical=4.dp)
+                        ) { Text(primaryLabel,fontWeight=FontWeight.Bold,fontSize=11.sp) }
+                    }
                 }
             }
         }
@@ -1403,10 +1433,10 @@ private fun AchievementNotice(
                             AchievementNotice(
                                 badge="ACTION REQUIRED",
                                 title="Code change ready",
-                                subtitle="Helper wants permission to update main.py",
+                                subtitle="Helper wants permission to update ${vm.currentFileName}",
                                 accent=accent,
                                 primaryLabel="Apply",
-                                secondaryLabel="Reject",
+                                secondaryLabel="Ignore",
                                 onPrimary={vm.applyPendingCode()},
                                 onSecondary={vm.rejectPendingCode()}
                             )
@@ -1418,7 +1448,7 @@ private fun AchievementNotice(
                                 subtitle="A short interactive Python lesson is ready",
                                 accent=accent,
                                 primaryLabel="Teach me",
-                                secondaryLabel="Later",
+                                secondaryLabel="Ignore",
                                 onPrimary={vm.acceptTeaching()},
                                 onSecondary={vm.rejectTeaching()}
                             )

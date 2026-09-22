@@ -1407,31 +1407,108 @@ private fun AchievementNotice(
                             }
                         }
                     }
-                    2 -> Column(Modifier.fillMaxSize().padding(14.dp)) {
-                        Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-                            Text("CONSOLE",color=accent,fontSize=16.sp,modifier=Modifier.weight(1f))
-                            TextButton(onClick={vm.output=""}){Text("Clear")}
+                    2 -> Column(
+                        Modifier.fillMaxSize().background(Color.Black).padding(horizontal=14.dp,vertical=12.dp)
+                    ) {
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                            Box(Modifier.size(39.dp)){
+                                Box(
+                                    Modifier.width(25.dp).height(18.dp)
+                                        .background(Color.White,androidx.compose.foundation.shape.RoundedCornerShape(7.dp))
+                                        .align(androidx.compose.ui.Alignment.TopStart)
+                                ){
+                                    Box(Modifier.size(4.dp).background(Color.Black,androidx.compose.foundation.shape.CircleShape).align(androidx.compose.ui.Alignment.TopStart).offset(6.dp,4.dp))
+                                }
+                                Box(
+                                    Modifier.width(25.dp).height(18.dp)
+                                        .background(Color(0xFFB8B8BE),androidx.compose.foundation.shape.RoundedCornerShape(7.dp))
+                                        .align(androidx.compose.ui.Alignment.BottomEnd)
+                                ){
+                                    Box(Modifier.size(4.dp).background(Color.Black,androidx.compose.foundation.shape.CircleShape).align(androidx.compose.ui.Alignment.BottomEnd).offset((-6).dp,(-4).dp))
+                                }
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)){
+                                Text("PYTHON CONSOLE",color=Color.White,fontSize=17.sp,fontWeight=FontWeight.SemiBold,letterSpacing=1.1.sp)
+                                Text("CPython 3.14",color=Color(0xFF77777F),fontSize=10.sp,fontFamily=FontFamily.Monospace)
+                            }
+                            TextButton(onClick={vm.output=""},contentPadding=PaddingValues(8.dp),modifier=Modifier.size(42.dp)){
+                                Text("⌫",color=Color(0xFFB8B8BE),fontSize=21.sp)
+                            }
+                            Spacer(Modifier.width(6.dp))
                             Button(
                                 onClick={if(vm.running) vm.stop() else vm.run()},
-                                colors=ButtonDefaults.buttonColors(
-                                    containerColor=(if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676)).copy(alpha=0.86f),
-                                    contentColor=Color.Black
-                                ),
-                                shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
-                                contentPadding=PaddingValues(horizontal=18.dp,vertical=8.dp),
-                                modifier=Modifier.border(1.dp,Color.White.copy(alpha=0.24f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
+                                colors=ButtonDefaults.buttonColors(containerColor=Color.White,contentColor=Color.Black),
+                                shape=androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
+                                contentPadding=PaddingValues(horizontal=18.dp,vertical=10.dp),
+                                modifier=Modifier.border(1.dp,Color.White.copy(alpha=.24f),androidx.compose.foundation.shape.RoundedCornerShape(22.dp))
                             ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
                         }
-                        Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE6F5FF),fontFamily=when(vm.fontName){"Sans"->FontFamily.SansSerif;"Serif"->FontFamily.Serif;else->FontFamily.Monospace},fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().padding(horizontal=4.dp,vertical=10.dp).animateContentSize().verticalScroll(rememberScrollState()))
-                        if(vm.waitingInput) Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
-                            TextField(
-                                vm.input,{vm.input=it},singleLine=true,
-                                modifier=Modifier.weight(1f).focusRequester(consoleInputFocus),
-                                placeholder={Text("Program input")},
-                                keyboardOptions=KeyboardOptions(imeAction=ImeAction.Send),
-                                keyboardActions=KeyboardActions(onSend={vm.submitInput();keyboardController?.hide()})
-                            )
-                            Button(onClick={vm.submitInput()}){Text("Send")}
+                        Spacer(Modifier.height(20.dp))
+                        Surface(
+                            color=Color.Black,
+                            shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                            border=BorderStroke(1.dp,Color.White.copy(alpha=.12f)),
+                            modifier=Modifier.weight(1f).fillMaxWidth()
+                        ){
+                            Column(Modifier.fillMaxSize().padding(16.dp)){
+                                Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                                    Text(">>>",color=Color(0xFFB8B8BE),fontFamily=FontFamily.Monospace,fontSize=12.sp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        if(vm.running)"running \${vm.currentFileName}" else vm.currentFileName,
+                                        color=Color(0xFF6F6F77),fontFamily=FontFamily.Monospace,fontSize=11.sp
+                                    )
+                                }
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    vm.output.ifEmpty{"Ready"},
+                                    color=Color(0xFFE8E8EC),
+                                    fontFamily=FontFamily.Monospace,
+                                    fontSize=vm.terminalFontSize.sp,
+                                    lineHeight=(vm.terminalFontSize+6).sp,
+                                    modifier=Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                                )
+                                Surface(
+                                    color=Color(0xFF050505),
+                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                                    border=BorderStroke(1.dp,Color.White.copy(alpha=.16f)),
+                                    modifier=Modifier.fillMaxWidth()
+                                ){
+                                    Row(
+                                        Modifier.padding(start=14.dp,end=7.dp,top=5.dp,bottom=5.dp),
+                                        verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                                    ){
+                                        Text(">>>",color=Color.White,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold)
+                                        TextField(
+                                            vm.input,{vm.input=it},
+                                            enabled=vm.waitingInput,
+                                            singleLine=true,
+                                            modifier=Modifier.weight(1f).focusRequester(consoleInputFocus),
+                                            placeholder={Text(if(vm.waitingInput)"Type program input…" else "Waiting for Python input()",color=Color(0xFF66666E),fontSize=13.sp)},
+                                            colors=TextFieldDefaults.colors(
+                                                focusedContainerColor=Color.Transparent,unfocusedContainerColor=Color.Transparent,
+                                                disabledContainerColor=Color.Transparent,focusedIndicatorColor=Color.Transparent,
+                                                unfocusedIndicatorColor=Color.Transparent,disabledIndicatorColor=Color.Transparent,
+                                                focusedTextColor=Color.White,disabledTextColor=Color(0xFF77777F)
+                                            ),
+                                            keyboardOptions=KeyboardOptions(imeAction=ImeAction.Send),
+                                            keyboardActions=KeyboardActions(onSend={if(vm.waitingInput){vm.submitInput();keyboardController?.hide()}})
+                                        )
+                                        Button(
+                                            onClick={if(vm.waitingInput) vm.submitInput else ({})},
+                                            enabled=vm.waitingInput,
+                                            shape=androidx.compose.foundation.shape.CircleShape,
+                                            contentPadding=PaddingValues(0.dp),
+                                            colors=ButtonDefaults.buttonColors(
+                                                containerColor=Color.White,contentColor=Color.Black,
+                                                disabledContainerColor=Color(0xFF1A1A1D),disabledContentColor=Color(0xFF66666E)
+                                            ),
+                                            modifier=Modifier.size(42.dp)
+                                        ){Text("➜",fontSize=20.sp)}
+                                    }
+                                }
+                            }
                         }
                     }
                     3 -> Column(

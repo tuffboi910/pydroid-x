@@ -99,6 +99,16 @@ def run_code(source, filename, project_dir, bridge):
             raise KeyboardInterrupt()
         out.write(str(value) + '\n')
         return str(value)
+    old_trace = sys.gettrace()
+    trace_ticks = 0
+    def stop_trace(frame, event, arg):
+        nonlocal trace_ticks
+        trace_ticks += 1
+        if trace_ticks >= 64:
+            trace_ticks = 0
+            if bridge.shouldStop():
+                raise KeyboardInterrupt()
+        return stop_trace
     try:
         os.makedirs(project_dir, exist_ok=True)
         os.chdir(project_dir)
@@ -106,6 +116,7 @@ def run_code(source, filename, project_dir, bridge):
             sys.path.insert(0, project_dir)
         builtins.input = android_input
         scope = {'__name__': '__main__', '__file__': filename}
+        sys.settrace(stop_trace)
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             exec(compile(source, filename, 'exec'), scope, scope)
         bridge.exited(0)
@@ -116,6 +127,7 @@ def run_code(source, filename, project_dir, bridge):
         err.write(traceback.format_exc())
         bridge.exited(1)
     finally:
+        sys.settrace(old_trace)
         builtins.input = old_input
         os.chdir(old_cwd)
 

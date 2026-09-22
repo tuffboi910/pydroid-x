@@ -143,7 +143,8 @@ class IdeViewModel : ViewModel() {
     var pageDotSize by mutableFloatStateOf(8f)
     var showHeader by mutableStateOf(true)
     var showFileInfo by mutableStateOf(true)
-    private val stdin = LinkedBlockingQueue<String?>()
+    private val stdin = LinkedBlockingQueue<String>()
+    private val stopInputSignal = "\u0000PYDROIDX_STOP\u0000"
     @Volatile private var worker: Thread? = null
     private var autosaveJob: Job? = null
     lateinit var projectDir: File
@@ -335,10 +336,20 @@ class IdeViewModel : ViewModel() {
         }
     }
     fun submitInput() { if (waitingInput) { stdin.offer(input); input = ""; waitingInput = false } }
-    @Suppress("DEPRECATION") fun stop() { stdin.offer(null); worker?.interrupt(); running = false; waitingInput = false }
+    fun stop() {
+        stdin.offer(stopInputSignal)
+        worker?.interrupt()
+        output += "\n[Stopping program…]\n"
+        running = false
+        waitingInput = false
+    }
     inner class Bridge {
         fun write(text: String, error: Boolean) { output += text }
-        fun readLine(): String? { waitingInput = true; return try { stdin.take() } catch (_: InterruptedException) { null } }
+        fun readLine(): String? {
+            waitingInput = true
+            return try { stdin.take().takeUnless { it == stopInputSignal } }
+            catch (_: InterruptedException) { null }
+        }
         fun exited(code: Int) { output += "\n[Process exited with code $code]\n"; running = false; waitingInput = false }
     }
 }
@@ -679,13 +690,15 @@ private class PythonEditorView(context: Context) : EditText(context) {
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=bg)) {
         Column(Modifier.fillMaxSize().background(bg).imePadding()) {
             if(vm.showHeader) Row(
-                Modifier.fillMaxWidth().height((vm.headerHeight * vm.uiScale).dp).padding(start=12.dp,end=12.dp,top=12.dp,bottom=6.dp),
+                Modifier.fillMaxWidth().height(((vm.headerHeight + 39f) * vm.uiScale).dp).padding(start=12.dp,end=12.dp,top=12.dp,bottom=6.dp),
                 horizontalArrangement=Arrangement.spacedBy(10.dp),
                 verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
             ) {
-                Text("PyDroid X",color=text,fontSize=(18*vm.uiScale).sp,modifier=Modifier.weight(1f))
-                Button(onClick={vm.run();scope.launch{pager.animateScrollToPage(1)}},enabled=!vm.running,colors=ButtonDefaults.buttonColors(containerColor=safeColor(vm.runButtonHex,0xFF00E676),contentColor=Color.Black)){Text("▶ Run")}
-                Button(onClick={vm.stop()},enabled=vm.running,colors=ButtonDefaults.buttonColors(containerColor=safeColor(vm.stopButtonHex,0xFFFF3D71),contentColor=Color.Black)){Text("■ Stop")}
+                Text("PyDroid X",color=text,fontSize=(18*vm.uiScale).sp,modifier=Modifier.weight(1f).offset(y=(-19).dp))
+                Row(Modifier.offset(x=(-20).dp,y=19.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)){
+                    Button(onClick={vm.run();scope.launch{pager.animateScrollToPage(1)}},enabled=!vm.running,colors=ButtonDefaults.buttonColors(containerColor=safeColor(vm.runButtonHex,0xFF00E676),contentColor=Color.Black)){Text("▶ Run")}
+                    Button(onClick={vm.stop()},enabled=vm.running,colors=ButtonDefaults.buttonColors(containerColor=safeColor(vm.stopButtonHex,0xFFFF3D71),contentColor=Color.Black)){Text("■ Stop")}
+                }
             }
             Row(
                 Modifier.fillMaxWidth().height(vm.tabHeight.dp).background(safeColor(vm.tabBarHex,0xFF050505)),

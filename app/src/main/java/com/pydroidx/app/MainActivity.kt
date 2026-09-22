@@ -630,10 +630,12 @@ private class PythonEditorView(context: Context) : EditText(context) {
     }
 
     private fun updateGhostSuggestion() {
-        val prefix = text.substring(start,cursor)
-        val lineStart = text.lastIndexOf        if (!autocompleteEnabled || !hasFocus()) { ghostSuffix=null; invalidate(); return }
+        if (!autocompleteEnabled || !hasFocus()) { ghostSuffix=null; invalidate(); return }
         val cursor = selectionStart
         if (cursor < 0 || cursor > text.length) return
+        var start = cursor
+        while (start > 0 && (text[start-1].isLetterOrDigit() || text[start-1]=='_')) start--
+        val prefix = text.substring(start,cursor)
         val projectNames = Regex("\\b(?:def|class)\\s+([A-Za-z_]\\w*)|\\b([A-Za-z_]\\w*)\\s*=")
             .findAll(text).flatMap { it.groupValues.drop(1).asSequence() }.filter { it.isNotEmpty() }
         val localMatch = if (prefix.isNotEmpty()) completions.entries.firstOrNull {

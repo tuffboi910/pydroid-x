@@ -91,7 +91,7 @@ Plus Jakarta Sans|plusjakartasans,Prompt|prompt,Public Sans|publicsans,Quicksand
 }
 
 class IdeViewModel : ViewModel() {
-    @Volatile var code = "print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n"
+    @Volatile var code = "print(\"Hello world!\")\n"
     var editorRevision by mutableIntStateOf(0)
         private set
     var output by mutableStateOf("")
@@ -230,7 +230,14 @@ class IdeViewModel : ViewModel() {
         hasAiKey = !aiKeys.load().isNullOrBlank()
         projectDir = File(context.filesDir, "projects/default").apply { mkdirs() }
         val main = File(projectDir, "main.py")
-        if (main.exists()) code = main.readText() else main.writeText(code)
+        val legacyStarter = "print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n"
+        if (main.exists()) {
+            code = main.readText()
+            if (code == legacyStarter) {
+                code = "print(\"Hello world!\")\n"
+                main.writeText(code)
+            }
+        } else main.writeText(code)
         editorRevision++
         thread {
             val version = runCatching { Python.getInstance().getModule("runner").callAttr("version").toString() }
@@ -473,7 +480,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var ghostCursorBack = 0
     private var ghostPrefixStart = 0
     private var diagnostics: List<CodeDiagnostic> = emptyList()
-    private var showLineNumbers = true
+    private var showLineNumbers = false
     private var showCurrentLine = true
     private var userPadding = 20
     private var editorTextColor=AndroidColor.rgb(212,212,212)
@@ -603,7 +610,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
         highlightDelayMs = highlightDelay.toLong()
         autocompleteEnabled = autocomplete
         ghostAlpha = (ghostBrightness * 255).toInt().coerceIn(35,210)
-        showLineNumbers = lineNumbers
+        showLineNumbers = false
         showCurrentLine = currentLine
         fun parsed(index:Int,fallback:Int)=runCatching{AndroidColor.parseColor(palette[index])}.getOrDefault(fallback)
         editorTextColor=parsed(0,AndroidColor.rgb(212,212,212));commentColor=parsed(1,AndroidColor.rgb(106,153,85))

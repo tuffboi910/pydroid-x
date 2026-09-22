@@ -706,6 +706,11 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private val highlightRunnable = Runnable { highlightNow() }
     private val diagnosticsRunnable = Runnable {
         val snapshot = text.toString()
+        if (snapshot.isBlank()) {
+            diagnostics = emptyList()
+            invalidate()
+            return@Runnable
+        }
         requestCodeDiagnostics?.invoke(snapshot) { issues ->
             post {
                 if (text.toString() != snapshot) return@post
@@ -718,8 +723,13 @@ private class PythonEditorView(context: Context) : EditText(context) {
         if (!autocompleteEnabled) return@Runnable
         val snapshot = text.toString()
         val cursor = selectionStart
-        if (cursor < 0) return@Runnable
-        val currentLine = snapshot.substring(snapshot.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)) + 1, cursor)
+        if (snapshot.isEmpty() || cursor < 0 || cursor > snapshot.length) {
+            ghostSuffix = null
+            invalidate()
+            return@Runnable
+        }
+        val lineStart = snapshot.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)) + 1
+        val currentLine = snapshot.substring(lineStart.coerceIn(0,cursor), cursor)
         if (currentLine.isBlank()) { ghostSuffix = null; invalidate(); return@Runnable }
         requestSmartCompletion?.invoke(snapshot, cursor) { suffix, cursorBack ->
             post {
@@ -759,7 +769,9 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     removeCallbacks(diagnosticsRunnable)
                     diagnostics = emptyList()
                     invalidate()
-                    val inserted = s?.subSequence(start,(start + count).coerceAtMost(s.length))?.toString().orEmpty()
+                    val safeStart = start.coerceIn(0,s?.length ?: 0)
+                    val safeEnd = (start + count).coerceIn(safeStart,s?.length ?: safeStart)
+                    val inserted = s?.subSequence(safeStart,safeEnd)?.toString().orEmpty()
                     if (inserted.contains('\n')) postDelayed(diagnosticsRunnable, 120)
                 }
             }
@@ -830,7 +842,11 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private fun updateGhostSuggestion() {
         if (!autocompleteEnabled || !hasFocus()) { ghostSuffix=null; invalidate(); return }
         val cursor = selectionStart
-        if (cursor < 0 || cursor > text.length) return
+        if (text.isEmpty() || cursor < 0 || cursor > text.length) {
+            ghostSuffix=null
+            invalidate()
+            return
+        }
         var start = cursor
         while (start > 0 && (text[start-1].isLetterOrDigit() || text[start-1]=='_')) start--
         val prefix = text.substring(start,cursor)
@@ -864,7 +880,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
 
     override fun onDraw(canvas: Canvas) {
         val editorLayout = layout
-        if (editorLayout != null) {
+        if (editorLayout != null && editorLayout.lineCount > 0) {
             if (showCurrentLine && selectionStart >= 0) {
                 val activeLine = editorLayout.getLineForOffset(selectionStart.coerceAtMost(text.length))
                 val top = editorLayout.getLineTop(activeLine) + totalPaddingTop - scrollY
@@ -883,7 +899,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
             }
         }
         super.onDraw(canvas)
-        if (editorLayout != null && diagnostics.isNotEmpty()) {
+        if (editorLayout != null && editorLayout.lineCount > 0 && diagnostics.isNotEmpty()) {
             val errorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = AndroidColor.rgb(255, 69, 88)
                 strokeWidth = 2.2f * resources.displayMetrics.density
@@ -913,7 +929,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                 }
             }
         }
-        if (editorLayout != null && showLineNumbers) {
+        if (editorLayout != null && editorLayout.lineCount > 0 && showLineNumbers) {
             val numberPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = AndroidColor.rgb(110, 118, 129)
                 textSize = this@PythonEditorView.textSize * 0.78f
@@ -931,7 +947,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val suffix=ghostSuffix ?: return
         val cursor=selectionStart
         val currentLayout=editorLayout ?: return
-        if(cursor<0 || cursor>text.length) return
+        if(currentLayout.lineCount<=0 || text.isEmpty() || cursor<0 || cursor>text.length) return
         val line=currentLayout.getLineForOffset(cursor)
         val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color=AndroidColor.argb(ghostAlpha,190,200,210)

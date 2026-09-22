@@ -50,6 +50,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -90,6 +96,7 @@ class IdeViewModel : ViewModel() {
         private set
     var output by mutableStateOf("")
     var running by mutableStateOf(false)
+    var codeDiagnostics by mutableStateOf<List<CodeDiagnostic>>(emptyList())
     var waitingInput by mutableStateOf(false)
     var input by mutableStateOf("")
     var runtimeVersion by mutableStateOf("Loading Python…")
@@ -325,6 +332,9 @@ class IdeViewModel : ViewModel() {
                     }
                 }
             }.getOrDefault(emptyList())
+            viewModelScope.launch {
+                if (code == source) codeDiagnostics = diagnostics
+            }
             deliver(diagnostics)
         }
     }
@@ -400,6 +410,17 @@ class IdeViewModel : ViewModel() {
     }
     fun run() {
         if (running) return
+        if (codeDiagnostics.isNotEmpty()) {
+            output = buildString {
+                append("Fix these errors before running:\n")
+                codeDiagnostics.take(8).forEach { issue ->
+                    val line = code.take(issue.start.coerceIn(0, code.length)).count { it == '\n' } + 1
+                    append("\nLine ").append(line).append(": ").append(issue.message)
+                }
+                if (codeDiagnostics.size > 8) append("\n\n…and ${codeDiagnostics.size - 8} more")
+            }
+            return
+        }
         save(); output = ""; running = true
         worker = thread(name = "PyDroidX-Python") {
             runCatching {
@@ -790,6 +811,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val aiScroll = rememberScrollState()
+    val consoleInputFocus = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
     val pages = listOf("PYTHON", "CONSOLE", "HELPER", "SETTINGS")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
     var showAiSettings by remember { mutableStateOf(false) }
@@ -800,6 +823,13 @@ private class PythonEditorView(context: Context) : EditText(context) {
     var settingsSection by remember { mutableStateOf("Overview") }
     LaunchedEffect(vm.aiMessages.size) {
         aiScroll.animateScrollTo(aiScroll.maxValue)
+    }
+    LaunchedEffect(vm.waitingInput, pager.currentPage) {
+        if (vm.waitingInput && pager.currentPage == 1) {
+            delay(120)
+            consoleInputFocus.requestFocus()
+            keyboardController?.show()
+        }
     }
     var showAdvancedAi by remember { mutableStateOf(false) }
     var lastBackPress by remember { mutableLongStateOf(0L) }
@@ -863,6 +893,10 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         ) {
                             if(vm.showFileInfo) Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp,modifier=Modifier.weight(1f))
                             else Spacer(Modifier.weight(1f))
+                            if(vm.codeDiagnostics.isNotEmpty()) Text(
+                                "${vm.codeDiagnostics.size} error${if(vm.codeDiagnostics.size==1)"" else "s"}",
+                                color=Color(0xFFFF4558),fontSize=11.sp,modifier=Modifier.padding(end=10.dp)
+                            )
                             Button(
                                 onClick={
                                     if(vm.running) vm.stop()
@@ -916,7 +950,13 @@ private class PythonEditorView(context: Context) : EditText(context) {
                         }
                         Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE6F5FF),fontFamily=when(vm.fontName){"Sans"->FontFamily.SansSerif;"Serif"->FontFamily.Serif;else->FontFamily.Monospace},fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(safeColor(vm.consoleBackgroundHex,0xFF030303).copy(alpha=0.74f),glassShape).border(1.dp,glassEdge,glassShape).padding(12.dp).animateContentSize().verticalScroll(rememberScrollState()))
                         if(vm.waitingInput) Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
-                            TextField(vm.input,{vm.input=it},singleLine=true,modifier=Modifier.weight(1f),placeholder={Text("Program input")})
+                            TextField(
+                                vm.input,{vm.input=it},singleLine=true,
+                                modifier=Modifier.weight(1f).focusRequester(consoleInputFocus),
+                                placeholder={Text("Program input")},
+                                keyboardOptions=KeyboardOptions(imeAction=ImeAction.Send),
+                                keyboardActions=KeyboardActions(onSend={vm.submitInput();keyboardController?.hide()})
+                            )
                             Button(onClick={vm.submitInput()}){Text("Send")}
                         }
                     }

@@ -21,6 +21,8 @@ import android.graphics.Paint
 import android.widget.EditText
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -59,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.window.Popup
@@ -124,6 +127,8 @@ class IdeViewModel : ViewModel() {
     var aiFallbackNotice by mutableStateOf<String?>(null)
     var pendingCode by mutableStateOf<String?>(null)
     var teachingOffer by mutableStateOf<String?>(null)
+    var attachedFileName by mutableStateOf<String?>(null)
+    var attachedFileText by mutableStateOf<String?>(null)
     var aiEndpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
     var aiModel by mutableStateOf("gpt-4o-mini")
     var aiProvider by mutableStateOf("Auto")
@@ -319,16 +324,37 @@ class IdeViewModel : ViewModel() {
         AiSlotConfig(2,"Third",ai3Provider,ai3Endpoint,ai3Model,aiKeys.load(2).orEmpty())
     ).filter { it.key.isNotBlank() }
 
+    fun attachFile(name: String, content: String) {
+        attachedFileName = name.takeLast(80)
+        attachedFileText = content.take(100_000)
+    }
+    fun clearAttachment() {
+        attachedFileName = null
+        attachedFileText = null
+    }
+
     fun askAi(testOnly: Boolean = false, preferredSlot: Int? = null) {
         if (aiBusy) return
         var slots = configuredAiSlots()
         if (preferredSlot != null) slots = slots.filter { it.index == preferredSlot }
         if (slots.isEmpty()) { aiReply = "Open AI settings and add an API key"; return }
-        val question = if (testOnly) "Reply with: Connection successful" else aiPrompt.trim()
-        if (question.isBlank()) return
+        val typedQuestion = if (testOnly) "Reply with: Connection successful" else aiPrompt.trim()
+        if (typedQuestion.isBlank() && attachedFileText.isNullOrBlank()) return
+        val attachmentNameSnapshot = attachedFileName
+        val attachmentTextSnapshot = attachedFileText
+        val question = if (testOnly) typedQuestion else buildString {
+            append(typedQuestion.ifBlank { "Review the attached file" })
+            if (!attachmentTextSnapshot.isNullOrBlank()) {
+                append("\n\nAttached file: ").append(attachmentNameSnapshot ?: "attachment")
+                append("\n\u0060\u0060\u0060\n").append(attachmentTextSnapshot).append("\n\u0060\u0060\u0060")
+            }
+        }
         if (!testOnly) {
-            aiMessages.add(AiMessage(true, question))
+            val visibleQuestion = typedQuestion.ifBlank { "Review this attachment" } +
+                if (attachmentNameSnapshot != null) "\nAttached  $attachmentNameSnapshot" else ""
+            aiMessages.add(AiMessage(true, visibleQuestion))
             aiPrompt = ""
+            clearAttachment()
         }
         aiBusy = true
         aiReply = if (testOnly) "Testing connection…" else "Connecting…"
@@ -1138,7 +1164,7 @@ private fun AchievementNotice(
                             Modifier.size(40.dp).background(accent.copy(alpha=0.13f),androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                                 .border(1.dp,accent.copy(alpha=0.75f),androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
                             contentAlignment=androidx.compose.ui.Alignment.Center
-                        ) { Text("◆",color=accent,fontSize=20.sp) }
+                        ) { Text("◆",color=Color(0xFF59F2DF),fontSize=20.sp) }
                         Column(Modifier.weight(1f)) {
                             Text(badge,color=accent,fontSize=8.sp,fontWeight=FontWeight.Bold,letterSpacing=1.1.sp)
                             Text(title,color=Color.White,fontSize=14.sp,fontWeight=FontWeight.Bold,maxLines=1)
@@ -1187,6 +1213,16 @@ private fun AchievementNotice(
     var modelDraft by remember { mutableStateOf(vm.aiModel) }
     var providerDraft by remember { mutableStateOf(vm.aiProvider) }
     var settingsSection by remember { mutableStateOf("Overview") }
+    val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            val name = uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
+            val content = runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText().take(100_000) }
+            }.getOrNull()
+            if (content != null) vm.attachFile(name,content)
+            else Toast.makeText(context,"Could not read that attachment",Toast.LENGTH_SHORT).show()
+        }
+    }
     LaunchedEffect(selectedAiSlot) {
         keyDraft = ""
         providerDraft = vm.providerForSlot(selectedAiSlot)
@@ -1398,33 +1434,86 @@ private fun AchievementNotice(
                             Button(onClick={vm.submitInput()}){Text("Send")}
                         }
                     }
-                    3 -> Column(Modifier.fillMaxSize().padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-                            Column(Modifier.weight(1f)){Text("HELPER",color=accent,fontSize=16.sp);Text("Only shares code when you allow it",color=Color.Gray,fontSize=10.sp)}
-                            TextButton(onClick={showAiSettings=true}){Text(if(vm.hasAiKey)"Connection" else "Add key")}
+                    3 -> Column(
+                        Modifier.fillMaxSize().background(Color.Black).padding(horizontal=14.dp,vertical=10.dp),
+                        verticalArrangement=Arrangement.spacedBy(9.dp)
+                    ) {
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.Top) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Astro",color=Color.White,fontSize=25.sp,fontWeight=FontWeight.Bold)
+                                Text("Your AI coding companion",color=Color(0xFF858993),fontSize=13.sp)
+                            }
+                            TextButton(onClick={showAiSettings=true},contentPadding=PaddingValues(horizontal=8.dp,vertical=2.dp)) {
+                                Text(
+                                    "PLAN\nCODE\nLEARN\nTOGETHER",
+                                    color=Color(0xFF777B84),fontSize=8.sp,lineHeight=11.sp,
+                                    textAlign=androidx.compose.ui.text.style.TextAlign.Start,
+                                    letterSpacing=1.sp
+                                )
+                            }
                         }
                         Column(
-                            Modifier.weight(1f).fillMaxWidth().padding(horizontal=2.dp).verticalScroll(aiScroll),
-                            verticalArrangement=Arrangement.spacedBy(10.dp)
+                            Modifier.weight(1f).fillMaxWidth().verticalScroll(aiScroll),
+                            verticalArrangement=Arrangement.spacedBy(16.dp)
                         ) {
-                            if(vm.aiMessages.isEmpty()) Text(vm.aiReply,color=Color.Gray,fontSize=14.sp)
-                            vm.aiMessages.forEach { message ->
-                                Row(Modifier.fillMaxWidth(),horizontalArrangement=if(message.fromUser) Arrangement.End else Arrangement.Start) {
+                            if(vm.aiMessages.isEmpty()) {
+                                Column(Modifier.fillMaxWidth().padding(top=34.dp),horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally) {
                                     Surface(
-                                        color=(if(message.fromUser) safeColor(vm.userBubbleHex,0xFF082F36) else safeColor(vm.helperBubbleHex,0xFF00E5FF)).copy(alpha=0.82f),
-                                        contentColor=if(message.fromUser) Color(0xFF9FF8FF) else Color.Black,
-                                        shape=androidx.compose.foundation.shape.RoundedCornerShape(vm.bubbleRadius.dp),
-                                        modifier=Modifier.widthIn(max=vm.bubbleWidth.dp)
+                                        color=Color(0xFF080808),shape=androidx.compose.foundation.shape.CircleShape,
+                                        border=BorderStroke(1.dp,Color(0xFF5B6069)),modifier=Modifier.size(68.dp)
                                     ) {
-                                        MarkdownMessage(
-                                            message.text,
-                                            if(message.fromUser) Color(0xFF9FF8FF) else Color.Black,
-                                            Modifier.padding(horizontal=14.dp,vertical=11.dp)
-                                        )
+                                        Box(contentAlignment=androidx.compose.ui.Alignment.Center) {
+                                            Column(horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally) {
+                                                Text("✦",color=Color.White,fontSize=16.sp)
+                                                Text("PY4U",color=Color.White,fontSize=12.sp,fontWeight=FontWeight.Bold)
+                                            }
+                                        }
+                                    }
+                                    Spacer(Modifier.height(12.dp))
+                                    Text("Ask Astro about Python or your code",color=Color(0xFF858993),fontSize=13.sp)
+                                }
+                            }
+                            vm.aiMessages.forEach { message ->
+                                if(message.fromUser) {
+                                    Column(Modifier.fillMaxWidth(),horizontalAlignment=androidx.compose.ui.Alignment.End) {
+                                        Text("You   now",color=Color(0xFF858993),fontSize=10.sp,modifier=Modifier.padding(end=8.dp,bottom=4.dp))
+                                        Surface(
+                                            color=Color(0xFF292A2D),
+                                            contentColor=Color.White,
+                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                                            modifier=Modifier.widthIn(max=vm.bubbleWidth.dp)
+                                        ) {
+                                            MarkdownMessage(message.text,Color.White,Modifier.padding(horizontal=14.dp,vertical=11.dp))
+                                        }
+                                    }
+                                } else if(message.text.isNotBlank()) {
+                                    Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.Top,horizontalArrangement=Arrangement.spacedBy(9.dp)) {
+                                        Surface(
+                                            color=Color(0xFF080808),shape=androidx.compose.foundation.shape.CircleShape,
+                                            border=BorderStroke(1.dp,Color(0xFF5B6069)),modifier=Modifier.size(45.dp)
+                                        ) {
+                                            Box(contentAlignment=androidx.compose.ui.Alignment.Center) {
+                                                Column(horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally) {
+                                                    Text("✦",color=Color.White,fontSize=11.sp)
+                                                    Text("PY4U",color=Color.White,fontSize=8.sp,fontWeight=FontWeight.Bold)
+                                                }
+                                            }
+                                        }
+                                        Column(Modifier.weight(1f)) {
+                                            Text("Astro   now",color=Color(0xFF858993),fontSize=10.sp,modifier=Modifier.padding(start=3.dp,bottom=5.dp))
+                                            Surface(
+                                                color=Color(0xFF030303),contentColor=Color.White,
+                                                shape=androidx.compose.foundation.shape.RoundedCornerShape(13.dp),
+                                                border=BorderStroke(1.dp,Color(0xFF393C42)),
+                                                modifier=Modifier.fillMaxWidth()
+                                            ) {
+                                                MarkdownMessage(message.text,Color.White,Modifier.padding(horizontal=14.dp,vertical=13.dp))
+                                            }
+                                        }
                                     }
                                 }
                             }
-                            if(vm.aiBusy && vm.aiMessages.isNotEmpty()) Text("Thinking…",color=accent,fontSize=12.sp)
+                            if(vm.aiBusy && vm.aiMessages.isNotEmpty()) Text("Astro is writing…",color=Color(0xFF8D929A),fontSize=11.sp)
                         }
                         vm.aiFallbackNotice?.let { status ->
                             SwitchingModelNotice(status=status,accent=accent,onFinished={vm.aiFallbackNotice=null})
@@ -1433,7 +1522,7 @@ private fun AchievementNotice(
                             AchievementNotice(
                                 badge="ACTION REQUIRED",
                                 title="Code change ready",
-                                subtitle="Helper wants permission to update ${vm.currentFileName}",
+                                subtitle="Astro wants permission to update ${vm.currentFileName}",
                                 accent=accent,
                                 primaryLabel="Apply",
                                 secondaryLabel="Ignore",
@@ -1453,15 +1542,66 @@ private fun AchievementNotice(
                                 onSecondary={vm.rejectTeaching()}
                             )
                         }
-                        Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-                            Checkbox(checked=vm.shareCode,onCheckedChange={vm.shareCode=it})
-                            Text("Share current file with provider",color=Color.Gray,fontSize=12.sp)
-                            Spacer(Modifier.weight(1f))
-                            if(vm.aiBusy)CircularProgressIndicator(Modifier.size(22.dp),strokeWidth=2.dp)
+                        if(vm.attachedFileName!=null || vm.shareCode) {
+                            Row(
+                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement=Arrangement.spacedBy(7.dp)
+                            ) {
+                                vm.attachedFileName?.let { name ->
+                                    AssistChip(
+                                        onClick={vm.clearAttachment()},
+                                        label={Text("Attached  $name  ×",maxLines=1)},
+                                        colors=AssistChipDefaults.assistChipColors(labelColor=Color.White,containerColor=Color(0xFF202124))
+                                    )
+                                }
+                                if(vm.shareCode) AssistChip(
+                                    onClick={vm.shareCode=false},
+                                    label={Text("Sharing  ${vm.currentFileName}  ×")},
+                                    colors=AssistChipDefaults.assistChipColors(labelColor=Color.White,containerColor=Color(0xFF202124))
+                                )
+                            }
                         }
-                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
-                            TextField(vm.aiPrompt,{vm.aiPrompt=it},modifier=Modifier.weight(1f),placeholder={Text("Ask about code or errors…")},maxLines=4)
-                            Button(onClick={vm.askAi()},enabled=!vm.aiBusy&&vm.aiPrompt.isNotBlank()){Text("Send")}
+                        Surface(
+                            color=Color(0xFF050505),
+                            shape=androidx.compose.foundation.shape.RoundedCornerShape(26.dp),
+                            border=BorderStroke(1.dp,Color(0xFF42454B)),
+                            modifier=Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal=8.dp,vertical=6.dp),
+                                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,
+                                horizontalArrangement=Arrangement.spacedBy(5.dp)
+                            ) {
+                                TextButton(
+                                    onClick={attachmentLauncher.launch("*/*")},
+                                    contentPadding=PaddingValues(8.dp),
+                                    modifier=Modifier.size(42.dp)
+                                ){Text("⌕",color=Color.White,fontSize=23.sp)}
+                                TextField(
+                                    vm.aiPrompt,{vm.aiPrompt=it},
+                                    modifier=Modifier.weight(1f),
+                                    placeholder={Text("Message Astro…",color=Color(0xFF777B84))},
+                                    maxLines=4,
+                                    colors=TextFieldDefaults.colors(
+                                        focusedContainerColor=Color.Transparent,unfocusedContainerColor=Color.Transparent,
+                                        focusedIndicatorColor=Color.Transparent,unfocusedIndicatorColor=Color.Transparent,
+                                        focusedTextColor=Color.White,unfocusedTextColor=Color.White
+                                    )
+                                )
+                                TextButton(
+                                    onClick={vm.shareCode=!vm.shareCode},
+                                    contentPadding=PaddingValues(5.dp),
+                                    modifier=Modifier.size(37.dp)
+                                ){Text("</>",color=if(vm.shareCode) Color.White else Color(0xFF777B84),fontSize=10.sp,fontWeight=FontWeight.Bold)}
+                                Button(
+                                    onClick={vm.askAi()},
+                                    enabled=!vm.aiBusy&&(vm.aiPrompt.isNotBlank()||vm.attachedFileName!=null),
+                                    colors=ButtonDefaults.buttonColors(containerColor=Color.White,contentColor=Color.Black,disabledContainerColor=Color(0xFF34363A)),
+                                    contentPadding=PaddingValues(0.dp),
+                                    modifier=Modifier.size(44.dp),
+                                    shape=androidx.compose.foundation.shape.CircleShape
+                                ){Text("➤",fontSize=18.sp)}
+                            }
                         }
                     }
                     else -> Column(Modifier.fillMaxSize().padding(horizontal=18.dp,vertical=12.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(14.dp)) {

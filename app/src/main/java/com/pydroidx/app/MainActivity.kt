@@ -33,7 +33,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -788,7 +794,11 @@ private class PythonEditorView(context: Context) : EditText(context) {
                                         shape=androidx.compose.foundation.shape.RoundedCornerShape(vm.bubbleRadius.dp),
                                         modifier=Modifier.widthIn(max=vm.bubbleWidth.dp)
                                     ) {
-                                        Text(message.text,fontSize=14.sp,modifier=Modifier.padding(horizontal=14.dp,vertical=11.dp))
+                                        MarkdownMessage(
+                                            message.text,
+                                            if(message.fromUser) Color(0xFF9FF8FF) else Color.Black,
+                                            Modifier.padding(horizontal=14.dp,vertical=11.dp)
+                                        )
                                     }
                                 }
                             }
@@ -981,6 +991,59 @@ private class PythonEditorView(context: Context) : EditText(context) {
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)){Text(title,color=Color(0xFFE6F5FF),fontSize=15.sp);Text(subtitle,color=Color.Gray,fontSize=11.sp)}
             Text("›",color=Color.Gray,fontSize=24.sp)
+        }
+    }
+}
+
+private fun markdownInline(source:String):AnnotatedString=buildAnnotatedString {
+    var i=0
+    while(i<source.length){
+        when {
+            source.startsWith("**",i) -> {
+                val end=source.indexOf("**",i+2)
+                if(end>i){withStyle(SpanStyle(fontWeight=FontWeight.Bold)){append(source.substring(i+2,end))};i=end+2}else{append("**");i+=2}
+            }
+            source[i]=='`' -> {
+                val end=source.indexOf('`',i+1)
+                if(end>i){withStyle(SpanStyle(fontFamily=FontFamily.Monospace,background=Color(0x33000000))){append(source.substring(i+1,end))};i=end+1}else{append('`');i++}
+            }
+            source[i]=='*' -> {
+                val end=source.indexOf('*',i+1)
+                if(end>i){withStyle(SpanStyle(fontStyle=FontStyle.Italic)){append(source.substring(i+1,end))};i=end+1}else{append('*');i++}
+            }
+            else -> {append(source[i]);i++}
+        }
+    }
+}
+
+@Composable private fun MarkdownMessage(source:String,color:Color,modifier:Modifier=Modifier){
+    Column(modifier,verticalArrangement=Arrangement.spacedBy(5.dp)){
+        var inCode=false
+        val code=StringBuilder()
+        source.lines().forEach { raw ->
+            val line=raw.trimEnd()
+            if(line.trimStart().startsWith("```")){
+                if(inCode){
+                    Surface(color=Color(0x22000000),shape=androidx.compose.foundation.shape.RoundedCornerShape(8.dp),modifier=Modifier.fillMaxWidth()){
+                        Text(code.toString().trimEnd(),color=color,fontFamily=FontFamily.Monospace,fontSize=13.sp,modifier=Modifier.padding(9.dp))
+                    }
+                    code.clear()
+                }
+                inCode=!inCode
+            }else if(inCode){
+                code.appendLine(raw)
+            }else if(line.isBlank()){
+                Spacer(Modifier.height(3.dp))
+            }else{
+                val trimmed=line.trimStart()
+                val heading=trimmed.takeWhile{it=='#'}.length.coerceAtMost(3)
+                val bullet=trimmed.startsWith("- ")||trimmed.startsWith("* ")
+                val clean=when{heading>0->trimmed.drop(heading).trimStart();bullet->"• "+trimmed.drop(2);else->line}
+                Text(markdownInline(clean),color=color,fontSize=if(heading>0)(19-heading).sp else 14.sp,fontWeight=if(heading>0)FontWeight.Bold else FontWeight.Normal)
+            }
+        }
+        if(inCode&&code.isNotEmpty()) Surface(color=Color(0x22000000),shape=androidx.compose.foundation.shape.RoundedCornerShape(8.dp),modifier=Modifier.fillMaxWidth()){
+            Text(code.toString().trimEnd(),color=color,fontFamily=FontFamily.Monospace,fontSize=13.sp,modifier=Modifier.padding(9.dp))
         }
     }
 }

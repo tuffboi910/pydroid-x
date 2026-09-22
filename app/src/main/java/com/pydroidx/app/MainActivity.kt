@@ -944,7 +944,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                                 modifier=Modifier.border(1.dp,Color.White.copy(alpha=0.24f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
                             ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
                         }
-                        Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE6F5FF),fontFamily=when(vm.fontName){"Sans"->FontFamily.SansSerif;"Serif"->FontFamily.Serif;else->FontFamily.Monospace},fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().background(safeColor(vm.consoleBackgroundHex,0xFF030303).copy(alpha=0.74f),glassShape).border(1.dp,glassEdge,glassShape).padding(12.dp).animateContentSize().verticalScroll(rememberScrollState()))
+                        Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE6F5FF),fontFamily=when(vm.fontName){"Sans"->FontFamily.SansSerif;"Serif"->FontFamily.Serif;else->FontFamily.Monospace},fontSize=vm.terminalFontSize.sp,modifier=Modifier.weight(1f).fillMaxWidth().padding(horizontal=4.dp,vertical=10.dp).animateContentSize().verticalScroll(rememberScrollState()))
                         if(vm.waitingInput) Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
                             TextField(
                                 vm.input,{vm.input=it},singleLine=true,

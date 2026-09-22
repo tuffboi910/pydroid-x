@@ -185,6 +185,7 @@ class IdeViewModel : ViewModel() {
     private val stdin = LinkedBlockingQueue<String>()
     private val stopInputSignal = "\u0000PYDROIDX_STOP\u0000"
     @Volatile private var worker: Thread? = null
+    @Volatile private var stopRequested = false
     private var autosaveJob: Job? = null
     private var namingJob: Job? = null
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -590,9 +591,10 @@ class IdeViewModel : ViewModel() {
     fun save() {
         autosaveJob?.cancel()
         val snapshot = code
+        val fileName = currentFileName
         viewModelScope.launch(Dispatchers.IO) {
             if (::projectDir.isInitialized) {
-                File(projectDir,currentFileName).writeText(snapshot)
+                File(projectDir,fileName).writeText(snapshot)
                 mainHandler.post { refreshSaved() }
             }
         }
@@ -610,10 +612,16 @@ class IdeViewModel : ViewModel() {
             }
             return
         }
-        save(); output = ""; running = true
-        worker = thread(name = "PyDroidX-Python") {
+        save()
+        val sourceSnapshot = code
+        val fileSnapshot = currentFileName
+        stdin.clear()
+        stopRequested = false
+        output = ""
+        running = true
+        worker = thread(name = "PY4U-Python") {
             runCatching {
-                Python.getInstance().getModule("runner").callAttr("run_code", code, currentFileName, projectDir.absolutePath, Bridge())
+                Python.getInstance().getModule("runner").callAttr("run_code", sourceSnapshot, fileSnapshot, projectDir.absolutePath, Bridge())
             }.onFailure { failure ->
                 mainHandler.post {
                     output += "\nRuntime error: ${failure.message ?: "Python stopped unexpectedly"}\n"
@@ -625,20 +633,38 @@ class IdeViewModel : ViewModel() {
     }
     fun submitInput() { if (waitingInput) { stdin.offer(input); input = ""; waitingInput = false } }
     fun stop() {
+        if (!running) return
+        stopRequested = true
+        stdin.clear()
         stdin.offer(stopInputSignal)
         worker?.interrupt()
         output += "\n[Stopping program…]\n"
-        running = false
         waitingInput = false
     }
     inner class Bridge {
         fun write(text: String, error: Boolean) { mainHandler.post { output += text } }
+        fun shouldStop(): Boolean = stopRequested
         fun readLine(): String? {
+            if (stopRequested) return null
             mainHandler.post { waitingInput = true }
-            return try { stdin.take().takeUnless { it == stopInputSignal } }
+            return try { stdin.take().takeUnless { it == stopInputSignal || stopRequested } }
             catch (_: InterruptedException) { null }
         }
-        fun exited(code: Int) { mainHandler.post { output += "\n[Process exited with code $code]\n"; running = false; waitingInput = false } }
+        fun exited(code: Int) { mainHandler.post {
+            output += "\n[Process exited with code $code]\n"
+            running = false
+            waitingInput = false
+            stopRequested = false
+            worker = null
+            stdin.clear()
+        } }
+    }
+
+    override fun onCleared() {
+        stopRequested = true
+        stdin.offer(stopInputSignal)
+        worker?.interrupt()
+        super.onCleared()
     }
 }
 

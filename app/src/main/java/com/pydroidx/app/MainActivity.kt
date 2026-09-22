@@ -1440,6 +1440,7 @@ private fun AchievementNotice(
                     ) {
                         Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.Top) {
                             Column(Modifier.weight(1f)) {
+                                Text("PY4U  •  CODE ANYWHERE",color=Color(0xFF858993),fontSize=8.sp,letterSpacing=1.2.sp)
                                 Text("Astro",color=Color.White,fontSize=25.sp,fontWeight=FontWeight.Bold)
                                 Text("Your AI coding companion",color=Color(0xFF858993),fontSize=13.sp)
                             }
@@ -1576,7 +1577,7 @@ private fun AchievementNotice(
                                     onClick={attachmentLauncher.launch("*/*")},
                                     contentPadding=PaddingValues(8.dp),
                                     modifier=Modifier.size(42.dp)
-                                ){Text("⌕",color=Color.White,fontSize=23.sp)}
+                                ){Text("📎",color=Color.White,fontSize=20.sp)}
                                 TextField(
                                     vm.aiPrompt,{vm.aiPrompt=it},
                                     modifier=Modifier.weight(1f),
@@ -1849,18 +1850,91 @@ private fun markdownInline(source:String):AnnotatedString=buildAnnotatedString {
     }
 }
 
+private fun pythonCodeColors(source:String):AnnotatedString=buildAnnotatedString {
+    val keywords=setOf("and","as","assert","async","await","break","class","continue","def","del","elif","else","except","False","finally","for","from","global","if","import","in","is","lambda","None","nonlocal","not","or","pass","raise","return","True","try","while","with","yield")
+    val builtins=setOf("print","input","len","range","str","int","float","list","dict","set","tuple","bool","open","enumerate","zip","map","filter","sum","min","max","abs","round","sorted","type","isinstance","super","property")
+    var i=0
+    while(i<source.length){
+        val start=i
+        when {
+            source[i]=='#' -> {
+                while(i<source.length&&source[i]!='\n') i++
+                withStyle(SpanStyle(color=Color(0xFF6A9955))){append(source.substring(start,i))}
+            }
+            source[i]=='"'||source[i]=='\'' -> {
+                val quote=source[i++]
+                while(i<source.length){
+                    if(source[i]=='\\'&&i+1<source.length){i+=2;continue}
+                    if(source[i++]==quote) break
+                }
+                withStyle(SpanStyle(color=Color(0xFFA7E36D))){append(source.substring(start,i))}
+            }
+            source[i].isDigit() -> {
+                while(i<source.length&&(source[i].isDigit()||source[i]=='.')) i++
+                withStyle(SpanStyle(color=Color(0xFFB5CEA8))){append(source.substring(start,i))}
+            }
+            source[i].isLetter()||source[i]=='_' -> {
+                i++
+                while(i<source.length&&(source[i].isLetterOrDigit()||source[i]=='_')) i++
+                val word=source.substring(start,i)
+                val style=when {
+                    word in keywords -> SpanStyle(color=Color(0xFFC586C0),fontWeight=FontWeight.SemiBold)
+                    word in builtins -> SpanStyle(color=Color(0xFF4FC1FF))
+                    else -> SpanStyle(color=Color(0xFFD4D4D4))
+                }
+                withStyle(style){append(word)}
+            }
+            else -> {append(source[i]);i++}
+        }
+    }
+}
+
+@Composable private fun AstroCodeBlock(code:String,language:String="python"){
+    val clipboard=LocalClipboardManager.current
+    val shape=androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
+    Surface(
+        color=Color(0xFF050505),
+        shape=shape,
+        modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=.18f),shape)
+    ){
+        Column{
+            Row(
+                Modifier.fillMaxWidth().background(Color.White.copy(alpha=.045f)).padding(horizontal=12.dp,vertical=8.dp),
+                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+            ){
+                Text(language.ifBlank{"python"},color=Color(0xFFB7B7BD),fontSize=11.sp,fontFamily=FontFamily.Monospace)
+                Spacer(Modifier.weight(1f))
+                TextButton(
+                    onClick={clipboard.setText(AnnotatedString(code))},
+                    contentPadding=PaddingValues(horizontal=8.dp,vertical=0.dp)
+                ){Text("▱  Copy",color=Color(0xFFEDEDF2),fontSize=11.sp)}
+            }
+            HorizontalDivider(color=Color.White.copy(alpha=.12f))
+            Text(
+                pythonCodeColors(code),
+                fontFamily=FontFamily.Monospace,
+                fontSize=13.sp,
+                lineHeight=19.sp,
+                modifier=Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp)
+            )
+        }
+    }
+}
+
 @Composable private fun MarkdownMessage(source:String,color:Color,modifier:Modifier=Modifier){
-    Column(modifier,verticalArrangement=Arrangement.spacedBy(5.dp)){
+    val fence=String(CharArray(3){96})
+    Column(modifier,verticalArrangement=Arrangement.spacedBy(6.dp)){
         var inCode=false
+        var language="python"
         val code=StringBuilder()
         source.lines().forEach { raw ->
             val line=raw.trimEnd()
-            if(line.trimStart().startsWith("```")){
+            if(line.trimStart().startsWith(fence)){
                 if(inCode){
-                    Surface(color=Color(0x22000000),shape=androidx.compose.foundation.shape.RoundedCornerShape(8.dp),modifier=Modifier.fillMaxWidth()){
-                        Text(code.toString().trimEnd(),color=color,fontFamily=FontFamily.Monospace,fontSize=13.sp,modifier=Modifier.padding(9.dp))
-                    }
+                    AstroCodeBlock(code.toString().trimEnd(),language)
                     code.clear()
+                }else{
+                    language=line.trimStart().removePrefix(fence).trim().ifBlank{"python"}
                 }
                 inCode=!inCode
             }else if(inCode){
@@ -1871,13 +1945,23 @@ private fun markdownInline(source:String):AnnotatedString=buildAnnotatedString {
                 val trimmed=line.trimStart()
                 val heading=trimmed.takeWhile{it=='#'}.length.coerceAtMost(3)
                 val bullet=trimmed.startsWith("- ")||trimmed.startsWith("* ")
-                val clean=when{heading>0->trimmed.drop(heading).trimStart();bullet->"• "+trimmed.drop(2);else->line}
-                Text(markdownInline(clean),color=color,fontSize=if(heading>0)(19-heading).sp else 14.sp,fontWeight=if(heading>0)FontWeight.Bold else FontWeight.Normal)
+                val numbered=Regex("^\\d+\\.\\s+").containsMatchIn(trimmed)
+                val clean=when{
+                    heading>0->trimmed.drop(heading).trimStart()
+                    bullet->"• "+trimmed.drop(2)
+                    numbered->trimmed
+                    else->line
+                }
+                Text(
+                    markdownInline(clean),
+                    color=color,
+                    fontSize=if(heading>0)(19-heading).sp else 14.sp,
+                    lineHeight=20.sp,
+                    fontWeight=if(heading>0)FontWeight.Bold else FontWeight.Normal
+                )
             }
         }
-        if(inCode&&code.isNotEmpty()) Surface(color=Color(0x22000000),shape=androidx.compose.foundation.shape.RoundedCornerShape(8.dp),modifier=Modifier.fillMaxWidth()){
-            Text(code.toString().trimEnd(),color=color,fontFamily=FontFamily.Monospace,fontSize=13.sp,modifier=Modifier.padding(9.dp))
-        }
+        if(inCode&&code.isNotEmpty()) AstroCodeBlock(code.toString().trimEnd(),language)
     }
 }
 

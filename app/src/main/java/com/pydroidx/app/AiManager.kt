@@ -115,9 +115,13 @@ object AiClient {
             throw IllegalStateException(message ?: "Provider returned HTTP ${connection.responseCode}")
         }
         val answer = StringBuilder()
+        val plainResponse = StringBuilder()
         connection.inputStream.bufferedReader().useLines { lines ->
             lines.forEach { line ->
-                if (!line.startsWith("data:")) return@forEach
+                if (!line.startsWith("data:")) {
+                    plainResponse.append(line)
+                    return@forEach
+                }
                 val payload = line.removePrefix("data:").trim()
                 if (payload.isEmpty() || payload == "[DONE]") return@forEach
                 val delta = runCatching {
@@ -130,8 +134,13 @@ object AiClient {
                 }
             }
         }
-        if (answer.isEmpty()) throw IllegalStateException("Provider returned an empty streaming response")
-        return answer.toString()
+        if (answer.isNotEmpty()) return answer.toString()
+        val nonStreaming = runCatching {
+            JSONObject(plainResponse.toString()).getJSONArray("choices").getJSONObject(0)
+                .getJSONObject("message").getString("content")
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Provider returned an empty or unsupported response")
+        return revealWords(nonStreaming,onPartial)
     }
 
     private const val SYSTEM_PROMPT = """You are PY4U's concise Python coding Helper. Explain clearly. If the user asks to fix, add, remove, refactor, or otherwise change their code, return the COMPLETE updated current file in exactly one fenced python block; the app will ask the user before applying it, so never claim it was already applied. When a short lesson would genuinely help, end with exactly [TEACH:short topic]. Do not add a teaching offer to every reply."""

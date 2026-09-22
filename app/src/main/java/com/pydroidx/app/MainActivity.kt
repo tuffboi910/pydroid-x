@@ -80,7 +80,7 @@ import org.json.JSONArray
 import kotlin.math.absoluteValue
 import java.net.URL
 
-data class AiMessage(val fromUser: Boolean, val text: String)
+data class AiMessage(val fromUser: Boolean, val text: String)\ndata class AiSlotConfig(val index: Int, val label: String, val provider: String, val endpoint: String, val model: String, val key: String)
 data class CodeDiagnostic(val start: Int, val end: Int, val message: String)
 
 private val FONT_VAULT = """
@@ -118,6 +118,12 @@ class IdeViewModel : ViewModel() {
     var aiEndpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
     var aiModel by mutableStateOf("gpt-4o-mini")
     var aiProvider by mutableStateOf("Auto")
+    var ai2Endpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
+    var ai2Model by mutableStateOf("")
+    var ai2Provider by mutableStateOf("Auto")
+    var ai3Endpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
+    var ai3Model by mutableStateOf("")
+    var ai3Provider by mutableStateOf("Auto")
     var shareCode by mutableStateOf(false)
     var hasAiKey by mutableStateOf(false)
     var editorFontSize by mutableFloatStateOf(16f)
@@ -208,6 +214,12 @@ class IdeViewModel : ViewModel() {
         aiModel = settings.getString("ai_model", "gpt-4o-mini")
             ?.trim()?.takeIf { it.isNotEmpty() } ?: "gpt-4o-mini"
         aiProvider = settings.getString("ai_provider", "Auto") ?: "Auto"
+        ai2Endpoint = settings.getString("ai2_endpoint", "https://api.openai.com/v1/chat/completions") ?: "https://api.openai.com/v1/chat/completions"
+        ai2Model = settings.getString("ai2_model", "") ?: ""
+        ai2Provider = settings.getString("ai2_provider", "Auto") ?: "Auto"
+        ai3Endpoint = settings.getString("ai3_endpoint", "https://api.openai.com/v1/chat/completions") ?: "https://api.openai.com/v1/chat/completions"
+        ai3Model = settings.getString("ai3_model", "") ?: ""
+        ai3Provider = settings.getString("ai3_provider", "Auto") ?: "Auto"
         lineNumbers = settings.getBoolean("line_numbers", true)
         highlightCurrentLine = settings.getBoolean("current_line", true)
         accentHex = settings.getString("accent_hex", "#00E5FF") ?: "#00E5FF"
@@ -236,7 +248,7 @@ class IdeViewModel : ViewModel() {
         toolbarHeight=settings.getFloat("toolbar_height",52f);bubbleRadius=settings.getFloat("bubble_radius",16f)
         bubbleWidth=settings.getFloat("bubble_width",310f);pageDotSize=settings.getFloat("page_dot_size",8f)
         showHeader=settings.getBoolean("show_header",true);showFileInfo=settings.getBoolean("show_file_info",true)
-        hasAiKey = !aiKeys.load().isNullOrBlank()
+        hasAiKey = (0..2).any { !aiKeys.load(it).isNullOrBlank() }
         projectDir = File(context.filesDir, "projects/default").apply { mkdirs() }
         val main = File(projectDir, "main.py")
         val legacyStarter = "print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n"
@@ -254,21 +266,44 @@ class IdeViewModel : ViewModel() {
             mainHandler.post { runtimeVersion = version }
         }
     }
-    fun saveAiSettings(key: String, endpoint: String, model: String, provider: String = aiProvider) {
-        if (key.isNotBlank()) aiKeys.save(key)
-        aiProvider = provider
-        aiEndpoint = endpoint.trim().takeIf { it.startsWith("https://") }
+    fun providerForSlot(slot: Int) = when(slot) { 1 -> ai2Provider; 2 -> ai3Provider; else -> aiProvider }
+    fun endpointForSlot(slot: Int) = when(slot) { 1 -> ai2Endpoint; 2 -> ai3Endpoint; else -> aiEndpoint }
+    fun modelForSlot(slot: Int) = when(slot) { 1 -> ai2Model; 2 -> ai3Model; else -> aiModel }
+    fun slotConfigured(slot: Int) = !aiKeys.load(slot).isNullOrBlank()
+
+    fun saveAiSettings(key: String, endpoint: String, model: String, provider: String, slot: Int = 0) {
+        if (key.isNotBlank()) aiKeys.save(key, slot)
+        val safeEndpoint = endpoint.trim().takeIf { it.startsWith("https://") }
             ?: "https://api.openai.com/v1/chat/completions"
-        aiModel = model.trim().ifEmpty { "gpt-4o-mini" }
-        settings.edit().putString("ai_endpoint", aiEndpoint).putString("ai_model", aiModel)
-            .putString("ai_provider", aiProvider).apply()
-        hasAiKey = !aiKeys.load().isNullOrBlank()
+        val safeModel = model.trim()
+        when(slot) {
+            1 -> { ai2Provider=provider; ai2Endpoint=safeEndpoint; ai2Model=safeModel }
+            2 -> { ai3Provider=provider; ai3Endpoint=safeEndpoint; ai3Model=safeModel }
+            else -> { aiProvider=provider; aiEndpoint=safeEndpoint; aiModel=safeModel.ifEmpty { "gpt-4o-mini" } }
+        }
+        val prefix = when(slot) { 1 -> "ai2"; 2 -> "ai3"; else -> "ai" }
+        settings.edit().putString("${prefix}_endpoint",safeEndpoint)
+            .putString("${prefix}_model",if(slot==0) aiModel else safeModel)
+            .putString("${prefix}_provider",provider).apply()
+        hasAiKey = (0..2).any { !aiKeys.load(it).isNullOrBlank() }
     }
-    fun removeAiKey() { aiKeys.clear(); hasAiKey = false }
-    fun askAi(testOnly: Boolean = false) {
+
+    fun removeAiKey(slot: Int = 0) {
+        aiKeys.clear(slot)
+        hasAiKey = (0..2).any { !aiKeys.load(it).isNullOrBlank() }
+    }
+
+    private fun configuredAiSlots(): List<AiSlotConfig> = listOf(
+        AiSlotConfig(0,"Main",aiProvider,aiEndpoint,aiModel,aiKeys.load(0).orEmpty()),
+        AiSlotConfig(1,"Second",ai2Provider,ai2Endpoint,ai2Model,aiKeys.load(1).orEmpty()),
+        AiSlotConfig(2,"Third",ai3Provider,ai3Endpoint,ai3Model,aiKeys.load(2).orEmpty())
+    ).filter { it.key.isNotBlank() }
+
+    fun askAi(testOnly: Boolean = false, preferredSlot: Int? = null) {
         if (aiBusy) return
-        val key = aiKeys.load()
-        if (key.isNullOrBlank()) { aiReply = "Open AI settings and add your API key"; return }
+        var slots = configuredAiSlots()
+        if (preferredSlot != null) slots = slots.filter { it.index == preferredSlot }
+        if (slots.isEmpty()) { aiReply = "Open AI settings and add an API key"; return }
         val question = if (testOnly) "Reply with: Connection successful" else aiPrompt.trim()
         if (question.isBlank()) return
         if (!testOnly) {
@@ -278,40 +313,52 @@ class IdeViewModel : ViewModel() {
         aiBusy = true
         aiReply = if (testOnly) "Testing connection…" else "Connecting…"
         if (!testOnly) aiMessages.add(AiMessage(false, ""))
-        thread(name = "PyDroidX-AI") {
+        thread(name = "PY4U-AI") {
+            val historySnapshot = if (!testOnly) aiMessages.dropLast(2).toList() else emptyList()
             val result = runCatching {
-                val historySnapshot = if (!testOnly) aiMessages.dropLast(2).toList() else emptyList()
-                AiClient.chat(
-                    providerSetting=aiProvider,
-                    endpoint=aiEndpoint,
-                    apiKey=key,
-                    modelSetting=aiModel,
-                    prompt=question,
-                    code=if (!testOnly && shareCode) code else null,
-                    history=historySnapshot,
-                    onStatus={ status -> viewModelScope.launch { aiFallbackNotice=status } }
-                ) { partial ->
-                    viewModelScope.launch {
-                        if (!testOnly && aiMessages.isNotEmpty()) {
-                            aiMessages[aiMessages.lastIndex] = AiMessage(false, partial)
-                            aiReply = partial
+                var lastFailure: Throwable? = null
+                slots.forEachIndexed { index, slot ->
+                    try {
+                        if (index > 0) viewModelScope.launch {
+                            aiFallbackNotice = "${slots[index-1].label} AI unavailable • switching to ${slot.label} AI"
                         }
+                        return@runCatching AiClient.chat(
+                            providerSetting=slot.provider,
+                            endpoint=slot.endpoint,
+                            apiKey=slot.key,
+                            modelSetting=slot.model,
+                            prompt=question,
+                            code=if (!testOnly && shareCode) code else null,
+                            history=historySnapshot,
+                            onStatus={ status -> viewModelScope.launch { aiFallbackNotice="${slot.label}: $status" } }
+                        ) { partial ->
+                            viewModelScope.launch {
+                                if (!testOnly && aiMessages.isNotEmpty()) {
+                                    aiMessages[aiMessages.lastIndex] = AiMessage(false, partial)
+                                    aiReply = partial
+                                }
+                            }
+                        }
+                    } catch (failure: Throwable) {
+                        lastFailure = failure
                     }
                 }
+                throw lastFailure ?: IllegalStateException("No configured AI connection worked")
             }
-            val answer = result.getOrElse { "AI error: ${it.message ?: "Request failed"}" }
+            val answer = result.getOrElse { "AI error: ${it.message ?: "All three AI connections failed"}" }
             viewModelScope.launch {
-                val cleanAnswer = answer.replace(Regex("\\s*\\[TEACH:[^]]+]", RegexOption.IGNORE_CASE), "").trimEnd()
+                val cleanAnswer = answer.replace(Regex("\\s*\\[TEACH:[^]]+]",RegexOption.IGNORE_CASE),"").trimEnd()
                 aiReply = cleanAnswer
                 if (!testOnly) {
-                    if (aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex] = AiMessage(false, cleanAnswer)
-                    extractPythonFile(answer)?.let { pendingCode = it }
-                    teachingOffer = extractTeachingOffer(answer)
+                    if (aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex] = AiMessage(false,cleanAnswer)
+                    extractPythonFile(answer)?.let { pendingCode=it }
+                    teachingOffer=extractTeachingOffer(answer)
                 }
-                aiBusy = false
+                aiBusy=false
             }
         }
     }
+
     private fun extractPythonFile(answer: String): String? {
         val match = Regex("```(?:python|py)\\s*\\n([\\s\\S]*?)```", RegexOption.IGNORE_CASE).find(answer) ?: return null
         return match.groupValues[1].trimEnd().takeIf { it.isNotBlank() }

@@ -1456,15 +1456,11 @@ private fun AchievementNotice(
                                     horizontalArrangement=Arrangement.spacedBy(8.dp),
                                     verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                                 ){
-                                    listOf("Tab","(",")","[","]","{","}","\"",":","=","↶","↷").forEach{key->
+                                    listOf("Tab","(",")","[","]","{","}","\"",":","=").forEach{key->
                                         OutlinedButton(
                                             onClick={
-                                                when(key){
-                                                    "↶"->editorView?.undo()
-                                                    "↷"->editorView?.redo()
-                                                    else->if(key=="Tab"&&editorView?.acceptGhostSuggestion()==true) Unit
-                                                    else editorView?.insertAtCursor(if(key=="Tab")"    " else key)
-                                                }
+                                                if(key=="Tab"&&editorView?.acceptGhostSuggestion()==true) Unit
+                                                else editorView?.insertAtCursor(if(key=="Tab")"    " else key)
                                             },
                                             modifier=Modifier.width(if(key=="Tab")70.dp else 54.dp).fillMaxHeight(),
                                             shape=androidx.compose.foundation.shape.RoundedCornerShape(11.dp),

@@ -889,8 +889,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             Modifier.fillMaxWidth().padding(start=14.dp,end=14.dp,top=10.dp,bottom=8.dp),
                             verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                         ) {
-                            if(vm.showFileInfo) Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp,modifier=Modifier.weight(1f))
-                            else Spacer(Modifier.weight(1f))
+                            Spacer(Modifier.weight(1f))
                             if(vm.codeDiagnostics.isNotEmpty()) Text(
                                 "${vm.codeDiagnostics.size} error${if(vm.codeDiagnostics.size==1)"" else "s"}",
                                 color=Color(0xFFFF4558),fontSize=11.sp,modifier=Modifier.padding(end=10.dp)

@@ -111,7 +111,7 @@ class IdeViewModel : ViewModel() {
     var aiPrompt by mutableStateOf("")
     var aiReply by mutableStateOf("Ask about Python, your error, or your selected code")
     val aiMessages = mutableStateListOf<AiMessage>()
-    var aiBusy by mutableStateOf(false)
+    var aiBusy by mutableStateOf(false)\n    var aiFallbackNotice by mutableStateOf<String?>(null)
     var pendingCode by mutableStateOf<String?>(null)
     var teachingOffer by mutableStateOf<String?>(null)
     var aiEndpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
@@ -279,7 +279,17 @@ class IdeViewModel : ViewModel() {
         if (!testOnly) aiMessages.add(AiMessage(false, ""))
         thread(name = "PyDroidX-AI") {
             val result = runCatching {
-                AiClient.chat(aiProvider, aiEndpoint, key, aiModel, question, if (!testOnly && shareCode) code else null) { partial ->
+                val historySnapshot = if (!testOnly) aiMessages.dropLast(2).toList() else emptyList()
+                AiClient.chat(
+                    providerSetting=aiProvider,
+                    endpoint=aiEndpoint,
+                    apiKey=key,
+                    modelSetting=aiModel,
+                    prompt=question,
+                    code=if (!testOnly && shareCode) code else null,
+                    history=historySnapshot,
+                    onStatus={ status -> viewModelScope.launch { aiFallbackNotice=status } }
+                ) { partial ->
                     viewModelScope.launch {
                         if (!testOnly && aiMessages.isNotEmpty()) {
                             aiMessages[aiMessages.lastIndex] = AiMessage(false, partial)
@@ -337,7 +347,7 @@ class IdeViewModel : ViewModel() {
         }
     }
     fun requestDiagnostics(source: String, deliver: (List<CodeDiagnostic>) -> Unit) {
-        thread(name="py4u-Diagnostics") {
+        thread(name="PY4U-Diagnostics") {
             val diagnostics = runCatching {
                 val raw = Python.getInstance().getModule("runner").callAttr("diagnose", source).toString()
                 val values = JSONArray(raw)
@@ -398,7 +408,7 @@ class IdeViewModel : ViewModel() {
         thread(name="PyDroidX-Font") {
             val result = runCatching {
                 val api = URL("https://api.github.com/repos/google/fonts/contents/ofl/$slug").openConnection().apply {
-                    setRequestProperty("User-Agent", "py4u")
+                    setRequestProperty("User-Agent", "PY4U")
                     connectTimeout=15_000;readTimeout=30_000
                 }.getInputStream().bufferedReader().use { it.readText() }
                 val files = JSONArray(api)
@@ -815,6 +825,37 @@ private class PythonEditorView(context: Context) : EditText(context) {
 }
 
 @Composable
+private fun SwitchingModelNotice(status: String, accent: Color, onFinished: () -> Unit) {
+    var visible by remember(status) { mutableStateOf(false) }
+    LaunchedEffect(status) {
+        visible=true
+        delay(2400)
+        visible=false
+        delay(220)
+        onFinished()
+    }
+    AnimatedVisibility(
+        visible=visible,
+        enter=slideInVertically(initialOffsetY={-it})+fadeIn()+scaleIn(initialScale=0.96f),
+        exit=slideOutVertically(targetOffsetY={-it/2})+fadeOut()+scaleOut(targetScale=0.98f)
+    ) {
+        val shape=androidx.compose.foundation.shape.RoundedCornerShape(9.dp)
+        Row(
+            Modifier.fillMaxWidth().background(Color(0xF20A0D10),shape)
+                .border(1.dp,accent.copy(alpha=0.7f),shape).padding(horizontal=13.dp,vertical=10.dp),
+            verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,
+            horizontalArrangement=Arrangement.spacedBy(10.dp)
+        ) {
+            CircularProgressIndicator(Modifier.size(18.dp),color=accent,strokeWidth=2.dp)
+            Column {
+                Text("AI FALLBACK",color=accent,fontSize=9.sp,fontWeight=FontWeight.Bold,letterSpacing=1.sp)
+                Text(status,color=Color.White,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+@Composable
 private fun AchievementNotice(
     badge: String,
     title: String,
@@ -1066,6 +1107,9 @@ private fun AchievementNotice(
                             }
                             if(vm.aiBusy && vm.aiMessages.isNotEmpty()) Text("Thinking…",color=accent,fontSize=12.sp)
                         }
+                        vm.aiFallbackNotice?.let { status ->
+                            SwitchingModelNotice(status=status,accent=accent,onFinished={vm.aiFallbackNotice=null})
+                        }
                         vm.pendingCode?.let {
                             AchievementNotice(
                                 badge="ACTION REQUIRED",
@@ -1104,7 +1148,7 @@ private fun AchievementNotice(
                     else -> Column(Modifier.fillMaxSize().padding(horizontal=18.dp,vertical=12.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(14.dp)) {
                         Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                             if(settingsSection!="Overview") TextButton(onClick={settingsSection="Overview"},contentPadding=PaddingValues(end=12.dp)){Text("‹ Back")}
-                            Column(Modifier.weight(1f)){Text(if(settingsSection=="Overview") "SETTINGS" else settingsSection.uppercase(),color=accent,fontSize=18.sp);Text(if(settingsSection=="Overview") "Make py4u yours" else "Focused controls",color=Color.Gray,fontSize=11.sp)}
+                            Column(Modifier.weight(1f)){Text(if(settingsSection=="Overview") "SETTINGS" else settingsSection.uppercase(),color=accent,fontSize=18.sp);Text(if(settingsSection=="Overview") "Make PY4U yours" else "Focused controls",color=Color.Gray,fontSize=11.sp)}
                         }
                         TextField(vm.settingsQuery,{vm.settingsQuery=it},singleLine=true,modifier=Modifier.fillMaxWidth(),placeholder={Text("Search every setting…")})
                         if(settingsSection=="Overview" && vm.settingsQuery.isBlank()){

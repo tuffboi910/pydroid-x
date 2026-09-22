@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <application android:name="com.chaquo.python.android.PyApplication" android:theme="@style/Theme.PyDroidX" android:label="pAithon" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true">
+    <application android:name="com.chaquo.python.android.PyApplication" android:theme="@style/Theme.PyDroidX" android:label="py4u" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true">
         <activity android:name=".MainActivity" android:screenOrientation="unspecified" android:windowSoftInputMode="adjustResize" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

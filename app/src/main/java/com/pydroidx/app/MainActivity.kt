@@ -633,11 +633,6 @@ private class PythonEditorView(context: Context) : EditText(context) {
         if (!autocompleteEnabled || !hasFocus()) { ghostSuffix=null; invalidate(); return }
         val cursor = selectionStart
         if (cursor < 0 || cursor > text.length) return
-        var start = cursor
-        while (start > 0 && (text[start-1].isLetterOrDigit() || text[start-1]=='_')) start--
-        val prefix = text.substring(start,cursor)
-        val lineStart = text.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)) + 1
-        if (text.substring(lineStart, cursor).isBlank()) { ghostSuffix=null; invalidate(); return }
         val projectNames = Regex("\\b(?:def|class)\\s+([A-Za-z_]\\w*)|\\b([A-Za-z_]\\w*)\\s*=")
             .findAll(text).flatMap { it.groupValues.drop(1).asSequence() }.filter { it.isNotEmpty() }
         val localMatch = if (prefix.isNotEmpty()) completions.entries.firstOrNull {

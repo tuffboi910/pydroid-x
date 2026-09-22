@@ -630,7 +630,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
     }
 
     private fun updateGhostSuggestion() {
-        if (!autocompleteEnabled || !hasFocus()) { ghostSuffix=null; invalidate(); return }
+        val prefix = text.substring(start,cursor)
+        val lineStart = text.lastIndexOf        if (!autocompleteEnabled || !hasFocus()) { ghostSuffix=null; invalidate(); return }
         val cursor = selectionStart
         if (cursor < 0 || cursor > text.length) return
         val projectNames = Regex("\\b(?:def|class)\\s+([A-Za-z_]\\w*)|\\b([A-Za-z_]\\w*)\\s*=")

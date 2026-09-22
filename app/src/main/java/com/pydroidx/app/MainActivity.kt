@@ -480,7 +480,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var ghostCursorBack = 0
     private var ghostPrefixStart = 0
     private var diagnostics: List<CodeDiagnostic> = emptyList()
-    private var showLineNumbers = false
+    private var showLineNumbers = true
     private var showCurrentLine = true
     private var userPadding = 20
     private var editorTextColor=AndroidColor.rgb(212,212,212)
@@ -610,7 +610,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
         highlightDelayMs = highlightDelay.toLong()
         autocompleteEnabled = autocomplete
         ghostAlpha = (ghostBrightness * 255).toInt().coerceIn(35,210)
-        showLineNumbers = false
+        showLineNumbers = lineNumbers
         showCurrentLine = currentLine
         fun parsed(index:Int,fallback:Int)=runCatching{AndroidColor.parseColor(palette[index])}.getOrDefault(fallback)
         editorTextColor=parsed(0,AndroidColor.rgb(212,212,212));commentColor=parsed(1,AndroidColor.rgb(106,153,85))

@@ -984,11 +984,18 @@ private fun AchievementNotice(
     val pages = listOf("PYTHON", "CONSOLE", "HELPER", "SETTINGS")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
     var showAiSettings by remember { mutableStateOf(false) }
+    var selectedAiSlot by remember { mutableIntStateOf(0) }
     var keyDraft by remember { mutableStateOf("") }
     var endpointDraft by remember { mutableStateOf(vm.aiEndpoint) }
     var modelDraft by remember { mutableStateOf(vm.aiModel) }
     var providerDraft by remember { mutableStateOf(vm.aiProvider) }
     var settingsSection by remember { mutableStateOf("Overview") }
+    LaunchedEffect(selectedAiSlot) {
+        keyDraft = ""
+        providerDraft = vm.providerForSlot(selectedAiSlot)
+        endpointDraft = vm.endpointForSlot(selectedAiSlot)
+        modelDraft = vm.modelForSlot(selectedAiSlot)
+    }
     LaunchedEffect(vm.aiMessages.size) {
         aiScroll.animateScrollTo(aiScroll.maxValue)
     }
@@ -1326,26 +1333,69 @@ private fun AchievementNotice(
         }
     }
     if(showAiSettings) AlertDialog(
-        onDismissRequest={showAiSettings=false},containerColor=Color(0xFF0A0A0A),title={Text("AI connection")},
-        text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
-            Text("Paste an API key — Auto detects popular providers",fontSize=13.sp,color=Color(0xFFD4D4D4))
-            TextField(keyDraft,{keyDraft=it},label={Text(if(vm.hasAiKey)"New API key (optional)" else "API key")},singleLine=true,visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation())
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)){
-                listOf("Auto","OpenAI","Gemini","Claude","OpenRouter","Groq","Custom").forEach{provider->
-                    FilterChip(selected=providerDraft==provider,onClick={providerDraft=provider},label={Text(provider)})
+        onDismissRequest={showAiSettings=false},
+        containerColor=Color(0xFF0A0A0A),
+        title={Text("AI fallback chain")},
+        text={
+            Column(
+                Modifier.heightIn(max=560.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement=Arrangement.spacedBy(10.dp)
+            ) {
+                Text("Configure up to three independent providers  PY4U tries them in order",fontSize=12.sp,color=Color(0xFFB8BEC7))
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                    listOf("Main","Second","Third").forEachIndexed { index,label ->
+                        FilterChip(
+                            selected=selectedAiSlot==index,
+                            onClick={selectedAiSlot=index},
+                            label={Text(label)},
+                            leadingIcon={if(vm.slotConfigured(index)) {{Text("✓",color=Color(0xFF00E676))}} else null},
+                            modifier=Modifier.weight(1f)
+                        )
+                    }
+                }
+                Text("${listOf("MAIN","SECOND","THIRD")[selectedAiSlot]} AI",color=MaterialTheme.colorScheme.primary,fontSize=11.sp,fontWeight=FontWeight.Bold)
+                TextField(
+                    keyDraft,{keyDraft=it},
+                    label={Text(if(vm.slotConfigured(selectedAiSlot)) "New API key  optional" else "API key")},
+                    singleLine=true,
+                    visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    modifier=Modifier.fillMaxWidth()
+                )
+                Text("Provider",fontSize=11.sp,color=Color.Gray)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                    listOf("Auto","OpenAI","Gemini","Claude","OpenRouter","Groq","Custom").forEach { provider ->
+                        FilterChip(selected=providerDraft==provider,onClick={providerDraft=provider},label={Text(provider)})
+                    }
+                }
+                TextField(modelDraft,{modelDraft=it},label={Text("Model  e g gemini-3.6-flash")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                TextField(endpointDraft,{endpointDraft=it},label={Text("API endpoint or compatible link")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                Text(
+                    when(selectedAiSlot) { 0->"Used first";1->"Used automatically if Main fails";else->"Used if Main and Second fail" },
+                    color=Color.Gray,fontSize=11.sp
+                )
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                    Button(
+                        onClick={
+                            vm.saveAiSettings(keyDraft,endpointDraft,modelDraft,providerDraft,selectedAiSlot)
+                            keyDraft=""
+                            vm.askAi(testOnly=true,preferredSlot=selectedAiSlot)
+                        },
+                        modifier=Modifier.weight(1f)
+                    ){Text("Save & test")}
+                    if(vm.slotConfigured(selectedAiSlot)) OutlinedButton(
+                        onClick={vm.removeAiKey(selectedAiSlot)},
+                        colors=ButtonDefaults.outlinedButtonColors(contentColor=Color(0xFFFF3D71))
+                    ){Text("Remove")}
                 }
             }
-            TextButton(onClick={showAdvancedAi=!showAdvancedAi}){Text(if(showAdvancedAi)"Hide advanced" else "Advanced")}
-            if(showAdvancedAi){
-                TextField(endpointDraft,{endpointDraft=it},label={Text("Custom endpoint")},singleLine=true)
-                TextField(modelDraft,{modelDraft=it},label={Text("Model")},singleLine=true)
-            }
-            Row{
-                TextButton(onClick={vm.saveAiSettings(keyDraft,endpointDraft,modelDraft,providerDraft);keyDraft="";vm.askAi(true)}){Text("Save & test")}
-                if(vm.hasAiKey) TextButton(onClick={vm.removeAiKey()}){Text("Remove",color=Color(0xFFFF3D71))}
-            }
-        }},
-        confirmButton={Button(onClick={vm.saveAiSettings(keyDraft,endpointDraft,modelDraft,providerDraft);keyDraft="";showAiSettings=false}){Text("Save")}},
+        },
+        confirmButton={
+            Button(onClick={
+                vm.saveAiSettings(keyDraft,endpointDraft,modelDraft,providerDraft,selectedAiSlot)
+                keyDraft=""
+                showAiSettings=false
+            }){Text("Save")}
+        },
         dismissButton={TextButton(onClick={showAiSettings=false}){Text("Cancel")}}
     )
 }

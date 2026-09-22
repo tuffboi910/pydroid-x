@@ -1496,7 +1496,7 @@ private fun AchievementNotice(
                                             keyboardActions=KeyboardActions(onSend={if(vm.waitingInput){vm.submitInput();keyboardController?.hide()}})
                                         )
                                         Button(
-                                            onClick={if(vm.waitingInput) vm.submitInput else ({})},
+                                            onClick={if(vm.waitingInput) vm.submitInput()},
                                             enabled=vm.waitingInput,
                                             shape=androidx.compose.foundation.shape.CircleShape,
                                             contentPadding=PaddingValues(0.dp),

@@ -30,7 +30,7 @@ class SecureAiKeyStore(private val context: Context) {
         }
     }
 
-    fun save(value: String) {
+    fun save(value: String, slot: Int = 0) {
         if (value.isBlank()) { clear(); return }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
@@ -48,7 +48,7 @@ class SecureAiKeyStore(private val context: Context) {
         String(cipher.doFinal(encrypted))
     }.getOrNull()
 
-    fun clear() = prefs.edit().clear().apply()
+    fun clear(slot: Int = 0) = prefs.edit().remove("value_$slot").remove("iv_$slot").apply()
 }
 
 private class ProviderHttpException(val code: Int, message: String) : IllegalStateException(message)

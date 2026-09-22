@@ -94,6 +94,8 @@ class IdeViewModel : ViewModel() {
     var aiReply by mutableStateOf("Ask about Python, your error, or your selected code")
     val aiMessages = mutableStateListOf<AiMessage>()
     var aiBusy by mutableStateOf(false)
+    var pendingCode by mutableStateOf<String?>(null)
+    var teachingOffer by mutableStateOf<String?>(null)
     var aiEndpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
     var aiModel by mutableStateOf("gpt-4o-mini")
     var aiProvider by mutableStateOf("Auto")
@@ -243,17 +245,55 @@ class IdeViewModel : ViewModel() {
             aiPrompt = ""
         }
         aiBusy = true
-        aiReply = if (testOnly) "Testing connection…" else "Thinking…"
+        aiReply = if (testOnly) "Testing connection…" else "Connecting…"
+        if (!testOnly) aiMessages.add(AiMessage(false, ""))
         thread(name = "PyDroidX-AI") {
-            val result = runCatching { AiClient.chat(aiProvider, aiEndpoint, key, aiModel, question, if (!testOnly && shareCode) code else null) }
+            val result = runCatching {
+                AiClient.chat(aiProvider, aiEndpoint, key, aiModel, question, if (!testOnly && shareCode) code else null) { partial ->
+                    viewModelScope.launch {
+                        if (!testOnly && aiMessages.isNotEmpty()) {
+                            aiMessages[aiMessages.lastIndex] = AiMessage(false, partial)
+                            aiReply = partial
+                        }
+                    }
+                }
+            }
             val answer = result.getOrElse { "AI error: ${it.message ?: "Request failed"}" }
             viewModelScope.launch {
-                aiReply = answer
-                if (!testOnly) aiMessages.add(AiMessage(false, answer))
+                val cleanAnswer = answer.replace(Regex("\\s*\\[TEACH:[^]]+]", RegexOption.IGNORE_CASE), "").trimEnd()
+                aiReply = cleanAnswer
+                if (!testOnly) {
+                    if (aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex] = AiMessage(false, cleanAnswer)
+                    extractPythonFile(answer)?.let { pendingCode = it }
+                    teachingOffer = extractTeachingOffer(answer)
+                }
                 aiBusy = false
             }
         }
     }
+    private fun extractPythonFile(answer: String): String? {
+        val match = Regex("```(?:python|py)\\s*\\n([\\s\\S]*?)```", RegexOption.IGNORE_CASE).find(answer) ?: return null
+        return match.groupValues[1].trimEnd().takeIf { it.isNotBlank() }
+    }
+    private fun extractTeachingOffer(answer: String): String? =
+        Regex("\\[TEACH:([^]]+)]", RegexOption.IGNORE_CASE).find(answer)?.groupValues?.get(1)?.trim()
+
+    fun applyPendingCode() {
+        val replacement = pendingCode ?: return
+        code = replacement + if (replacement.endsWith("\n")) "" else "\n"
+        editorRevision++
+        save()
+        pendingCode = null
+        aiMessages.add(AiMessage(false, "Applied to main.py ✓"))
+    }
+    fun rejectPendingCode() { pendingCode = null }
+    fun acceptTeaching() {
+        val topic = teachingOffer ?: return
+        teachingOffer = null
+        aiPrompt = "Teach me $topic step by step. Keep it interactive and ask me one small question at a time."
+        askAi()
+    }
+    fun rejectTeaching() { teachingOffer = null }
     fun requestCompletion(source: String, cursor: Int, deliver: (String, Int) -> Unit) {
         if (!autocomplete || !::projectDir.isInitialized) return
         thread(name="PyDroidX-Jedi") {
@@ -701,20 +741,6 @@ private class PythonEditorView(context: Context) : EditText(context) {
     val liquidBackground=Brush.verticalGradient(listOf(bg,accent.copy(alpha=0.10f),bg,bg))
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=Color.Transparent,surfaceVariant=glass,outline=glassEdge)) {
         Column(Modifier.fillMaxSize().background(liquidBackground).imePadding()) {
-            if(vm.showHeader) Row(
-                Modifier.fillMaxWidth().height(((vm.headerHeight + 39f) * vm.uiScale).dp)
-                    .padding(start=10.dp,end=10.dp,top=10.dp,bottom=5.dp)
-                    .background(glass,glassShape).border(1.dp,glassEdge,glassShape)
-                    .padding(horizontal=12.dp,vertical=6.dp),
-                horizontalArrangement=Arrangement.spacedBy(10.dp),
-                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
-            ) {
-                Text("PyDroid X",color=text,fontSize=(18*vm.uiScale).sp,modifier=Modifier.weight(1f).offset(y=(-19).dp))
-                Row(Modifier.offset(x=(-20).dp,y=19.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)){
-                    Button(onClick={vm.run();scope.launch{pager.animateScrollToPage(1)}},enabled=!vm.running,colors=ButtonDefaults.buttonColors(containerColor=safeColor(vm.runButtonHex,0xFF00E676),contentColor=Color.Black)){Text("▶ Run")}
-                    Button(onClick={vm.stop()},enabled=vm.running,colors=ButtonDefaults.buttonColors(containerColor=safeColor(vm.stopButtonHex,0xFFFF3D71),contentColor=Color.Black)){Text("■ Stop")}
-                }
-            }
             Row(
                 Modifier.fillMaxWidth().height((vm.tabHeight+8).dp).padding(horizontal=10.dp,vertical=4.dp)
                     .background(safeColor(vm.tabBarHex,0xFF050505).copy(alpha=0.72f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
@@ -753,7 +779,26 @@ private class PythonEditorView(context: Context) : EditText(context) {
                 }
                 Box(motionModifier) { when(page) {
                     0 -> Column(Modifier.fillMaxSize().background(bg)) {
-                        if(vm.showFileInfo) Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp,modifier=Modifier.padding(10.dp,6.dp))
+                        Row(
+                            Modifier.fillMaxWidth().padding(start=14.dp,end=14.dp,top=10.dp,bottom=8.dp),
+                            verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            if(vm.showFileInfo) Text("main.py  •  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp,modifier=Modifier.weight(1f))
+                            else Spacer(Modifier.weight(1f))
+                            Button(
+                                onClick={
+                                    if(vm.running) vm.stop()
+                                    else { vm.run(); scope.launch{pager.animateScrollToPage(1)} }
+                                },
+                                colors=ButtonDefaults.buttonColors(
+                                    containerColor=(if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676)).copy(alpha=0.86f),
+                                    contentColor=Color.Black
+                                ),
+                                shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                                contentPadding=PaddingValues(horizontal=20.dp,vertical=9.dp),
+                                modifier=Modifier.border(1.dp,Color.White.copy(alpha=0.24f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
+                            ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
+                        }
                         AndroidView(
                             factory={context->PythonEditorView(context).also{view->
                                 editorView=view
@@ -792,8 +837,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             TextButton(onClick={showAiSettings=true}){Text(if(vm.hasAiKey)"Connection" else "Add key")}
                         }
                         Column(
-                            Modifier.weight(1f).fillMaxWidth().background(glass,glassShape).border(1.dp,glassEdge,glassShape)
-                                .padding(12.dp).verticalScroll(aiScroll),
+                            Modifier.weight(1f).fillMaxWidth().padding(horizontal=2.dp).verticalScroll(aiScroll),
                             verticalArrangement=Arrangement.spacedBy(10.dp)
                         ) {
                             if(vm.aiMessages.isEmpty()) Text(vm.aiReply,color=Color.Gray,fontSize=14.sp)
@@ -814,6 +858,27 @@ private class PythonEditorView(context: Context) : EditText(context) {
                                 }
                             }
                             if(vm.aiBusy && vm.aiMessages.isNotEmpty()) Text("Thinking…",color=accent,fontSize=12.sp)
+                        }
+                        vm.pendingCode?.let {
+                            Surface(color=accent.copy(alpha=0.12f),shape=glassShape,modifier=Modifier.fillMaxWidth().border(1.dp,accent.copy(alpha=0.5f),glassShape)) {
+                                Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                                    Text("Helper prepared a change for main.py",color=text,fontSize=13.sp,fontWeight=FontWeight.SemiBold)
+                                    Text("Nothing changes until u approve it",color=Color.Gray,fontSize=11.sp)
+                                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick={vm.applyPendingCode()}){Text("Apply code")}
+                                        TextButton(onClick={vm.rejectPendingCode()}){Text("Reject")}
+                                    }
+                                }
+                            }
+                        }
+                        vm.teachingOffer?.let { topic ->
+                            Surface(color=glass,shape=glassShape,modifier=Modifier.fillMaxWidth().border(1.dp,glassEdge,glassShape)) {
+                                Row(Modifier.padding(12.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)){Text("Want me to teach u $topic?",color=text,fontSize=13.sp);Text("Short interactive lesson",color=Color.Gray,fontSize=10.sp)}
+                                    TextButton(onClick={vm.rejectTeaching()}){Text("Not now")}
+                                    Button(onClick={vm.acceptTeaching()}){Text("Teach me")}
+                                }
+                            }
                         }
                         Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                             Checkbox(checked=vm.shareCode,onCheckedChange={vm.shareCode=it})

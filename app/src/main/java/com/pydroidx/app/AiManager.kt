@@ -52,7 +52,7 @@ class SecureAiKeyStore(private val context: Context) {
 }
 
 object AiClient {
-    fun chat(providerSetting: String, endpoint: String, apiKey: String, modelSetting: String, prompt: String, code: String?): String {
+    fun chat(providerSetting: String, endpoint: String, apiKey: String, modelSetting: String, prompt: String, code: String?, onPartial: (String) -> Unit = {}): String {
         val promptText = buildString {
             append(prompt)
             if (code != null) append("\n\nExplicitly shared current file:\n```python\n").append(code).append("\n```")
@@ -72,8 +72,8 @@ object AiClient {
             else -> "gpt-4o-mini"
         }
         val model = modelSetting.trim().takeUnless { it.isEmpty() || (provider != "OpenAI" && it == "gpt-4o-mini") } ?: defaultModel
-        if (provider == "Gemini") return gemini(apiKey, model, promptText)
-        if (provider == "Claude") return claude(apiKey, model, promptText)
+        if (provider == "Gemini") return revealWords(gemini(apiKey, model, promptText), onPartial)
+        if (provider == "Claude") return revealWords(claude(apiKey, model, promptText), onPartial)
         val safeEndpoint = when (provider) {
             "OpenRouter" -> "https://openrouter.ai/api/v1/chat/completions"
             "Groq" -> "https://api.groq.com/openai/v1/chat/completions"
@@ -82,9 +82,9 @@ object AiClient {
             else -> "https://api.openai.com/v1/chat/completions"
         }
         val messages = JSONArray()
-            .put(JSONObject().put("role", "system").put("content", "You are PyDroid X's concise Python coding assistant. Explain clearly and never claim code was changed."))
+            .put(JSONObject().put("role", "system").put("content", SYSTEM_PROMPT))
             .put(JSONObject().put("role", "user").put("content", promptText))
-        val body = JSONObject().put("model", model).put("messages", messages).put("temperature", 0.2)
+        val body = JSONObject().put("model", model).put("messages", messages).put("temperature", 0.2).put("stream", true)
         val connection = (URL(safeEndpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 20_000
@@ -94,14 +94,42 @@ object AiClient {
             setRequestProperty("Authorization", "Bearer $apiKey")
         }
         connection.outputStream.use { it.write(body.toString().toByteArray()) }
-        val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
-        val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
         if (connection.responseCode !in 200..299) {
+            val response = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
             val message = runCatching { JSONObject(response).getJSONObject("error").getString("message") }.getOrNull()
             throw IllegalStateException(message ?: "Provider returned HTTP ${connection.responseCode}")
         }
-        return JSONObject(response).getJSONArray("choices").getJSONObject(0)
-            .getJSONObject("message").getString("content")
+        val answer = StringBuilder()
+        connection.inputStream.bufferedReader().useLines { lines ->
+            lines.forEach { line ->
+                if (!line.startsWith("data:")) return@forEach
+                val payload = line.removePrefix("data:").trim()
+                if (payload.isEmpty() || payload == "[DONE]") return@forEach
+                val delta = runCatching {
+                    JSONObject(payload).getJSONArray("choices").getJSONObject(0)
+                        .optJSONObject("delta")?.optString("content").orEmpty()
+                }.getOrDefault("")
+                if (delta.isNotEmpty()) {
+                    answer.append(delta)
+                    onPartial(answer.toString())
+                }
+            }
+        }
+        if (answer.isEmpty()) throw IllegalStateException("Provider returned an empty streaming response")
+        return answer.toString()
+    }
+
+    private const val SYSTEM_PROMPT = """You are pAithon's concise Python coding Helper. Explain clearly. If the user asks to fix, add, remove, refactor, or otherwise change their code, return the COMPLETE updated current file in exactly one fenced python block; the app will ask the user before applying it, so never claim it was already applied. When a short lesson would genuinely help, end with exactly [TEACH:short topic]. Do not add a teaching offer to every reply."""
+
+    private fun revealWords(answer: String, onPartial: (String) -> Unit): String {
+        val chunks = Regex("\\S+\\s*").findAll(answer).map { it.value }
+        val visible = StringBuilder()
+        chunks.forEach {
+            visible.append(it)
+            onPartial(visible.toString())
+            try { Thread.sleep(18) } catch (_: InterruptedException) { return answer }
+        }
+        return answer
     }
 
     private fun gemini(apiKey: String, model: String, prompt: String): String {

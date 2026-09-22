@@ -1256,7 +1256,7 @@ private fun AchievementNotice(
     val glassEdge=Color.White.copy(alpha=0.16f)
     val liquidBackground=Brush.verticalGradient(listOf(bg,accent.copy(alpha=0.10f),bg,bg))
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=Color.Transparent,surfaceVariant=glass,outline=glassEdge)) {
-        Column(Modifier.fillMaxSize().background(liquidBackground).imePadding()) {
+        Column(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().padding(top=8.dp).imePadding()) {
             Row(
                 Modifier.fillMaxWidth().padding(start=10.dp,end=10.dp,top=10.dp,bottom=8.dp),
                 horizontalArrangement=Arrangement.spacedBy(10.dp),
@@ -1274,7 +1274,16 @@ private fun AchievementNotice(
                             onClick={scope.launch { pager.animateScrollToPage(index) }},
                             contentPadding=PaddingValues(horizontal=5.dp,vertical=0.dp)
                         ) {
-                            Text(label,color=if(pager.currentPage==index) accent else Color(0xFF666666),fontSize=8.sp)
+                            Column(horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally) {
+                                Text(label,color=if(pager.currentPage==index) Color.White else Color(0xFF66666D),fontSize=9.sp)
+                                Spacer(Modifier.height(3.dp))
+                                Box(
+                                    Modifier.width(28.dp).height(2.dp).background(
+                                        if(pager.currentPage==index) Color.White else Color.Transparent,
+                                        androidx.compose.foundation.shape.RoundedCornerShape(1.dp)
+                                    )
+                                )
+                            }
                         }
                     }
                 }
@@ -1365,7 +1374,40 @@ private fun AchievementNotice(
                             }
                         }
                     }
-                    1 -> Column(Modifier.fillMaxSize().background(bg)) {
+                    1 -> Column(Modifier.fillMaxSize().background(Color.Black)) {
+                        Row(
+                            Modifier.fillMaxWidth().height(44.dp)
+                                .background(Color(0xFF030303))
+                                .border(1.dp,Color.White.copy(alpha=.10f))
+                                .padding(start=14.dp,end=8.dp),
+                            verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                        ){
+                            Box(Modifier.size(24.dp)){
+                                Box(
+                                    Modifier.width(16.dp).height(12.dp)
+                                        .background(Color.White,androidx.compose.foundation.shape.RoundedCornerShape(5.dp))
+                                        .align(androidx.compose.ui.Alignment.TopStart)
+                                )
+                                Box(
+                                    Modifier.width(16.dp).height(12.dp)
+                                        .background(Color(0xFF9A9AA1),androidx.compose.foundation.shape.RoundedCornerShape(5.dp))
+                                        .align(androidx.compose.ui.Alignment.BottomEnd)
+                                )
+                            }
+                            Spacer(Modifier.width(9.dp))
+                            Text(vm.currentFileName,color=Color(0xFFE8E8EC),fontSize=14.sp,fontFamily=FontFamily.Monospace)
+                            Spacer(Modifier.width(7.dp))
+                            Box(Modifier.size(6.dp).background(Color(0xFF8AB4F8),androidx.compose.foundation.shape.CircleShape))
+                            Spacer(Modifier.weight(1f))
+                            TextButton(
+                                onClick={scope.launch{pager.animateScrollToPage(0)}},
+                                contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
+                            ){Text("×",color=Color(0xFF8C8C94),fontSize=22.sp)}
+                            TextButton(
+                                onClick={vm.makeNewCode()},
+                                contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
+                            ){Text("+",color=Color(0xFFBFC0C7),fontSize=22.sp)}
+                        }
                         AndroidView(
                             factory={context->PythonEditorView(context).also{view->
                                 editorView=view
@@ -1382,28 +1424,58 @@ private fun AchievementNotice(
                                     vm.lineNumbers,vm.highlightCurrentLine,vm.customFontPath,
                                     listOf(vm.editorTextHex,vm.commentHex,vm.stringHex,vm.numberHex,vm.keywordHex,vm.functionHex,vm.variableHex))
                             },
-                            modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
+                            modifier=Modifier.weight(1f).fillMaxWidth().background(Color.Black)
                         )
-                        if(vm.showToolbar) Row(
-                            Modifier.fillMaxWidth().height(vm.toolbarHeight.dp)
-                                .horizontalScroll(rememberScrollState())
-                                .background(safeColor(vm.toolbarHex,0xFF050505))
-                                .padding(horizontal=8.dp,vertical=6.dp),
-                            horizontalArrangement=Arrangement.spacedBy(8.dp),
-                            verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
-                        ){
-                            listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach{key->
-                                OutlinedButton(
-                                    onClick={if(key=="Tab" && editorView?.acceptGhostSuggestion()==true) Unit else editorView?.insertAtCursor(if(key=="Tab")"    " else key)},
-                                    modifier=Modifier.width(if(key=="Tab")70.dp else 58.dp).fillMaxHeight(),
-                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(11.dp),
-                                    border=BorderStroke(1.dp,Color.White.copy(alpha=0.16f)),
-                                    colors=ButtonDefaults.outlinedButtonColors(
-                                        containerColor=Color.White.copy(alpha=0.035f),
-                                        contentColor=accent
-                                    ),
-                                    contentPadding=PaddingValues(0.dp)
-                                ){Text(key,fontSize=16.sp)}
+                        if(vm.showToolbar) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal=14.dp,vertical=4.dp),
+                                horizontalArrangement=Arrangement.End
+                            ){
+                                Surface(
+                                    color=Color(0xFF080808),
+                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                                    border=BorderStroke(1.dp,Color.White.copy(alpha=.14f))
+                                ){
+                                    Text(
+                                        if(vm.codeDiagnostics.isEmpty())"✓  No issues" else "⚠  \${vm.codeDiagnostics.size} issue",
+                                        color=if(vm.codeDiagnostics.isEmpty())Color(0xFFB8DDBE) else Color(0xFFFF6B72),
+                                        fontSize=10.sp,modifier=Modifier.padding(horizontal=10.dp,vertical=6.dp)
+                                    )
+                                }
+                            }
+                            Surface(
+                                color=Color(0xFF030303),
+                                shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                                border=BorderStroke(1.dp,Color.White.copy(alpha=.16f)),
+                                modifier=Modifier.fillMaxWidth().padding(horizontal=10.dp,vertical=5.dp)
+                            ){
+                                Row(
+                                    Modifier.fillMaxWidth().height(vm.toolbarHeight.dp)
+                                        .horizontalScroll(rememberScrollState())
+                                        .padding(horizontal=7.dp,vertical=6.dp),
+                                    horizontalArrangement=Arrangement.spacedBy(8.dp),
+                                    verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                                ){
+                                    listOf("Tab","(",")","[","]","{","}","\"",":","=","↶","↷").forEach{key->
+                                        OutlinedButton(
+                                            onClick={
+                                                when(key){
+                                                    "↶"->editorView?.undo()
+                                                    "↷"->editorView?.redo()
+                                                    else->if(key=="Tab"&&editorView?.acceptGhostSuggestion()==true) Unit
+                                                    else editorView?.insertAtCursor(if(key=="Tab")"    " else key)
+                                                }
+                                            },
+                                            modifier=Modifier.width(if(key=="Tab")70.dp else 54.dp).fillMaxHeight(),
+                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(11.dp),
+                                            border=BorderStroke(1.dp,Color.White.copy(alpha=.14f)),
+                                            colors=ButtonDefaults.outlinedButtonColors(
+                                                containerColor=Color.White.copy(alpha=.025f),contentColor=Color.White
+                                            ),
+                                            contentPadding=PaddingValues(0.dp)
+                                        ){Text(key,fontSize=16.sp)}
+                                    }
+                                }
                             }
                         }
                     }

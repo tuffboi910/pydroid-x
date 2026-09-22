@@ -51,9 +51,15 @@ class SecureAiKeyStore(private val context: Context) {
     fun clear() = prefs.edit().clear().apply()
 }
 
-object AiClient {
-    fun chat(providerSetting: String, endpoint: String, apiKey: String, modelSetting: String, prompt: String, code: String?, onPartial: (String) -> Unit = {}): String {
+private class ProviderHttpException(val code: Int, message: String) : IllegalStateException(message)\n\nobject AiClient {
+    fun chat(providerSetting: String, endpoint: String, apiKey: String, modelSetting: String, prompt: String, code: String?, history: List<AiMessage> = emptyList(), onStatus: (String) -> Unit = {}, onPartial: (String) -> Unit = {}): String {
         val promptText = buildString {
+            val context = history.filter { it.text.isNotBlank() }.takeLast(12)
+            if (context.isNotEmpty()) {
+                append("Recent conversation context:\n")
+                context.forEach { append(if (it.fromUser) "User: " else "Helper: ").append(it.text).append("\n") }
+                append("\nCurrent request:\n")
+            }
             append(prompt)
             if (code != null) append("\n\nExplicitly shared current file:\n```python\n").append(code).append("\n```")
         }
@@ -65,14 +71,14 @@ object AiClient {
             else -> "OpenAI"
         } else providerSetting
         val defaultModel = when (provider) {
-            "Gemini" -> "gemini-2.5-flash"
+            "Gemini" -> "gemini-3.6-flash"
             "Claude" -> "claude-3-5-haiku-latest"
             "OpenRouter" -> "openai/gpt-4o-mini"
             "Groq" -> "llama-3.3-70b-versatile"
             else -> "gpt-4o-mini"
         }
         val model = modelSetting.trim().takeUnless { it.isEmpty() || (provider != "OpenAI" && it == "gpt-4o-mini") } ?: defaultModel
-        if (provider == "Gemini") return revealWords(gemini(apiKey, model, promptText), onPartial)
+        if (provider == "Gemini") return revealWords(geminiWithFallback(apiKey, model, promptText, onStatus), onPartial)
         if (provider == "Claude") return revealWords(claude(apiKey, model, promptText), onPartial)
         val safeEndpoint = when (provider) {
             "OpenRouter" -> "https://openrouter.ai/api/v1/chat/completions"
@@ -119,7 +125,7 @@ object AiClient {
         return answer.toString()
     }
 
-    private const val SYSTEM_PROMPT = """You are py4u's concise Python coding Helper. Explain clearly. If the user asks to fix, add, remove, refactor, or otherwise change their code, return the COMPLETE updated current file in exactly one fenced python block; the app will ask the user before applying it, so never claim it was already applied. When a short lesson would genuinely help, end with exactly [TEACH:short topic]. Do not add a teaching offer to every reply."""
+    private const val SYSTEM_PROMPT = """You are PY4U's concise Python coding Helper. Explain clearly. If the user asks to fix, add, remove, refactor, or otherwise change their code, return the COMPLETE updated current file in exactly one fenced python block; the app will ask the user before applying it, so never claim it was already applied. When a short lesson would genuinely help, end with exactly [TEACH:short topic]. Do not add a teaching offer to every reply."""
 
     private fun revealWords(answer: String, onPartial: (String) -> Unit): String {
         val chunks = Regex("\\S+\\s*").findAll(answer).map { it.value }
@@ -130,6 +136,27 @@ object AiClient {
             try { Thread.sleep(18) } catch (_: InterruptedException) { return answer }
         }
         return answer
+    }
+
+    private fun geminiWithFallback(apiKey: String, requestedModel: String, prompt: String, onStatus: (String) -> Unit): String {
+        val models = listOf(requestedModel, "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash").distinct()
+        var lastFailure: Throwable? = null
+        models.forEachIndexed { modelIndex, candidate ->
+            repeat(2) { attempt ->
+                try {
+                    if (modelIndex > 0 && attempt == 0) onStatus("Switching to $candidate…")
+                    else if (attempt > 0) onStatus("Retrying $candidate…")
+                    return gemini(apiKey, candidate, prompt)
+                } catch (failure: Throwable) {
+                    lastFailure = failure
+                    val retryable = failure !is ProviderHttpException ||
+                        failure.code in listOf(404, 408, 429, 500, 502, 503, 504)
+                    if (!retryable) throw failure
+                    if (attempt == 0) try { Thread.sleep(700) } catch (_: InterruptedException) { throw failure }
+                }
+            }
+        }
+        throw lastFailure ?: IllegalStateException("No Gemini model was available")
     }
 
     private fun gemini(apiKey: String, model: String, prompt: String): String {
@@ -159,7 +186,7 @@ object AiClient {
         val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
         if (connection.responseCode !in 200..299) {
             val message = runCatching { JSONObject(response).getJSONObject("error").optString("message") }.getOrNull()
-            throw IllegalStateException(message?.takeIf { it.isNotBlank() } ?: "Provider returned HTTP ${connection.responseCode}")
+            throw ProviderHttpException(connection.responseCode, message?.takeIf { it.isNotBlank() } ?: "Provider returned HTTP ${connection.responseCode}")
         }
         return response
     }

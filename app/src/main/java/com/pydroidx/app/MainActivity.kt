@@ -1106,8 +1106,27 @@ private fun AchievementNotice(
                             },
                             modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
                         )
-                        if(vm.showToolbar) Row(Modifier.fillMaxWidth().height(vm.toolbarHeight.dp).horizontalScroll(rememberScrollState()).background(safeColor(vm.toolbarHex,0xFF050505)).padding(4.dp),horizontalArrangement=Arrangement.spacedBy(4.dp)){
-                            listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach{key->TextButton(onClick={if(key=="Tab" && editorView?.acceptGhostSuggestion()==true) Unit else editorView?.insertAtCursor(if(key=="Tab")"    " else key)}){Text(key)}}
+                        if(vm.showToolbar) Row(
+                            Modifier.fillMaxWidth().height(vm.toolbarHeight.dp)
+                                .horizontalScroll(rememberScrollState())
+                                .background(safeColor(vm.toolbarHex,0xFF050505))
+                                .padding(horizontal=8.dp,vertical=6.dp),
+                            horizontalArrangement=Arrangement.spacedBy(8.dp),
+                            verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                        ){
+                            listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach{key->
+                                OutlinedButton(
+                                    onClick={if(key=="Tab" && editorView?.acceptGhostSuggestion()==true) Unit else editorView?.insertAtCursor(if(key=="Tab")"    " else key)},
+                                    modifier=Modifier.width(if(key=="Tab")70.dp else 58.dp).fillMaxHeight(),
+                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(11.dp),
+                                    border=BorderStroke(1.dp,Color.White.copy(alpha=0.16f)),
+                                    colors=ButtonDefaults.outlinedButtonColors(
+                                        containerColor=Color.White.copy(alpha=0.035f),
+                                        contentColor=accent
+                                    ),
+                                    contentPadding=PaddingValues(0.dp)
+                                ){Text(key,fontSize=16.sp)}
+                            }
                         }
                     }
                     1 -> Column(Modifier.fillMaxSize().padding(14.dp)) {

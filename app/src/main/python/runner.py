@@ -5,6 +5,48 @@ import os
 import sys
 import traceback
 import json
+import ast
+
+def diagnose(source):
+    """Return syntax errors and unresolved Python names with exact ranges."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        lines = source.splitlines(True)
+        line = max(1, exc.lineno or 1)
+        start = sum(len(value) for value in lines[:line - 1]) + max(0, (exc.offset or 1) - 1)
+        end = min(len(source), start + 1)
+        return json.dumps([{"start": start, "end": end, "message": exc.msg}])
+
+    defined = set(dir(builtins)) | {"__name__", "__file__"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Param)):
+            defined.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defined.update(arg.arg for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs)
+                if node.args.vararg: defined.add(node.args.vararg.arg)
+                if node.args.kwarg: defined.add(node.args.kwarg.arg)
+        elif isinstance(node, ast.Import):
+            defined.update(alias.asname or alias.name.split('.')[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            defined.update(alias.asname or alias.name for alias in node.names if alias.name != '*')
+
+    line_starts = [0]
+    for index, char in enumerate(source):
+        if char == '\n': line_starts.append(index + 1)
+    issues = []
+    seen = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id not in defined:
+            start = line_starts[node.lineno - 1] + node.col_offset
+            end = start + len(node.id)
+            key = (start, end)
+            if key not in seen:
+                seen.add(key)
+                issues.append({"start": start, "end": end, "message": "Undefined name: " + node.id})
+    return json.dumps(issues)
 
 def complete(source, cursor, project_dir):
     """Return Jedi's best local completion as JSON. Runs fully offline."""

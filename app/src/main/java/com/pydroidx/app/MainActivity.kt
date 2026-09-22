@@ -29,6 +29,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -806,6 +813,72 @@ private class PythonEditorView(context: Context) : EditText(context) {
     }
 }
 
+@Composable
+private fun AchievementNotice(
+    badge: String,
+    title: String,
+    subtitle: String,
+    accent: Color,
+    primaryLabel: String,
+    secondaryLabel: String,
+    onPrimary: () -> Unit,
+    onSecondary: () -> Unit
+) {
+    var visible by remember(title, badge) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(title, badge) { visible = true }
+    fun closeThen(action: () -> Unit) {
+        visible = false
+        scope.launch { delay(230); action() }
+    }
+    AnimatedVisibility(
+        visible=visible,
+        enter=slideInVertically(initialOffsetY={-it})+fadeIn()+scaleIn(initialScale=0.94f),
+        exit=slideOutVertically(targetOffsetY={-it/2})+fadeOut()+scaleOut(targetScale=0.97f)
+    ) {
+        val shape=androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
+        Surface(
+            color=Color(0xF20A0D10),
+            contentColor=Color.White,
+            shape=shape,
+            border=BorderStroke(1.dp,accent.copy(alpha=0.75f)),
+            shadowElevation=14.dp,
+            modifier=Modifier.fillMaxWidth()
+        ) {
+            Column {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal=14.dp,vertical=12.dp),
+                    verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,
+                    horizontalArrangement=Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        Modifier.size(44.dp).background(accent.copy(alpha=0.16f),androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                            .border(1.dp,accent.copy(alpha=0.8f),androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
+                        contentAlignment=androidx.compose.ui.Alignment.Center
+                    ) { Text("◆",color=accent,fontSize=22.sp) }
+                    Column(Modifier.weight(1f)) {
+                        Text(badge,color=accent,fontSize=9.sp,fontWeight=FontWeight.Bold,letterSpacing=1.2.sp)
+                        Text(title,color=Color.White,fontSize=15.sp,fontWeight=FontWeight.Bold,maxLines=1)
+                        Text(subtitle,color=Color(0xFFA9B0B8),fontSize=11.sp,maxLines=2)
+                    }
+                }
+                Box(Modifier.fillMaxWidth().height(2.dp).background(accent.copy(alpha=0.9f)))
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal=10.dp,vertical=6.dp),
+                    horizontalArrangement=Arrangement.End
+                ) {
+                    TextButton(onClick={closeThen(onSecondary)}) { Text(secondaryLabel,color=Color(0xFFB9C0C8)) }
+                    Button(
+                        onClick={closeThen(onPrimary)},
+                        colors=ButtonDefaults.buttonColors(containerColor=accent,contentColor=Color.Black),
+                        contentPadding=PaddingValues(horizontal=14.dp,vertical=6.dp)
+                    ) { Text(primaryLabel,fontWeight=FontWeight.Bold) }
+                }
+            }
+        }
+    }
+}
+
 @Composable fun PyDroidX(vm: IdeViewModel) {
     fun safeColor(value:String,fallback:Long)=runCatching{Color(AndroidColor.parseColor(value))}.getOrDefault(Color(fallback))
     val bg = safeColor(vm.backgroundHex,0xFF000000)
@@ -993,25 +1066,28 @@ private class PythonEditorView(context: Context) : EditText(context) {
                             if(vm.aiBusy && vm.aiMessages.isNotEmpty()) Text("Thinking…",color=accent,fontSize=12.sp)
                         }
                         vm.pendingCode?.let {
-                            Surface(color=accent.copy(alpha=0.12f),shape=glassShape,modifier=Modifier.fillMaxWidth().border(1.dp,accent.copy(alpha=0.5f),glassShape)) {
-                                Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                                    Text("Helper prepared a change for main.py",color=text,fontSize=13.sp,fontWeight=FontWeight.SemiBold)
-                                    Text("Nothing changes until u approve it",color=Color.Gray,fontSize=11.sp)
-                                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                                        Button(onClick={vm.applyPendingCode()}){Text("Apply code")}
-                                        TextButton(onClick={vm.rejectPendingCode()}){Text("Reject")}
-                                    }
-                                }
-                            }
+                            AchievementNotice(
+                                badge="ACTION REQUIRED",
+                                title="Code change ready",
+                                subtitle="Helper wants permission to update main.py",
+                                accent=accent,
+                                primaryLabel="Apply",
+                                secondaryLabel="Reject",
+                                onPrimary={vm.applyPendingCode()},
+                                onSecondary={vm.rejectPendingCode()}
+                            )
                         }
                         vm.teachingOffer?.let { topic ->
-                            Surface(color=glass,shape=glassShape,modifier=Modifier.fillMaxWidth().border(1.dp,glassEdge,glassShape)) {
-                                Row(Modifier.padding(12.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
-                                    Column(Modifier.weight(1f)){Text("Want me to teach u $topic?",color=text,fontSize=13.sp);Text("Short interactive lesson",color=Color.Gray,fontSize=10.sp)}
-                                    TextButton(onClick={vm.rejectTeaching()}){Text("Not now")}
-                                    Button(onClick={vm.acceptTeaching()}){Text("Teach me")}
-                                }
-                            }
+                            AchievementNotice(
+                                badge="NEW LESSON UNLOCKED",
+                                title=topic,
+                                subtitle="A short interactive Python lesson is ready",
+                                accent=accent,
+                                primaryLabel="Teach me",
+                                secondaryLabel="Later",
+                                onPrimary={vm.acceptTeaching()},
+                                onSecondary={vm.rejectTeaching()}
+                            )
                         }
                         Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                             Checkbox(checked=vm.shareCode,onCheckedChange={vm.shareCode=it})

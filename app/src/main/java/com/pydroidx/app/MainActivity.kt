@@ -711,6 +711,9 @@ private class PythonEditorView(context: Context) : EditText(context) {
     var requestSmartCompletion: ((String, Int, (String, Int) -> Unit) -> Unit)? = null
     var requestCodeDiagnostics: ((String, (List<CodeDiagnostic>) -> Unit) -> Unit)? = null
     private var applyingHighlight = false
+    private var applyingHistory = false
+    private var beforeEdit = EditorSnapshot("", 0)
+    private val history = EditorHistory()
     private var highlightingEnabled = true
     private var highlightDelayMs = 220L
     private var autocompleteEnabled = true
@@ -814,9 +817,14 @@ private class PythonEditorView(context: Context) : EditText(context) {
         isVerticalScrollBarEnabled = true
         isHorizontalScrollBarEnabled = true
         addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+                if (!applyingHighlight && !applyingHistory) {
+                    beforeEdit = EditorSnapshot(s?.toString().orEmpty(), selectionStart.coerceAtLeast(0))
+                }
+            }
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                if (!applyingHighlight) {
+                if (!applyingHighlight && !applyingHistory) {
+                    history.record(beforeEdit)
                     onCodeChanged?.invoke(s?.toString().orEmpty())
                     removeCallbacks(highlightRunnable)
                     postDelayed(highlightRunnable, highlightDelayMs)
@@ -850,6 +858,24 @@ private class PythonEditorView(context: Context) : EditText(context) {
         setSelection(cursor)
         applyingHighlight = false
         highlightNow()
+    }
+
+    private fun restoreHistory(snapshot: EditorSnapshot?) {
+        snapshot ?: return
+        applyingHistory = true
+        setText(snapshot.text)
+        setSelection(snapshot.cursor.coerceIn(0, snapshot.text.length))
+        applyingHistory = false
+        onCodeChanged?.invoke(snapshot.text)
+        highlightNow()
+    }
+
+    fun undoCode() {
+        restoreHistory(history.undo(EditorSnapshot(text.toString(), selectionStart.coerceAtLeast(0))))
+    }
+
+    fun redoCode() {
+        restoreHistory(history.redo(EditorSnapshot(text.toString(), selectionStart.coerceAtLeast(0))))
     }
 
     fun insertAtCursor(value: String) {
@@ -1456,13 +1482,18 @@ private fun AchievementNotice(
                                     horizontalArrangement=Arrangement.spacedBy(8.dp),
                                     verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                                 ){
-                                    listOf("Tab","(",")","[","]","{","}","\"",":","=").forEach{key->
+                                    listOf("Undo","Redo","Tab","(",")","[","]","{","}","\"",":","=").forEach{key->
                                         OutlinedButton(
                                             onClick={
-                                                if(key=="Tab"&&editorView?.acceptGhostSuggestion()==true) Unit
-                                                else editorView?.insertAtCursor(if(key=="Tab")"    " else key)
+                                                when {
+                                                    key=="Undo" -> editorView?.undoCode()
+                                                    key=="Redo" -> editorView?.redoCode()
+                                                    key=="Tab"&&editorView?.acceptGhostSuggestion()==true -> Unit
+                                                    else -> editorView?.insertAtCursor(if(key=="Tab")"    " else key)
+                                                }
+                                                
                                             },
-                                            modifier=Modifier.width(if(key=="Tab")70.dp else 54.dp).fillMaxHeight(),
+                                            modifier=Modifier.width(if(key in listOf("Tab","Undo","Redo"))70.dp else 54.dp).fillMaxHeight(),
                                             shape=androidx.compose.foundation.shape.RoundedCornerShape(11.dp),
                                             border=BorderStroke(1.dp,Color.White.copy(alpha=.14f)),
                                             colors=ButtonDefaults.outlinedButtonColors(

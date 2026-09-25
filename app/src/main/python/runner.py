@@ -28,10 +28,17 @@ def diagnose(source):
                 defined.update(arg.arg for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs)
                 if node.args.vararg: defined.add(node.args.vararg.arg)
                 if node.args.kwarg: defined.add(node.args.kwarg.arg)
+        elif isinstance(node, ast.Lambda):
+            defined.update(arg.arg for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs)
+            if node.args.vararg: defined.add(node.args.vararg.arg)
+            if node.args.kwarg: defined.add(node.args.kwarg.arg)
         elif isinstance(node, ast.Import):
             defined.update(alias.asname or alias.name.split('.')[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             defined.update(alias.asname or alias.name for alias in node.names if alias.name != '*')
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            # Except aliases are strings in Python's AST, not Name(Store) nodes.
+            defined.add(node.name)
 
     line_starts = [0]
     for index, char in enumerate(source):
@@ -40,7 +47,10 @@ def diagnose(source):
     seen = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id not in defined:
-            start = line_starts[node.lineno - 1] + node.col_offset
+            # Convert AST's UTF-8 byte column for Android's character offsets.
+            line_text = source.splitlines(True)[node.lineno - 1]
+            char_column = len(line_text.encode('utf-8')[:node.col_offset].decode('utf-8', errors='ignore'))
+            start = line_starts[node.lineno - 1] + char_column
             end = start + len(node.id)
             key = (start, end)
             if key not in seen:

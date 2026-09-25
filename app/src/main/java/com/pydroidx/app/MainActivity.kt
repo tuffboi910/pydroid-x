@@ -982,6 +982,28 @@ private class PythonEditorView(context: Context) : EditText(context) {
             }
         }
         super.onDraw(canvas)
+        if (editorLayout != null && editorLayout.lineCount > 0) {
+            val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = AndroidColor.argb(72, 120, 132, 150)
+                strokeWidth = resources.displayMetrics.density
+            }
+            val spaceWidth = paint.measureText(" ")
+            val first = editorLayout.getLineForVertical((scrollY - totalPaddingTop).coerceAtLeast(0))
+            val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop).coerceAtLeast(0))
+            val source = text.toString()
+            for (lineIndex in first..last.coerceAtMost(editorLayout.lineCount - 1)) {
+                val start = editorLayout.getLineStart(lineIndex)
+                val end = editorLayout.getLineEnd(lineIndex).coerceAtMost(source.length)
+                val lineText = source.substring(start, end).trimEnd('\n')
+                val top = editorLayout.getLineTop(lineIndex) + totalPaddingTop - scrollY
+                val bottom = editorLayout.getLineBottom(lineIndex) + totalPaddingTop - scrollY
+                IndentationGuide.columns(lineText).forEach { column ->
+                    val x = totalPaddingLeft - scrollX + column * spaceWidth
+                    canvas.drawLine(x, top.toFloat(), x, bottom.toFloat(), guidePaint)
+                }
+            }
+        }
+
         if (editorLayout != null && editorLayout.lineCount > 0 && diagnostics.isNotEmpty()) {
             val errorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = AndroidColor.rgb(255, 69, 88)

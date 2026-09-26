@@ -497,7 +497,7 @@ class IdeViewModel : ViewModel() {
     }
 
     fun makeNewProject() {
-        if (!::projectsRoot.isInitialized) return
+        if (running || !::projectsRoot.isInitialized) return
         save()
         autosaveJob?.cancel()
         namingJob?.cancel()
@@ -507,7 +507,7 @@ class IdeViewModel : ViewModel() {
     }
 
     fun switchProject(name: String) {
-        if (!::projectsRoot.isInitialized) return
+        if (running || !::projectsRoot.isInitialized) return
         val safeName = ProjectWorkspace.safeName(name)
         val targetDir = File(projectsRoot,safeName)
         if (!targetDir.exists() || !targetDir.isDirectory || targetDir.parentFile != projectsRoot) return
@@ -569,6 +569,7 @@ class IdeViewModel : ViewModel() {
     }
 
     fun makeNewCode() {
+        if (running) return
         save()
         var number=1
         var file=File(projectDir,"untitled_$number.py")
@@ -577,12 +578,14 @@ class IdeViewModel : ViewModel() {
         currentFileName=file.name
         code=""
         codeDiagnostics=emptyList()
+        pendingCode=null
         settings.edit().putString("current_file",currentFileName).apply()
         refreshSaved()
         editorRevision++
     }
 
     fun openSaved(displayName: String) {
+        if (running) return
         save()
         val file=projectDir.listFiles()?.firstOrNull {
             it.isFile && it.extension.equals("py",true) && it.nameWithoutExtension.replace('_',' ')==displayName
@@ -590,6 +593,7 @@ class IdeViewModel : ViewModel() {
         currentFileName=file.name
         code=file.readText()
         codeDiagnostics=emptyList()
+        pendingCode=null
         settings.edit().putString("current_file",currentFileName).apply()
         editorRevision++
         refreshSaved()

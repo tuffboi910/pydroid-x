@@ -66,11 +66,15 @@ object AiClient {
             val context = history.filter { it.text.isNotBlank() }.takeLast(12)
             if (context.isNotEmpty()) {
                 append("Recent conversation context:\n")
-                context.forEach { append(if (it.fromUser) "User: " else "Helper: ").append(it.text).append("\n") }
+                context.forEach {
+                    append(if (it.fromUser) "User: " else "Helper: ")
+                        .append(it.text.take(12_000))
+                        .append("\n")
+                }
                 append("\nCurrent request:\n")
             }
-            append(prompt)
-            if (code != null) append("\n\nExplicitly shared current file:\n```python\n").append(code).append("\n```")
+            append(prompt.take(120_000))
+            if (code != null) append("\n\nExplicitly shared current file:\n```python\n").append(code.take(120_000)).append("\n```")
         }
         val provider = if (providerSetting == "Auto") when {
             apiKey.startsWith("AIza") -> "Gemini"

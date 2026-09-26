@@ -231,11 +231,8 @@ class IdeViewModel : ViewModel() {
         aiProvider = settings.getString("ai_provider", "Auto") ?: "Auto"
         ai2Provider = settings.getString("ai2_provider", "Auto") ?: "Auto"
         ai3Provider = settings.getString("ai3_provider", "Auto") ?: "Auto"
-        fun storedEndpoint(key: String, provider: String): String {
-            val value = settings.getString(key, null)?.trim().orEmpty()
-            return if (provider == "Custom") value
-            else value.takeIf { it.startsWith("https://") } ?: "https://api.openai.com/v1/chat/completions"
-        }
+        fun storedEndpoint(key: String, provider: String): String =
+            AiEndpointPolicy.normalizeForStorage(provider, settings.getString(key, null).orEmpty())
         aiEndpoint = storedEndpoint("ai_endpoint", aiProvider)
         aiModel = settings.getString("ai_model", "gpt-4o-mini")
             ?.trim()?.takeIf { it.isNotEmpty() } ?: "gpt-4o-mini"
@@ -299,9 +296,7 @@ class IdeViewModel : ViewModel() {
 
     fun saveAiSettings(key: String, endpoint: String, model: String, provider: String, slot: Int = 0) {
         if (key.isNotBlank()) aiKeys.save(key, slot)
-        val safeEndpoint = if (provider == "Custom") endpoint.trim()
-            else endpoint.trim().takeIf { it.startsWith("https://") }
-                ?: "https://api.openai.com/v1/chat/completions"
+        val safeEndpoint = AiEndpointPolicy.normalizeForStorage(provider, endpoint)
         val safeModel = model.trim()
         when(slot) {
             1 -> { ai2Provider=provider; ai2Endpoint=safeEndpoint; ai2Model=safeModel }

@@ -127,6 +127,7 @@ class IdeViewModel : ViewModel() {
     var input by mutableStateOf("")
     val inputHistory = ConsoleInputHistory()
     var runtimeVersion by mutableStateOf("Loading Python…")
+    var consoleMode by mutableStateOf("Python")
     var aiPrompt by mutableStateOf("")
     val aiMessages = mutableStateListOf<AiMessage>()
     var aiBusy by mutableStateOf(false)
@@ -776,6 +777,20 @@ class IdeViewModel : ViewModel() {
         }
     }
     fun submitInput() { if (waitingInput) { stdin.offer(input); input = ""; waitingInput = false } }
+    fun submitConsoleEntry() {
+        if (waitingInput) { submitInput(); return }
+        if (consoleMode != "Terminal" || running || input.isBlank()) return
+        val command = input.trim()
+        inputHistory.record(command)
+        input = ""
+        appendOutput("\$ $command\n")
+        if (command == "clear") { clearOutput(); return }
+        running = true
+        worker = thread(name = "PY4U-Terminal") {
+            runCatching { Python.getInstance().getModule("runner").callAttr("run_terminal_command", command, projectDir.absolutePath, Bridge()) }
+                .onFailure { failure -> mainHandler.post { appendOutput("Terminal error: ${failure.message ?: "command failed"}\n"); running = false } }
+        }
+    }
     fun stop() {
         if (!running) return
         stopRequested = true
@@ -1752,7 +1767,17 @@ private fun AchievementNotice(
                                 modifier=Modifier.border(1.dp,Color.White.copy(alpha=.24f),androidx.compose.foundation.shape.RoundedCornerShape(22.dp))
                             ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
                         }
-                        Spacer(Modifier.height(20.dp))
+                        Spacer(Modifier.height(14.dp))
+                        Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                            listOf("Python","Terminal").forEach { mode ->
+                                val selected=vm.consoleMode==mode
+                                OutlinedButton(onClick={if(!vm.running){vm.consoleMode=mode;vm.input="";consoleInputValue=TextFieldValue("")}},
+                                    colors=ButtonDefaults.outlinedButtonColors(containerColor=if(selected) Color(0xFF655C7A) else Color.Transparent,contentColor=Color.White),
+                                    border=BorderStroke(1.dp,Color.White.copy(alpha=if(selected).24f else .14f)),
+                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp)){Text(mode)}
+                            }
+                        }
+                        Spacer(Modifier.height(14.dp))
                         Surface(
                             color=safeColor(vm.consoleBackgroundHex,0xFF030303),
                             shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
@@ -1812,10 +1837,10 @@ private fun AchievementNotice(
                                         Modifier.padding(start=14.dp,end=7.dp,top=5.dp,bottom=5.dp),
                                         verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                                     ){
-                                        Text(">>>",color=Color.White,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold)
+                                        Text(if(vm.consoleMode=="Terminal")"$" else ">>>",color=Color.White,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold)
                                         TextField(
                                             consoleInputValue,{consoleInputValue=it;vm.input=it.text},
-                                            enabled=vm.waitingInput,
+                                            enabled=vm.waitingInput||(vm.consoleMode=="Terminal"&&!vm.running),
                                             singleLine=true,
                                             textStyle=androidx.compose.ui.text.TextStyle(
                                                 color=Color.White,
@@ -1824,7 +1849,7 @@ private fun AchievementNotice(
                                                 fontWeight=FontWeight.Medium
                                             ),
                                             modifier=Modifier.weight(1f).heightIn(min=52.dp).focusRequester(consoleInputFocus),
-                                            placeholder={Text(if(vm.waitingInput)"Type program input…" else "Waiting for Python input()",color=Color(0xFF66666E),fontSize=13.sp)},
+                                            placeholder={Text(when{vm.waitingInput->"Type program input…";vm.consoleMode=="Terminal"->"Type help, ls, pwd, cat…";else->"Waiting for Python input()"},color=Color(0xFF66666E),fontSize=13.sp)},
                                             colors=TextFieldDefaults.colors(
                                                 focusedContainerColor=Color.Transparent,unfocusedContainerColor=Color.Transparent,
                                                 disabledContainerColor=Color.Transparent,focusedIndicatorColor=Color.Transparent,
@@ -1837,8 +1862,8 @@ private fun AchievementNotice(
                                             keyboardOptions=KeyboardOptions(imeAction=ImeAction.None)
                                         )
                                         Button(
-                                            onClick={if(vm.waitingInput) vm.submitInput()},
-                                            enabled=vm.waitingInput,
+                                            onClick={vm.submitConsoleEntry()},
+                                            enabled=vm.waitingInput||(vm.consoleMode=="Terminal"&&!vm.running&&vm.input.isNotBlank()),
                                             shape=androidx.compose.foundation.shape.CircleShape,
                                             contentPadding=PaddingValues(0.dp),
                                             colors=ButtonDefaults.buttonColors(

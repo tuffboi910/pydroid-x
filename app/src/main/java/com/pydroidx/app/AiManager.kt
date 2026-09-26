@@ -61,7 +61,7 @@ class SecureAiKeyStore(private val context: Context) {
 private class ProviderHttpException(val code: Int, message: String) : IllegalStateException(message)
 
 object AiClient {
-    fun chat(providerSetting: String, endpoint: String, apiKey: String, modelSetting: String, prompt: String, code: String?, history: List<AiMessage> = emptyList(), onStatus: (String) -> Unit = {}, onPartial: (String) -> Unit = {}): String {
+    fun chat(providerSetting: String, endpoint: String, apiKey: String, modelSetting: String, prompt: String, code: String?, history: List<AiMessage> = emptyList(), revealDelayMs: Long = 18L, onStatus: (String) -> Unit = {}, onPartial: (String) -> Unit = {}): String {
         val promptText = buildString {
             val context = history.filter { it.text.isNotBlank() }.takeLast(12)
             if (context.isNotEmpty()) {
@@ -87,8 +87,8 @@ object AiClient {
             else -> "gpt-4o-mini"
         }
         val model = modelSetting.trim().takeUnless { it.isEmpty() || (provider != "OpenAI" && it == "gpt-4o-mini") } ?: defaultModel
-        if (provider == "Gemini") return revealWords(geminiWithFallback(apiKey, model, promptText, onStatus), onPartial)
-        if (provider == "Claude") return revealWords(claude(apiKey, model, promptText), onPartial)
+        if (provider == "Gemini") return revealWords(geminiWithFallback(apiKey, model, promptText, onStatus), onPartial, revealDelayMs)
+        if (provider == "Claude") return revealWords(claude(apiKey, model, promptText), onPartial, revealDelayMs)
         val safeEndpoint = when (provider) {
             "OpenRouter" -> "https://openrouter.ai/api/v1/chat/completions"
             "Groq" -> "https://api.groq.com/openai/v1/chat/completions"
@@ -130,7 +130,7 @@ object AiClient {
                 }.getOrDefault("")
                 if (delta.isNotEmpty()) {
                     answer.append(delta)
-                    onPartial(answer.toString())
+                    if (revealDelayMs > 0) onPartial(answer.toString())
                 }
             }
         }
@@ -140,18 +140,19 @@ object AiClient {
                 .getJSONObject("message").getString("content")
         }.getOrNull()?.takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("Provider returned an empty or unsupported response")
-        return revealWords(nonStreaming,onPartial)
+        return revealWords(nonStreaming,onPartial,revealDelayMs)
     }
 
     private const val SYSTEM_PROMPT = """You are Astro, PY4U's concise Python coding assistant. Explain clearly. If the user asks to fix, add, remove, refactor, or otherwise change their code, return the COMPLETE updated current file in exactly one fenced python block; the app will ask the user before applying it, so never claim it was already applied. When a short lesson would genuinely help, end with exactly [TEACH:short topic]. Do not add a teaching offer to every reply."""
 
-    private fun revealWords(answer: String, onPartial: (String) -> Unit): String {
+    private fun revealWords(answer: String, onPartial: (String) -> Unit, delayMs: Long): String {
+        if (delayMs <= 0) return answer
         val chunks = Regex("\\S+\\s*").findAll(answer).map { it.value }
         val visible = StringBuilder()
         chunks.forEach {
             visible.append(it)
             onPartial(visible.toString())
-            try { Thread.sleep(18) } catch (_: InterruptedException) { return answer }
+            try { Thread.sleep(delayMs) } catch (_: InterruptedException) { return answer }
         }
         return answer
     }

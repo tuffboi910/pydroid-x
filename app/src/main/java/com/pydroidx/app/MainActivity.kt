@@ -744,7 +744,6 @@ class IdeViewModel : ViewModel() {
         stopRequested = true
         stdin.clear()
         stdin.offer(stopInputSignal)
-        worker?.interrupt()
         appendOutput("\n[Stopping program…]\n")
         input = ""
         waitingInput = false
@@ -772,7 +771,6 @@ class IdeViewModel : ViewModel() {
     override fun onCleared() {
         stopRequested = true
         stdin.offer(stopInputSignal)
-        worker?.interrupt()
         super.onCleared()
     }
 }

@@ -1725,6 +1725,13 @@ private fun AchievementNotice(
                             Text(vm.currentFileName,color=Color(0xFFE8E8EC),fontSize=14.sp,fontFamily=FontFamily.Monospace)
                             Spacer(Modifier.width(7.dp))
                             Box(Modifier.size(6.dp).background(Color(0xFF8AB4F8),androidx.compose.foundation.shape.CircleShape))
+                            Spacer(Modifier.width(8.dp))
+                            IconButton(onClick={editorView?.undoCode()},modifier=Modifier.size(34.dp)) {
+                                Text("↶",color=Color(0xFFD8D9E0),fontSize=24.sp,fontWeight=FontWeight.Medium)
+                            }
+                            IconButton(onClick={editorView?.redoCode()},modifier=Modifier.size(34.dp)) {
+                                Text("↷",color=Color(0xFFD8D9E0),fontSize=24.sp,fontWeight=FontWeight.Medium)
+                            }
                             Spacer(Modifier.weight(1f))
                             TextButton(
                                 onClick={scope.launch{pager.animateScrollToPage(0)}},
@@ -1783,18 +1790,16 @@ private fun AchievementNotice(
                                     horizontalArrangement=Arrangement.spacedBy(8.dp),
                                     verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                                 ){
-                                    listOf("Undo","Redo","Tab","(",")","[","]","{","}","\"",":","=").forEach{key->
+                                    listOf("Tab","(",")","[","]","{","}","\"",":","=").forEach{key->
                                         OutlinedButton(
                                             onClick={
                                                 when {
-                                                    key=="Undo" -> editorView?.undoCode()
-                                                    key=="Redo" -> editorView?.redoCode()
                                                     key=="Tab"&&editorView?.acceptGhostSuggestion()==true -> Unit
                                                     else -> editorView?.insertAtCursor(if(key=="Tab")"    " else key)
                                                 }
                                                 
                                             },
-                                            modifier=Modifier.width(if(key in listOf("Tab","Undo","Redo"))70.dp else 54.dp).fillMaxHeight(),
+                                            modifier=Modifier.width(if(key=="Tab")70.dp else 54.dp).fillMaxHeight(),
                                             shape=androidx.compose.foundation.shape.RoundedCornerShape(11.dp),
                                             border=BorderStroke(1.dp,Color.White.copy(alpha=.14f)),
                                             colors=ButtonDefaults.outlinedButtonColors(

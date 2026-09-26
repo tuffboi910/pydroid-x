@@ -680,6 +680,72 @@ class IdeViewModel : ViewModel() {
             }
         }
     }
+    fun replaceCurrentCode(value: String) {
+        if (running) return
+        code = value
+        codeDiagnostics = emptyList()
+        pendingCode = null
+        editorRevision++
+        save()
+    }
+
+    fun renameCurrentFile(requestedName: String): Boolean {
+        if (running || !::projectDir.isInitialized) return false
+        val base = requestedName.trim().removeSuffix(".py")
+            .replace(Regex("[^A-Za-z0-9_.-]+"), "_")
+            .trim('_', '.', '-')
+            .take(64)
+        if (base.isBlank()) return false
+        val target = File(projectDir, "$base.py")
+        val current = File(projectDir, currentFileName)
+        if (target.canonicalFile.parentFile != projectDir.canonicalFile) return false
+        if (target.exists() && target.canonicalFile != current.canonicalFile) return false
+        save()
+        val renamed = current.canonicalFile == target.canonicalFile || current.renameTo(target)
+        if (!renamed) return false
+        currentFileName = target.name
+        settings.edit().putString("current_file", currentFileName).apply()
+        refreshSaved()
+        editorRevision++
+        return true
+    }
+
+    fun clearCurrentCode() {
+        if (running) return
+        autosaveJob?.cancel()
+        namingJob?.cancel()
+        code = ""
+        codeDiagnostics = emptyList()
+        pendingCode = null
+        File(projectDir, currentFileName).writeText("")
+        refreshSaved()
+        editorRevision++
+    }
+
+    fun runTerminalCommand() {
+        if (!::projectDir.isInitialized) return
+        val command = terminalInput.trimEnd()
+        if (command.isBlank()) return
+        terminalHistory.record(command)
+        terminalInput = ""
+        val session = terminalSession ?: TerminalSession(projectDir).also { terminalSession = it }
+        val promptBefore = session.prompt()
+        terminalOutput = (terminalOutput + "$promptBefore $command\n").takeLast(200_000)
+        thread(name="PY4U-Terminal") {
+            val result = runCatching { session.execute(command) }
+                .getOrElse { TerminalResult("terminal: ${it.message ?: "command failed"}\n", session.prompt(), exitCode = 1) }
+            mainHandler.post {
+                terminalPrompt = result.cwd
+                terminalOutput = if (result.clear) "" else
+                    (terminalOutput + result.output + if (result.output.isNotEmpty() && !result.output.endsWith("\n")) "\n" else "").takeLast(200_000)
+            }
+        }
+    }
+
+    fun clearTerminal() {
+        terminalOutput = ""
+    }
+
     fun saveAppearance() {
         if (!::settings.isInitialized) return
         settings.edit().putFloat("editor_font",editorFontSize).putFloat("terminal_font",terminalFontSize)

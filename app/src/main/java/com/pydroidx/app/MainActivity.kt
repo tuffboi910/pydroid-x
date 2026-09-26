@@ -1146,11 +1146,14 @@ private class PythonEditorView(context: Context) : EditText(context) {
             val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop).coerceAtLeast(0))
             val right = gutterWidth - (10 * resources.displayMetrics.density)
             val source = text.toString()
-            for (visualLine in first..last.coerceAtMost(editorLayout.lineCount - 1)) {
+            val firstVisual = first.coerceAtMost(editorLayout.lineCount - 1)
+            val firstOffset = editorLayout.getLineStart(firstVisual)
+            var logicalLine = source.take(firstOffset).count { it == '\n' } + 1
+            for (visualLine in firstVisual..last.coerceAtMost(editorLayout.lineCount - 1)) {
                 val lineStart = editorLayout.getLineStart(visualLine)
-                val isLogicalLineStart = lineStart == 0 || source.getOrNull(lineStart - 1) == '\n'
-                if (!isLogicalLineStart) continue
-                val logicalLine = source.take(lineStart).count { it == '\n' } + 1
+                val startsLogicalLine = lineStart == 0 || source.getOrNull(lineStart - 1) == '\n'
+                if (visualLine != firstVisual && startsLogicalLine) logicalLine++
+                if (!startsLogicalLine) continue
                 val baseline = editorLayout.getLineBaseline(visualLine) + totalPaddingTop - scrollY
                 canvas.drawText(logicalLine.toString(), right, baseline.toFloat(), numberPaint)
             }

@@ -111,6 +111,8 @@ class IdeViewModel : ViewModel() {
     @Volatile var code = "print(\"Hello world!\")\n"
     var currentFileName by mutableStateOf("main.py")
     val savedCodes = mutableStateListOf<SavedCode>()
+    val projectNames = mutableStateListOf<String>()
+    var currentProjectName by mutableStateOf("default")
     var editorRevision by mutableIntStateOf(0)
         private set
     var output by mutableStateOf("")
@@ -204,6 +206,7 @@ class IdeViewModel : ViewModel() {
         output = outputBuffer.snapshot()
     }
     lateinit var projectDir: File
+    private lateinit var projectsRoot: File
     private lateinit var aiKeys: SecureAiKeyStore
     private lateinit var settings: android.content.SharedPreferences
 
@@ -267,7 +270,9 @@ class IdeViewModel : ViewModel() {
         toolbarHeight=settings.getFloat("toolbar_height",52f);bubbleRadius=settings.getFloat("bubble_radius",16f)
         bubbleWidth=settings.getFloat("bubble_width",310f);pageDotSize=settings.getFloat("page_dot_size",8f)
         showHeader=settings.getBoolean("show_header",true);showFileInfo=settings.getBoolean("show_file_info",true)
-        projectDir = File(context.filesDir, "projects/default").apply { mkdirs() }
+        projectsRoot = File(context.filesDir, "projects").apply { mkdirs() }
+        currentProjectName = ProjectWorkspace.safeName(settings.getString("current_project","default") ?: "default")
+        projectDir = File(projectsRoot,currentProjectName).apply { mkdirs() }
         val legacyStarter = "print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n"
         val existing = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
         currentFileName = settings.getString("current_file","main.py") ?: "main.py"
@@ -280,7 +285,8 @@ class IdeViewModel : ViewModel() {
             code = "print(\"Hello world!\")\n"
             current.writeText(code)
         }
-        settings.edit().putString("current_file",currentFileName).apply()
+        settings.edit().putString("current_file",currentFileName).putString("current_project",currentProjectName).apply()
+        refreshProjects()
         refreshSaved()
         editorRevision++
         thread {
@@ -475,12 +481,53 @@ class IdeViewModel : ViewModel() {
             deliver(diagnostics)
         }
     }
+    private fun refreshProjects() {
+        if (!::projectsRoot.isInitialized) return
+        val names = projectsRoot.listFiles()?.filter { it.isDirectory }?.map { it.name }?.sorted().orEmpty()
+        projectNames.clear()
+        projectNames.addAll(names)
+    }
+
     private fun refreshSaved() {
         if (!::projectDir.isInitialized) return
         val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }
             ?.sortedByDescending { it.lastModified() }.orEmpty()
         savedCodes.clear()
         savedCodes.addAll(files.map { SavedCode(it.nameWithoutExtension.replace('_',' '),it.lastModified()) })
+    }
+
+    fun makeNewProject() {
+        if (!::projectsRoot.isInitialized) return
+        save()
+        autosaveJob?.cancel()
+        namingJob?.cancel()
+        val name = ProjectWorkspace.nextName(projectNames, "Project")
+        File(projectsRoot,name).mkdirs()
+        switchProject(name)
+    }
+
+    fun switchProject(name: String) {
+        if (!::projectsRoot.isInitialized) return
+        val safeName = ProjectWorkspace.safeName(name)
+        val targetDir = File(projectsRoot,safeName)
+        if (!targetDir.exists() || !targetDir.isDirectory || targetDir.parentFile != projectsRoot) return
+        if (targetDir == projectDir) return
+        save()
+        autosaveJob?.cancel()
+        namingJob?.cancel()
+        projectDir = targetDir
+        currentProjectName = safeName
+        val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
+        var current = files.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
+        if (!current.exists()) current.writeText("print(\"Hello world!\")\n")
+        currentFileName = current.name
+        code = current.readText()
+        codeDiagnostics = emptyList()
+        pendingCode = null
+        settings.edit().putString("current_project",currentProjectName).putString("current_file",currentFileName).apply()
+        refreshProjects()
+        refreshSaved()
+        editorRevision++
     }
 
     private fun uniqueFile(base: String): File {
@@ -564,9 +611,10 @@ class IdeViewModel : ViewModel() {
             delay(autosaveDelay.toLong())
             val snapshot = code
             val fileName = currentFileName
+            val directory = projectDir
             launch(Dispatchers.IO) {
                 if (::projectDir.isInitialized) {
-                    File(projectDir,fileName).writeText(snapshot)
+                    File(directory,fileName).writeText(snapshot)
                     mainHandler.post { refreshSaved() }
                 }
             }
@@ -627,9 +675,10 @@ class IdeViewModel : ViewModel() {
         autosaveJob?.cancel()
         val snapshot = code
         val fileName = currentFileName
+        val directory = projectDir
         viewModelScope.launch(Dispatchers.IO) {
             if (::projectDir.isInitialized) {
-                File(projectDir,fileName).writeText(snapshot)
+                File(directory,fileName).writeText(snapshot)
                 mainHandler.post { refreshSaved() }
             }
         }

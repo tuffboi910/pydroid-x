@@ -25,6 +25,7 @@ jobs:
       - name: Configure local AI backend
         run: |
           git -C libs/llama.kt apply ../../patches/llama-kt-opencl-only.patch
+          yes | sdkmanager "ndk;27.2.12479018" >/dev/null
           bash libs/llama.kt/scripts/build-opencl.sh
       - name: Test Python analyzer
         run: python -m unittest discover -s app/src/test/python -v

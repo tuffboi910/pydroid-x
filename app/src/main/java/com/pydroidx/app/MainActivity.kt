@@ -668,6 +668,8 @@ class IdeViewModel : ViewModel() {
         val sourceSnapshot = code
         val fileSnapshot = currentFileName
         stdin.clear()
+        input = ""
+        waitingInput = false
         stopRequested = false
         clearOutput()
         running = true
@@ -691,6 +693,7 @@ class IdeViewModel : ViewModel() {
         stdin.offer(stopInputSignal)
         worker?.interrupt()
         appendOutput("\n[Stopping program…]\n")
+        input = ""
         waitingInput = false
     }
     inner class Bridge {
@@ -705,6 +708,7 @@ class IdeViewModel : ViewModel() {
         fun exited(code: Int) { mainHandler.post {
             appendOutput("\n[Process exited with code $code]\n")
             running = false
+            input = ""
             waitingInput = false
             stopRequested = false
             worker = null

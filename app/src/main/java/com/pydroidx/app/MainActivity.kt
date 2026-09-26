@@ -3,6 +3,7 @@ package com.pydroidx.app
 import android.os.Bundle
 import android.app.Activity
 import android.content.Context
+import android.content.ClipData
 import android.widget.Toast
 import android.graphics.Color as AndroidColor
 import android.graphics.Typeface
@@ -32,7 +33,6 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -41,14 +41,12 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -59,9 +57,9 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.window.Popup
@@ -69,11 +67,9 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.TextRange
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -92,8 +88,9 @@ import java.net.URL
 
 data class AiMessage(val fromUser: Boolean, val text: String)
 data class AiSlotConfig(val index: Int, val label: String, val provider: String, val endpoint: String, val model: String, val key: String)
-data class CodeDiagnostic(val start: Int, val end: Int, val message: String)
+data class CodeDiagnostic(val start: Int, val end: Int, val message: String, val fatal: Boolean = false)
 data class SavedCode(val name: String, val modified: Long)
+data class PendingCodeChange(val code: String, val fileName: String, val sourceSnapshot: String)
 
 private val FONT_VAULT = """
 Fira Code|firacode,JetBrains Mono|jetbrainsmono,Source Code Pro|sourcecodepro,IBM Plex Mono|ibmplexmono,Cascadia Code|cascadiacode,Victor Mono|victormono,Space Mono|spacemono,Inconsolata|inconsolata,Roboto Mono|robotomono,Noto Sans Mono|notosansmono,
@@ -124,12 +121,12 @@ class IdeViewModel : ViewModel() {
     val inputHistory = ConsoleInputHistory()
     var runtimeVersion by mutableStateOf("Loading Python…")
     var aiPrompt by mutableStateOf("")
-    var aiReply by mutableStateOf("Ask about Python, your error, or your selected code")
     val aiMessages = mutableStateListOf<AiMessage>()
     var aiBusy by mutableStateOf(false)
     var aiFallbackNotice by mutableStateOf<String?>(null)
-    var pendingCode by mutableStateOf<String?>(null)
+    var pendingCode by mutableStateOf<PendingCodeChange?>(null)
     var teachingOffer by mutableStateOf<String?>(null)
+    var aiTestStatus by mutableStateOf<String?>(null)
     var attachedFileName by mutableStateOf<String?>(null)
     var attachedFileText by mutableStateOf<String?>(null)
     var aiEndpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
@@ -142,7 +139,6 @@ class IdeViewModel : ViewModel() {
     var ai3Model by mutableStateOf("")
     var ai3Provider by mutableStateOf("Auto")
     var shareCode by mutableStateOf(false)
-    var hasAiKey by mutableStateOf(false)
     var editorFontSize by mutableFloatStateOf(16f)
     var terminalFontSize by mutableFloatStateOf(13f)
     var uiScale by mutableFloatStateOf(1f)
@@ -152,7 +148,7 @@ class IdeViewModel : ViewModel() {
     var fontName by mutableStateOf("Monospace")
     var lineSpacing by mutableFloatStateOf(1.12f)
     var editorPadding by mutableFloatStateOf(20f)
-    var typingAnimation by mutableStateOf(false)
+    var typingAnimation by mutableStateOf(true)
     var animationDuration by mutableFloatStateOf(120f)
     var highlightDelay by mutableFloatStateOf(220f)
     var autosaveDelay by mutableFloatStateOf(500f)
@@ -166,7 +162,6 @@ class IdeViewModel : ViewModel() {
     var accentHex by mutableStateOf("#FFFFFF")
     var backgroundHex by mutableStateOf("#000000")
     var motionStyle by mutableStateOf("Fluid spring")
-    var motionSpeed by mutableFloatStateOf(1f)
     var motionIntensity by mutableFloatStateOf(0.5f)
     var motionEnabled by mutableStateOf(true)
     var settingsQuery by mutableStateOf("")
@@ -202,6 +197,12 @@ class IdeViewModel : ViewModel() {
     private var autosaveJob: Job? = null
     private var namingJob: Job? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val outputBuffer = ConsoleOutputBuffer()
+    @Volatile private var outputFlushScheduled = false
+    private val outputFlushRunnable = Runnable {
+        outputFlushScheduled = false
+        output = outputBuffer.snapshot()
+    }
     lateinit var projectDir: File
     private lateinit var aiKeys: SecureAiKeyStore
     private lateinit var settings: android.content.SharedPreferences
@@ -218,7 +219,7 @@ class IdeViewModel : ViewModel() {
         fontName = settings.getString("font", "Monospace") ?: "Monospace"
         lineSpacing = settings.getFloat("line_spacing", 1.12f)
         editorPadding = settings.getFloat("editor_padding", 20f)
-        typingAnimation = settings.getBoolean("typing_animation", false)
+        typingAnimation = settings.getBoolean("typing_animation", true)
         animationDuration = settings.getFloat("animation_duration", 120f)
         highlightDelay = settings.getFloat("highlight_delay", 220f)
         autosaveDelay = settings.getFloat("autosave_delay", 500f)
@@ -227,28 +228,26 @@ class IdeViewModel : ViewModel() {
         cursorStyle = settings.getString("cursor", "Cyan") ?: "Cyan"
         autocomplete = settings.getBoolean("autocomplete", true)
         ghostBrightness = settings.getFloat("ghost_brightness", 0.48f)
-        aiEndpoint = settings.getString("ai_endpoint", null)
-            ?.trim()?.takeIf { it.startsWith("https://") }
-            ?: "https://api.openai.com/v1/chat/completions"
+        aiProvider = settings.getString("ai_provider", "Auto") ?: "Auto"
+        ai2Provider = settings.getString("ai2_provider", "Auto") ?: "Auto"
+        ai3Provider = settings.getString("ai3_provider", "Auto") ?: "Auto"
+        fun storedEndpoint(key: String, provider: String): String {
+            val value = settings.getString(key, null)?.trim().orEmpty()
+            return if (provider == "Custom") value
+            else value.takeIf { it.startsWith("https://") } ?: "https://api.openai.com/v1/chat/completions"
+        }
+        aiEndpoint = storedEndpoint("ai_endpoint", aiProvider)
         aiModel = settings.getString("ai_model", "gpt-4o-mini")
             ?.trim()?.takeIf { it.isNotEmpty() } ?: "gpt-4o-mini"
-        aiProvider = settings.getString("ai_provider", "Auto") ?: "Auto"
-        ai2Endpoint = settings.getString("ai2_endpoint", "https://api.openai.com/v1/chat/completions") ?: "https://api.openai.com/v1/chat/completions"
+        ai2Endpoint = storedEndpoint("ai2_endpoint", ai2Provider)
         ai2Model = settings.getString("ai2_model", "") ?: ""
-        ai2Provider = settings.getString("ai2_provider", "Auto") ?: "Auto"
-        ai3Endpoint = settings.getString("ai3_endpoint", "https://api.openai.com/v1/chat/completions") ?: "https://api.openai.com/v1/chat/completions"
+        ai3Endpoint = storedEndpoint("ai3_endpoint", ai3Provider)
         ai3Model = settings.getString("ai3_model", "") ?: ""
-        ai3Provider = settings.getString("ai3_provider", "Auto") ?: "Auto"
         lineNumbers = settings.getBoolean("line_numbers", true)
         highlightCurrentLine = settings.getBoolean("current_line", true)
         accentHex = settings.getString("accent_hex", "#FFFFFF") ?: "#FFFFFF"
-        if (accentHex.equals("#00E5FF",true)) {
-            accentHex = "#FFFFFF"
-            settings.edit().putString("accent_hex",accentHex).apply()
-        }
         backgroundHex = settings.getString("background_hex", "#000000") ?: "#000000"
         motionStyle = settings.getString("motion_style", "Fluid spring") ?: "Fluid spring"
-        motionSpeed = settings.getFloat("motion_speed", 1f)
         motionIntensity = settings.getFloat("motion_intensity", 0.5f)
         motionEnabled = settings.getBoolean("motion_enabled", true)
         customFontPath = settings.getString("custom_font_path", "") ?: ""
@@ -271,7 +270,6 @@ class IdeViewModel : ViewModel() {
         toolbarHeight=settings.getFloat("toolbar_height",52f);bubbleRadius=settings.getFloat("bubble_radius",16f)
         bubbleWidth=settings.getFloat("bubble_width",310f);pageDotSize=settings.getFloat("page_dot_size",8f)
         showHeader=settings.getBoolean("show_header",true);showFileInfo=settings.getBoolean("show_file_info",true)
-        hasAiKey = (0..2).any { !aiKeys.load(it).isNullOrBlank() }
         projectDir = File(context.filesDir, "projects/default").apply { mkdirs() }
         val legacyStarter = "print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n"
         val existing = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
@@ -301,8 +299,9 @@ class IdeViewModel : ViewModel() {
 
     fun saveAiSettings(key: String, endpoint: String, model: String, provider: String, slot: Int = 0) {
         if (key.isNotBlank()) aiKeys.save(key, slot)
-        val safeEndpoint = endpoint.trim().takeIf { it.startsWith("https://") }
-            ?: "https://api.openai.com/v1/chat/completions"
+        val safeEndpoint = if (provider == "Custom") endpoint.trim()
+            else endpoint.trim().takeIf { it.startsWith("https://") }
+                ?: "https://api.openai.com/v1/chat/completions"
         val safeModel = model.trim()
         when(slot) {
             1 -> { ai2Provider=provider; ai2Endpoint=safeEndpoint; ai2Model=safeModel }
@@ -313,12 +312,10 @@ class IdeViewModel : ViewModel() {
         settings.edit().putString("${prefix}_endpoint",safeEndpoint)
             .putString("${prefix}_model",if(slot==0) aiModel else safeModel)
             .putString("${prefix}_provider",provider).apply()
-        hasAiKey = (0..2).any { !aiKeys.load(it).isNullOrBlank() }
     }
 
     fun removeAiKey(slot: Int = 0) {
         aiKeys.clear(slot)
-        hasAiKey = (0..2).any { !aiKeys.load(it).isNullOrBlank() }
     }
 
     private fun configuredAiSlots(): List<AiSlotConfig> = listOf(
@@ -340,11 +337,17 @@ class IdeViewModel : ViewModel() {
         if (aiBusy) return
         var slots = configuredAiSlots()
         if (preferredSlot != null) slots = slots.filter { it.index == preferredSlot }
-        if (slots.isEmpty()) { aiReply = "Open AI settings and add an API key"; return }
+        if (slots.isEmpty()) {
+            if (testOnly) aiTestStatus = "No API key configured"
+            else aiMessages.add(AiMessage(false, "Open AI settings and add an API key"))
+            return
+        }
         val typedQuestion = if (testOnly) "Reply with: Connection successful" else aiPrompt.trim()
         if (typedQuestion.isBlank() && attachedFileText.isNullOrBlank()) return
         val attachmentNameSnapshot = attachedFileName
         val attachmentTextSnapshot = attachedFileText
+        val fileNameSnapshot = currentFileName
+        val codeSnapshot = code
         val question = if (testOnly) typedQuestion else buildString {
             append(typedQuestion.ifBlank { "Review the attached file" })
             if (!attachmentTextSnapshot.isNullOrBlank()) {
@@ -358,10 +361,11 @@ class IdeViewModel : ViewModel() {
             aiMessages.add(AiMessage(true, visibleQuestion))
             aiPrompt = ""
             clearAttachment()
+            aiMessages.add(AiMessage(false, ""))
+        } else {
+            aiTestStatus = "Testing connection…"
         }
         aiBusy = true
-        aiReply = if (testOnly) "Testing connection…" else "Connecting…"
-        if (!testOnly) aiMessages.add(AiMessage(false, ""))
         thread(name = "PY4U-AI") {
             val historySnapshot = if (!testOnly) aiMessages.dropLast(2).toList() else emptyList()
             val result = runCatching {
@@ -377,14 +381,14 @@ class IdeViewModel : ViewModel() {
                             apiKey=slot.key,
                             modelSetting=slot.model,
                             prompt=question,
-                            code=if (!testOnly && shareCode) code else null,
+                            code=if (!testOnly && shareCode) codeSnapshot else null,
                             history=historySnapshot,
+                            revealDelayMs=if (typingAnimation) (animationDuration / 6.7f).toLong().coerceIn(4L, 120L) else 0L,
                             onStatus={ status -> viewModelScope.launch { aiFallbackNotice="${slot.label}: $status" } }
                         ) { partial ->
                             viewModelScope.launch {
                                 if (!testOnly && aiMessages.isNotEmpty()) {
                                     aiMessages[aiMessages.lastIndex] = AiMessage(false, partial)
-                                    aiReply = partial
                                 }
                             }
                         }
@@ -394,14 +398,24 @@ class IdeViewModel : ViewModel() {
                 }
                 throw lastFailure ?: IllegalStateException("No configured AI connection worked")
             }
+            val succeeded = result.isSuccess
             val answer = result.getOrElse { "AI error: ${it.message ?: "All three AI connections failed"}" }
             viewModelScope.launch {
                 val cleanAnswer = answer.replace(Regex("\\s*\\[TEACH:[^]]+]",RegexOption.IGNORE_CASE),"").trimEnd()
-                aiReply = cleanAnswer
-                if (!testOnly) {
+                if (testOnly) {
+                    aiTestStatus = cleanAnswer
+                } else {
                     if (aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex] = AiMessage(false,cleanAnswer)
-                    extractPythonFile(answer)?.let { pendingCode=it }
-                    teachingOffer=extractTeachingOffer(answer)
+                    if (succeeded) {
+                        extractPythonFile(answer)?.let { proposed ->
+                            if (currentFileName == fileNameSnapshot && code == codeSnapshot) {
+                                pendingCode = PendingCodeChange(proposed, fileNameSnapshot, codeSnapshot)
+                            } else {
+                                aiMessages.add(AiMessage(false, "Code changed while Astro was working. Ask again before applying the edit."))
+                            }
+                        }
+                        teachingOffer=extractTeachingOffer(answer)
+                    }
                 }
                 aiBusy=false
             }
@@ -416,7 +430,13 @@ class IdeViewModel : ViewModel() {
         Regex("\\[TEACH:([^]]+)]", RegexOption.IGNORE_CASE).find(answer)?.groupValues?.get(1)?.trim()
 
     fun applyPendingCode() {
-        val replacement = pendingCode ?: return
+        val change = pendingCode ?: return
+        if (currentFileName != change.fileName || code != change.sourceSnapshot) {
+            pendingCode = null
+            aiMessages.add(AiMessage(false, "That edit is stale because the file changed. Ask Astro again before applying it."))
+            return
+        }
+        val replacement = change.code
         code = replacement + if (replacement.endsWith("\n")) "" else "\n"
         editorRevision++
         save()
@@ -450,7 +470,7 @@ class IdeViewModel : ViewModel() {
                 val values = JSONArray(raw)
                 (0 until values.length()).map { index ->
                     values.getJSONObject(index).let {
-                        CodeDiagnostic(it.getInt("start"), it.getInt("end"), it.optString("message"))
+                        CodeDiagnostic(it.getInt("start"), it.getInt("end"), it.optString("message"), it.optBoolean("fatal", false))
                     }
                 }
             }.getOrDefault(emptyList())
@@ -496,27 +516,13 @@ class IdeViewModel : ViewModel() {
 
     private fun renameCurrentByPurpose(snapshot: String) {
         if (!currentFileName.startsWith("untitled_") || snapshot.isBlank()) return
-        thread(name="PY4U-SmartName") {
-            var proposed = localPurposeName(snapshot)
-            val slot = configuredAiSlots().firstOrNull()
-            if (slot != null) proposed = runCatching {
-                AiClient.chat(
-                    providerSetting=slot.provider,endpoint=slot.endpoint,apiKey=slot.key,modelSetting=slot.model,
-                    prompt="Name this Python file from its purpose  Reply with only a short snake_case filename without extension",
-                    code=snapshot
-                ).lineSequence().firstOrNull().orEmpty().removeSuffix(".py")
-                    .replace(Regex("[^A-Za-z0-9_-]"),"_").trim('_').take(36).ifBlank { proposed }
-            }.getOrDefault(proposed)
-            mainHandler.post {
-                if (code != snapshot || !currentFileName.startsWith("untitled_")) return@post
-                val old=File(projectDir,currentFileName)
-                val target=uniqueFile(proposed)
-                if (old.exists() && old.renameTo(target)) {
-                    currentFileName=target.name
-                    settings.edit().putString("current_file",currentFileName).apply()
-                    refreshSaved()
-                }
-            }
+        if (code != snapshot) return
+        val old = File(projectDir,currentFileName)
+        val target = uniqueFile(localPurposeName(snapshot))
+        if (old.exists() && old.renameTo(target)) {
+            currentFileName = target.name
+            settings.edit().putString("current_file",currentFileName).apply()
+            refreshSaved()
         }
     }
 
@@ -584,7 +590,7 @@ class IdeViewModel : ViewModel() {
         settings.edit().putBoolean("autocomplete",autocomplete).putFloat("ghost_brightness",ghostBrightness).apply()
         settings.edit().putBoolean("line_numbers",lineNumbers).putBoolean("current_line",highlightCurrentLine).apply()
         settings.edit().putString("accent_hex",accentHex).putString("background_hex",backgroundHex)
-            .putString("motion_style",motionStyle).putFloat("motion_speed",motionSpeed)
+            .putString("motion_style",motionStyle)
             .putFloat("motion_intensity",motionIntensity).putBoolean("motion_enabled",motionEnabled).apply()
         settings.edit().putString("custom_font_path",customFontPath).apply()
         settings.edit().putString("editor_text_hex",editorTextHex).putString("comment_hex",commentHex)
@@ -633,17 +639,34 @@ class IdeViewModel : ViewModel() {
             }
         }
     }
+    private fun appendOutput(value: String) {
+        outputBuffer.append(value)
+        if (!outputFlushScheduled) {
+            outputFlushScheduled = true
+            mainHandler.postDelayed(outputFlushRunnable, 32)
+        }
+    }
+
+    fun clearOutput() {
+        outputBuffer.clear()
+        mainHandler.removeCallbacks(outputFlushRunnable)
+        outputFlushScheduled = false
+        output = ""
+    }
+
     fun run() {
         if (running) return
-        if (codeDiagnostics.isNotEmpty()) {
-            output = buildString {
-                append("Fix these errors before running:\n")
-                codeDiagnostics.take(8).forEach { issue ->
+        val fatalDiagnostics = codeDiagnostics.filter { it.fatal }
+        if (fatalDiagnostics.isNotEmpty()) {
+            clearOutput()
+            appendOutput(buildString {
+                append("Fix these syntax errors before running:\n")
+                fatalDiagnostics.take(8).forEach { issue ->
                     val line = code.take(issue.start.coerceIn(0, code.length)).count { it == '\n' } + 1
                     append("\nLine ").append(line).append(": ").append(issue.message)
                 }
-                if (codeDiagnostics.size > 8) append("\n\n…and ${codeDiagnostics.size - 8} more")
-            }
+                if (fatalDiagnostics.size > 8) append("\n\n…and ${fatalDiagnostics.size - 8} more")
+            })
             return
         }
         save()
@@ -651,14 +674,14 @@ class IdeViewModel : ViewModel() {
         val fileSnapshot = currentFileName
         stdin.clear()
         stopRequested = false
-        output = ""
+        clearOutput()
         running = true
         worker = thread(name = "PY4U-Python") {
             runCatching {
                 Python.getInstance().getModule("runner").callAttr("run_code", sourceSnapshot, fileSnapshot, projectDir.absolutePath, Bridge())
             }.onFailure { failure ->
                 mainHandler.post {
-                    output += "\nRuntime error: ${failure.message ?: "Python stopped unexpectedly"}\n"
+                    appendOutput("\nRuntime error: ${failure.message ?: "Python stopped unexpectedly"}\n")
                     running = false
                     waitingInput = false
                 }
@@ -672,11 +695,11 @@ class IdeViewModel : ViewModel() {
         stdin.clear()
         stdin.offer(stopInputSignal)
         worker?.interrupt()
-        output += "\n[Stopping program…]\n"
+        appendOutput("\n[Stopping program…]\n")
         waitingInput = false
     }
     inner class Bridge {
-        fun write(text: String, error: Boolean) { mainHandler.post { output += text } }
+        fun write(text: String, error: Boolean) { appendOutput(text) }
         fun shouldStop(): Boolean = stopRequested
         fun readLine(): String? {
             if (stopRequested) return null
@@ -685,7 +708,7 @@ class IdeViewModel : ViewModel() {
             catch (_: InterruptedException) { null }
         }
         fun exited(code: Int) { mainHandler.post {
-            output += "\n[Process exited with code $code]\n"
+            appendOutput("\n[Process exited with code $code]\n")
             running = false
             waitingInput = false
             stopRequested = false
@@ -716,6 +739,9 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var applyingHighlight = false
     private var applyingHistory = false
     private var beforeEdit = EditorSnapshot("", 0)
+    private var shouldRecordHistory = false
+    private var lastHistoryCaptureAt = 0L
+    private var loadedRevision = -1
     private val history = EditorHistory()
     private var highlightingEnabled = true
     private var highlightDelayMs = 220L
@@ -723,7 +749,6 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var ghostAlpha = 122
     private var ghostSuffix: String? = null
     private var ghostCursorBack = 0
-    private var ghostPrefixStart = 0
     private var diagnostics: List<CodeDiagnostic> = emptyList()
     private var showLineNumbers = true
     private var showCurrentLine = true
@@ -822,12 +847,20 @@ private class PythonEditorView(context: Context) : EditText(context) {
         addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
                 if (!applyingHighlight && !applyingHistory) {
-                    beforeEdit = EditorSnapshot(s?.toString().orEmpty(), selectionStart.coerceAtLeast(0))
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    val length = s?.length ?: 0
+                    val bulkEdit = count > 1 || after > 1
+                    shouldRecordHistory = length <= 20_000 || bulkEdit || now - lastHistoryCaptureAt >= 350L
+                    if (shouldRecordHistory) {
+                        beforeEdit = EditorSnapshot(s?.toString().orEmpty(), selectionStart.coerceAtLeast(0))
+                        lastHistoryCaptureAt = now
+                    }
                 }
             }
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 if (!applyingHighlight && !applyingHistory) {
-                    history.record(beforeEdit)
+                    if (shouldRecordHistory) history.record(beforeEdit)
+                    shouldRecordHistory = false
                     onCodeChanged?.invoke(s?.toString().orEmpty())
                     removeCallbacks(highlightRunnable)
                     postDelayed(highlightRunnable, highlightDelayMs)
@@ -853,7 +886,13 @@ private class PythonEditorView(context: Context) : EditText(context) {
         }
     }
 
-    fun setCodeIfDifferent(value: String) {
+    fun setCodeIfDifferent(value: String, revision: Int) {
+        if (loadedRevision != revision) {
+            history.clear()
+            diagnostics = emptyList()
+            ghostSuffix = null
+            loadedRevision = revision
+        }
         if (text.toString() == value) return
         applyingHighlight = true
         val cursor = selectionStart.coerceAtLeast(0).coerceAtMost(value.length)
@@ -888,8 +927,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
     }
 
     fun applyPreferences(font: Float, wrap: Boolean, syntax: Boolean, family: String, spacing: Float,
-                         padding: Float, animateTyping: Boolean, animationMs: Float,
-                         highlightDelay: Float, cursor: String, autocomplete: Boolean,
+                         padding: Float, highlightDelay: Float, cursor: String, autocomplete: Boolean,
                          ghostBrightness: Float, lineNumbers: Boolean, currentLine: Boolean,
                          customFontPath: String, palette: List<String>) {
         textSize = font
@@ -942,7 +980,6 @@ private class PythonEditorView(context: Context) : EditText(context) {
             it.key.startsWith(prefix, ignoreCase = false) && it.key != prefix
         } else null
         val projectMatch = if (prefix.isNotEmpty()) projectNames.firstOrNull { it.startsWith(prefix) && it != prefix } else null
-        ghostPrefixStart = start
         ghostSuffix = localMatch?.value?.removePrefix(prefix) ?: projectMatch?.removePrefix(prefix)
         ghostCursorBack = if (ghostSuffix?.endsWith("()") == true) 1 else 0
         invalidate()
@@ -1047,9 +1084,14 @@ private class PythonEditorView(context: Context) : EditText(context) {
             val first = editorLayout.getLineForVertical((scrollY - totalPaddingTop).coerceAtLeast(0))
             val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop).coerceAtLeast(0))
             val right = gutterWidth - (10 * resources.displayMetrics.density)
-            for (lineNumber in first..last.coerceAtMost(editorLayout.lineCount - 1)) {
-                val baseline = editorLayout.getLineBaseline(lineNumber) + totalPaddingTop - scrollY
-                canvas.drawText((lineNumber + 1).toString(), right, baseline.toFloat(), numberPaint)
+            val source = text.toString()
+            for (visualLine in first..last.coerceAtMost(editorLayout.lineCount - 1)) {
+                val lineStart = editorLayout.getLineStart(visualLine)
+                val isLogicalLineStart = lineStart == 0 || source.getOrNull(lineStart - 1) == '\n'
+                if (!isLogicalLineStart) continue
+                val logicalLine = source.take(lineStart).count { it == '\n' } + 1
+                val baseline = editorLayout.getLineBaseline(visualLine) + totalPaddingTop - scrollY
+                canvas.drawText(logicalLine.toString(), right, baseline.toFloat(), numberPaint)
             }
         }
         val suffix=ghostSuffix ?: return

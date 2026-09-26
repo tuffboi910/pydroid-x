@@ -1817,13 +1817,22 @@ private fun AchievementNotice(
                                             consoleInputValue,{consoleInputValue=it;vm.input=it.text},
                                             enabled=vm.waitingInput,
                                             singleLine=true,
-                                            modifier=Modifier.weight(1f).focusRequester(consoleInputFocus),
+                                            textStyle=androidx.compose.ui.text.TextStyle(
+                                                color=Color.White,
+                                                fontFamily=FontFamily.Monospace,
+                                                fontSize=16.sp,
+                                                fontWeight=FontWeight.Medium
+                                            ),
+                                            modifier=Modifier.weight(1f).heightIn(min=52.dp).focusRequester(consoleInputFocus),
                                             placeholder={Text(if(vm.waitingInput)"Type program input…" else "Waiting for Python input()",color=Color(0xFF66666E),fontSize=13.sp)},
                                             colors=TextFieldDefaults.colors(
                                                 focusedContainerColor=Color.Transparent,unfocusedContainerColor=Color.Transparent,
                                                 disabledContainerColor=Color.Transparent,focusedIndicatorColor=Color.Transparent,
                                                 unfocusedIndicatorColor=Color.Transparent,disabledIndicatorColor=Color.Transparent,
-                                                focusedTextColor=Color.White,disabledTextColor=Color(0xFF77777F)
+                                                focusedTextColor=Color.White,unfocusedTextColor=Color.White,
+                                                disabledTextColor=Color.White.copy(alpha=.62f),
+                                                cursorColor=Color(0xFF00E5FF),
+                                                errorCursorColor=Color(0xFFFF6B81)
                                             ),
                                             keyboardOptions=KeyboardOptions(imeAction=ImeAction.None)
                                         )

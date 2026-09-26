@@ -571,7 +571,7 @@ class IdeViewModel : ViewModel() {
     }
 
     fun makeNewCode() {
-        if (running) return
+        if (running || !::projectDir.isInitialized) return
         save()
         var number=1
         var file=File(projectDir,"untitled_$number.py")
@@ -588,7 +588,7 @@ class IdeViewModel : ViewModel() {
     }
 
     fun openSaved(displayName: String) {
-        if (running) return
+        if (running || !::projectDir.isInitialized) return
         save()
         val file=projectDir.listFiles()?.firstOrNull {
             it.isFile && it.extension.equals("py",true) && it.nameWithoutExtension.replace('_',' ')==displayName
@@ -707,7 +707,7 @@ class IdeViewModel : ViewModel() {
     }
 
     fun run() {
-        if (running) return
+        if (running || !::projectDir.isInitialized) return
         val fatalDiagnostics = codeDiagnostics.filter { it.fatal }
         if (fatalDiagnostics.isNotEmpty()) {
             clearOutput()

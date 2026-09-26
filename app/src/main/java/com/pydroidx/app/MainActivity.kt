@@ -4,6 +4,8 @@ import android.os.Bundle
 import android.app.Activity
 import android.content.Context
 import android.content.ClipData
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.widget.Toast
 import android.graphics.Color as AndroidColor
 import android.graphics.Typeface
@@ -161,6 +163,20 @@ class IdeViewModel : ViewModel() {
     var ai3Endpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
     var ai3Model by mutableStateOf("")
     var ai3Provider by mutableStateOf("Auto")
+    var aiMode by mutableStateOf("Online")
+    var localModelPath by mutableStateOf("")
+    var localModelName by mutableStateOf("")
+    var localModelStatus by mutableStateOf("Choose a GGUF model")
+    val localBackends = mutableStateListOf<String>()
+    var localBackend by mutableStateOf("CPU")
+    var localGpuLayers by mutableIntStateOf(99)
+    var localContextTokens by mutableIntStateOf(4096)
+    var localCpuThreads by mutableIntStateOf(0)
+    var localMaxTokens by mutableIntStateOf(512)
+    var localTemperature by mutableFloatStateOf(0.7f)
+    var localTopP by mutableFloatStateOf(0.95f)
+    var localMinP by mutableFloatStateOf(0.05f)
+    var localTopK by mutableIntStateOf(40)
     var shareCode by mutableStateOf(false)
     var editorFontSize by mutableFloatStateOf(16f)
     var terminalFontSize by mutableFloatStateOf(13f)
@@ -231,6 +247,7 @@ class IdeViewModel : ViewModel() {
     private lateinit var projectsRoot: File
     private lateinit var aiKeys: SecureAiKeyStore
     private lateinit var settings: android.content.SharedPreferences
+    private val localAiEngine = LocalAiEngine()
 
     fun initialize(context: Context) {
         aiKeys = SecureAiKeyStore(context.applicationContext)
@@ -265,6 +282,21 @@ class IdeViewModel : ViewModel() {
         ai2Model = settings.getString("ai2_model", "") ?: ""
         ai3Endpoint = storedEndpoint("ai3_endpoint", ai3Provider)
         ai3Model = settings.getString("ai3_model", "") ?: ""
+        aiMode = settings.getString("ai_mode", "Online") ?: "Online"
+        localModelPath = settings.getString("local_model_path", "") ?: ""
+        localModelName = settings.getString("local_model_name", "") ?: ""
+        localBackend = settings.getString("local_backend", "CPU") ?: "CPU"
+        localGpuLayers = settings.getInt("local_gpu_layers", 99)
+        localContextTokens = settings.getInt("local_context_tokens", 4096)
+        localCpuThreads = settings.getInt("local_cpu_threads", 0)
+        localMaxTokens = settings.getInt("local_max_tokens", 512)
+        localTemperature = settings.getFloat("local_temperature", 0.7f)
+        localTopP = settings.getFloat("local_top_p", 0.95f)
+        localMinP = settings.getFloat("local_min_p", 0.05f)
+        localTopK = settings.getInt("local_top_k", 40)
+        if (localModelPath.isNotBlank() && File(localModelPath).isFile) {
+            localModelStatus = "Saved model • " + (localModelName.ifBlank { File(localModelPath).name })
+        }
         lineNumbers = settings.getBoolean("line_numbers", true)
         highlightCurrentLine = settings.getBoolean("current_line", true)
         accentHex = settings.getString("accent_hex", "#FFFFFF") ?: "#FFFFFF"
@@ -363,7 +395,170 @@ class IdeViewModel : ViewModel() {
         attachedFileText = null
     }
 
+    private fun localAiConfig() = LocalAiConfig(
+        backend=localBackend,
+        gpuLayers=localGpuLayers,
+        contextTokens=localContextTokens,
+        cpuThreads=localCpuThreads,
+        maxTokens=localMaxTokens,
+        temperature=localTemperature,
+        topP=localTopP,
+        minP=localMinP,
+        topK=localTopK
+    ).normalized()
+
+    fun setAiMode(mode: String) {
+        aiMode = if (mode.equals("Local", true)) "Local" else "Online"
+        settings.edit().putString("ai_mode", aiMode).apply()
+    }
+
+    fun saveLocalAiSettings() {
+        val config=localAiConfig()
+        localGpuLayers=config.gpuLayers
+        localContextTokens=config.contextTokens
+        localCpuThreads=config.cpuThreads
+        localMaxTokens=config.maxTokens
+        localTemperature=config.temperature
+        localTopP=config.topP
+        localMinP=config.minP
+        localTopK=config.topK
+        settings.edit()
+            .putString("ai_mode",aiMode)
+            .putString("local_model_path",localModelPath)
+            .putString("local_model_name",localModelName)
+            .putString("local_backend",localBackend)
+            .putInt("local_gpu_layers",localGpuLayers)
+            .putInt("local_context_tokens",localContextTokens)
+            .putInt("local_cpu_threads",localCpuThreads)
+            .putInt("local_max_tokens",localMaxTokens)
+            .putFloat("local_temperature",localTemperature)
+            .putFloat("local_top_p",localTopP)
+            .putFloat("local_min_p",localMinP)
+            .putInt("local_top_k",localTopK)
+            .apply()
+        localAiEngine.unload()
+    }
+
+    fun importLocalModel(context: Context, uri: Uri) {
+        if (aiBusy) return
+        aiBusy=true
+        localModelStatus="Importing GGUF…"
+        thread(name="PY4U-ModelImport") {
+            val result=runCatching {
+                val displayName=context.contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use { cursor ->
+                    if(cursor.moveToFirst()) cursor.getString(0) else null
+                } ?: "local_model.gguf"
+                require(displayName.endsWith(".gguf",true)) { "Choose a .gguf model file" }
+                val safeName=displayName.replace(Regex("[^A-Za-z0-9._-]+"),"_").takeLast(100)
+                val modelDir=File(context.filesDir,"models").apply{mkdirs()}
+                val target=File(modelDir,safeName)
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    target.outputStream().buffered().use { output -> input.copyTo(output,1024*1024) }
+                } ?: error("Could not open the selected model")
+                require(target.length()>0L) { "The selected model is empty" }
+                val info=localAiEngine.inspect(target.absolutePath) ?: error("This file is not a readable GGUF model")
+                Triple(target,info,localAiEngine.availableBackends())
+            }
+            mainHandler.post {
+                result.onSuccess { (target,info,backends) ->
+                    localModelPath=target.absolutePath
+                    localModelName=info.name.ifBlank{target.name}
+                    localBackends.clear();localBackends.addAll(backends)
+                    localModelStatus="${info.architecture} • ${info.quant} • ${"%.1f".format(info.fileSizeBytes/1_073_741_824.0)} GB"
+                    saveLocalAiSettings()
+                }.onFailure { failure ->
+                    localModelStatus="Model error: ${failure.message ?: "import failed"}"
+                }
+                aiBusy=false
+            }
+        }
+    }
+
+    fun probeLocalBackends() {
+        thread(name="PY4U-BackendProbe") {
+            val result=runCatching { localAiEngine.availableBackends() }
+            mainHandler.post {
+                localBackends.clear()
+                result.onSuccess { localBackends.addAll(it) }
+                    .onFailure { localModelStatus="Backend error: ${it.message ?: "unavailable"}" }
+            }
+        }
+    }
+
+    private fun askLocalAi(testOnly: Boolean = false) {
+        if (aiBusy) return
+        if (localModelPath.isBlank() || !File(localModelPath).isFile) {
+            if(testOnly) aiTestStatus="Choose a GGUF model first"
+            else aiMessages.add(AiMessage(false,"Choose a local GGUF model in Astro settings first."))
+            return
+        }
+        val typedQuestion=if(testOnly) "Connection test" else aiPrompt.trim()
+        if(!testOnly && typedQuestion.isBlank() && attachedFileText.isNullOrBlank()) return
+        val attachmentNameSnapshot=attachedFileName
+        val attachmentTextSnapshot=attachedFileText
+        val fileNameSnapshot=currentFileName
+        val codeSnapshot=code
+        val question=if(testOnly) typedQuestion else buildString {
+            append(typedQuestion.ifBlank{"Review the attached file"})
+            if(!attachmentTextSnapshot.isNullOrBlank()){
+                append("\n\nAttached file: ").append(attachmentNameSnapshot ?: "attachment")
+                append("\n```\n").append(attachmentTextSnapshot).append("\n```")
+            }
+        }
+        val historySnapshot=aiMessages.toList()
+        if(!testOnly){
+            aiMessages.add(AiMessage(true,typedQuestion.ifBlank{"Review this attachment"}))
+            aiPrompt=""
+            clearAttachment()
+            aiMessages.add(AiMessage(false,""))
+            trimAiMessages()
+        } else aiTestStatus="Loading local model…"
+        aiBusy=true
+        thread(name="PY4U-LocalAI") {
+            val result=runCatching {
+                val config=localAiConfig()
+                if(testOnly){
+                    localAiEngine.ensureLoaded(localModelPath,config){ status ->
+                        mainHandler.post { localModelStatus=status }
+                    }
+                    "Local model ready"
+                } else localAiEngine.chat(
+                    path=localModelPath,
+                    rawConfig=config,
+                    prompt=question,
+                    history=historySnapshot,
+                    code=if(shareCode) codeSnapshot else null,
+                    onStatus={ status -> mainHandler.post { localModelStatus=status } },
+                    onPartial={ partial -> mainHandler.post {
+                        if(aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex]=AiMessage(false,partial)
+                    }}
+                )
+            }
+            mainHandler.post {
+                val succeeded=result.isSuccess
+                val answer=result.getOrElse{"Local AI error: ${it.message ?: "inference failed"}"}
+                if(testOnly) aiTestStatus=answer
+                else {
+                    if(aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex]=AiMessage(false,answer)
+                    if(succeeded){
+                        extractPythonFile(answer)?.let { proposed ->
+                            if(currentFileName==fileNameSnapshot && code==codeSnapshot)
+                                pendingCode=PendingCodeChange(proposed,fileNameSnapshot,codeSnapshot)
+                        }
+                        teachingOffer=extractTeachingOffer(answer)
+                    }
+                }
+                aiBusy=false
+            }
+        }
+    }
+
     fun askAi(testOnly: Boolean = false, preferredSlot: Int? = null) {
+        if(aiMode=="Local" && preferredSlot==null) askLocalAi(testOnly)
+        else askOnlineAi(testOnly,preferredSlot)
+    }
+
+    private fun askOnlineAi(testOnly: Boolean = false, preferredSlot: Int? = null) {
         if (aiBusy) return
         var slots = configuredAiSlots()
         if (preferredSlot != null) slots = slots.filter { it.index == preferredSlot }
@@ -895,6 +1090,8 @@ class IdeViewModel : ViewModel() {
     override fun onCleared() {
         stopRequested = true
         stdin.offer(stopInputSignal)
+        localAiEngine.interrupt()
+        localAiEngine.unload()
         super.onCleared()
     }
 }

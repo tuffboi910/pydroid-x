@@ -1,6 +1,7 @@
 package com.pydroidx.app
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -24,7 +25,8 @@ fun ConsoleKeyToolbar(
     focusRequester: FocusRequester,
     externalText: String,
     outputLength: Int,
-    outputScroll: ScrollState
+    outputScroll: ScrollState,
+    containerColor: Color = Color(0xFF050505)
 ) {
     var ctrl by remember { mutableStateOf(false) }
     var alt by remember { mutableStateOf(false) }
@@ -46,7 +48,10 @@ fun ConsoleKeyToolbar(
     }
 
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 7.dp),
+        Modifier.fillMaxWidth()
+            .background(containerColor, androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 6.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(7.dp)
     ) {
         listOf("Ctrl", "Alt", "←", "↑", "↓", "→", "Home", "End", "Tab").forEach { key ->

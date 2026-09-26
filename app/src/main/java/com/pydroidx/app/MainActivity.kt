@@ -1829,6 +1829,35 @@ private fun AchievementNotice(
                             },
                             modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
                         )
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=10.dp,vertical=3.dp),
+                            horizontalArrangement=Arrangement.spacedBy(6.dp)
+                        ){
+                            OutlinedButton(
+                                onClick={
+                                    val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("PY4U code",vm.code))
+                                    Toast.makeText(context,"Copied all code",Toast.LENGTH_SHORT).show()
+                                },
+                                contentPadding=PaddingValues(horizontal=10.dp,vertical=2.dp),
+                                modifier=Modifier.height(34.dp)
+                            ){Text("Copy all",fontSize=11.sp)}
+                            OutlinedButton(
+                                onClick={
+                                    val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    val pasted=clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()
+                                    if(!pasted.isNullOrEmpty()) vm.replaceCurrentCode(pasted)
+                                },
+                                contentPadding=PaddingValues(horizontal=10.dp,vertical=2.dp),
+                                modifier=Modifier.height(34.dp)
+                            ){Text("Paste all",fontSize=11.sp)}
+                            OutlinedButton(
+                                onClick={clearCodeDialog=true},
+                                colors=ButtonDefaults.outlinedButtonColors(contentColor=Color(0xFFFF6B72)),
+                                contentPadding=PaddingValues(horizontal=10.dp,vertical=2.dp),
+                                modifier=Modifier.height(34.dp)
+                            ){Text("Delete all",fontSize=11.sp)}
+                        }
                         if(vm.showToolbar) {
                             Row(
                                 Modifier.fillMaxWidth().padding(horizontal=14.dp,vertical=4.dp),

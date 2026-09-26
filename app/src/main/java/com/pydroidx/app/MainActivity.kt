@@ -67,6 +67,7 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -1558,7 +1559,9 @@ private fun AchievementNotice(
     val context = LocalContext.current
     val aiScroll = rememberScrollState()
     val consoleScroll = rememberScrollState()
+    val terminalScroll = rememberScrollState()
     val consoleInputFocus = remember { FocusRequester() }
+    val terminalInputFocus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val pages = listOf("FOLDERS", "PYTHON", "CONSOLE", "HELPER", "SETTINGS")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
@@ -1570,6 +1573,10 @@ private fun AchievementNotice(
     var providerDraft by remember { mutableStateOf(vm.aiProvider) }
     var settingsSection by remember { mutableStateOf("Overview") }
     var consoleInputValue by remember { mutableStateOf(TextFieldValue(vm.input)) }
+    var terminalInputValue by remember { mutableStateOf(TextFieldValue(vm.terminalInput)) }
+    var renameDialog by remember { mutableStateOf(false) }
+    var renameDraft by remember { mutableStateOf("") }
+    var clearCodeDialog by remember { mutableStateOf(false) }
     val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             val name = uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
@@ -1675,7 +1682,12 @@ private fun AchievementNotice(
                 }
             }
             }
-            HorizontalPager(state=pager,modifier=Modifier.weight(1f).fillMaxWidth(),beyondViewportPageCount=1) { page ->
+            HorizontalPager(
+                state=pager,
+                modifier=Modifier.weight(1f).fillMaxWidth(),
+                beyondViewportPageCount=1,
+                userScrollEnabled=vm.swipePages
+            ) { page ->
                 val rawOffset = (pager.currentPage - page) + pager.currentPageOffsetFraction
                 val distance = rawOffset.absoluteValue.coerceIn(0f,1f)
                 val motionModifier = Modifier.fillMaxSize().graphicsLayer {
@@ -1774,20 +1786,19 @@ private fun AchievementNotice(
                                 .padding(start=14.dp,end=8.dp),
                             verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                         ){
-                            Box(Modifier.size(24.dp)){
-                                Box(
-                                    Modifier.width(16.dp).height(12.dp)
-                                        .background(Color.White,androidx.compose.foundation.shape.RoundedCornerShape(5.dp))
-                                        .align(androidx.compose.ui.Alignment.TopStart)
-                                )
-                                Box(
-                                    Modifier.width(16.dp).height(12.dp)
-                                        .background(Color(0xFF9A9AA1),androidx.compose.foundation.shape.RoundedCornerShape(5.dp))
-                                        .align(androidx.compose.ui.Alignment.BottomEnd)
-                                )
+                            Icon(
+                                painter=painterResource(id=R.drawable.ic_launcher_foreground),
+                                contentDescription="Python",
+                                tint=Color.Unspecified,
+                                modifier=Modifier.size(28.dp)
+                            )
+                            Spacer(Modifier.width(7.dp))
+                            TextButton(
+                                onClick={renameDraft=vm.currentFileName.removeSuffix(".py");renameDialog=true},
+                                contentPadding=PaddingValues(horizontal=4.dp,vertical=0.dp)
+                            ){
+                                Text(vm.currentFileName,color=Color(0xFFE8E8EC),fontSize=14.sp,fontFamily=FontFamily.Monospace)
                             }
-                            Spacer(Modifier.width(9.dp))
-                            Text(vm.currentFileName,color=Color(0xFFE8E8EC),fontSize=14.sp,fontFamily=FontFamily.Monospace)
                             Spacer(Modifier.width(7.dp))
                             Box(Modifier.size(6.dp).background(Color(0xFF8AB4F8),androidx.compose.foundation.shape.CircleShape))
                             Spacer(Modifier.weight(1f))
@@ -1876,22 +1887,12 @@ private fun AchievementNotice(
                         Modifier.fillMaxSize().background(bg).padding(horizontal=14.dp,vertical=12.dp)
                     ) {
                         Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-                            Box(Modifier.size(39.dp)){
-                                Box(
-                                    Modifier.width(25.dp).height(18.dp)
-                                        .background(Color.White,androidx.compose.foundation.shape.RoundedCornerShape(7.dp))
-                                        .align(androidx.compose.ui.Alignment.TopStart)
-                                ){
-                                    Box(Modifier.size(4.dp).background(Color.Black,androidx.compose.foundation.shape.CircleShape).align(androidx.compose.ui.Alignment.TopStart).offset(6.dp,4.dp))
-                                }
-                                Box(
-                                    Modifier.width(25.dp).height(18.dp)
-                                        .background(Color(0xFFB8B8BE),androidx.compose.foundation.shape.RoundedCornerShape(7.dp))
-                                        .align(androidx.compose.ui.Alignment.BottomEnd)
-                                ){
-                                    Box(Modifier.size(4.dp).background(Color.Black,androidx.compose.foundation.shape.CircleShape).align(androidx.compose.ui.Alignment.BottomEnd).offset((-6).dp,(-4).dp))
-                                }
-                            }
+                            Icon(
+                                painter=painterResource(id=R.drawable.ic_launcher_foreground),
+                                contentDescription="Python",
+                                tint=Color.Unspecified,
+                                modifier=Modifier.size(39.dp)
+                            )
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)){
                                 Text("PYTHON CONSOLE",color=Color.White,fontSize=17.sp,fontWeight=FontWeight.SemiBold,letterSpacing=1.1.sp)

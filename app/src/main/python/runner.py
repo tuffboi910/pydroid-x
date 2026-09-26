@@ -198,16 +198,15 @@ class _UndefinedNameAnalyzer(ast.NodeVisitor):
     def visit_Name(self, node):
         if not isinstance(node.ctx, ast.Load) or _resolve(node.id, self.scope):
             return
-        line_text = self.source_lines[node.lineno - 1]
-        char_column = len(line_text.encode("utf-8")[:node.col_offset].decode("utf-8", errors="ignore"))
-        start = self.line_starts[node.lineno - 1] + char_column
-        end = start + len(node.id)
+        start, end = _node_utf16_range(self.source_lines, self.line_starts, node, node.id)
         key = (start, end, node.id)
         if key not in self.seen:
             self.seen.add(key)
             self.issues.append({
                 "start": start,
                 "end": end,
+                "line": node.lineno,
+                "column": node.col_offset + 1,
                 "message": "Undefined name: " + node.id,
                 "fatal": False,
             })
@@ -279,65 +278,200 @@ class _UndefinedNameAnalyzer(ast.NodeVisitor):
         self._visit_comprehension(node, [node.key, node.value])
 
 
+
+def _utf16_len(value):
+    """Android EditText offsets are UTF-16 code units, not Python code points."""
+    return len(value.encode("utf-16-le")) // 2
+
+
+def _node_utf16_range(source_lines, line_starts_utf16, node, name=None):
+    line_index = max(0, (getattr(node, "lineno", 1) or 1) - 1)
+    line_text = source_lines[line_index] if line_index < len(source_lines) else ""
+    byte_column = max(0, getattr(node, "col_offset", 0) or 0)
+    prefix = line_text.encode("utf-8")[:byte_column].decode("utf-8", errors="ignore")
+    start = line_starts_utf16[line_index] + _utf16_len(prefix)
+    token = name if name is not None else getattr(node, "id", "")
+    return start, start + _utf16_len(token)
+
+
+class _CallArityAnalyzer(ast.NodeVisitor):
+    """Conservative direct-call arity checks. Ambiguous calls are deliberately skipped."""
+    _BUILTINS = {
+        "abs": (1, 1), "aiter": (1, 1), "all": (1, 1), "any": (1, 1),
+        "ascii": (1, 1), "bin": (1, 1), "bool": (0, 1), "callable": (1, 1),
+        "chr": (1, 1), "complex": (0, 2), "divmod": (2, 2), "enumerate": (1, 2),
+        "float": (0, 1), "format": (1, 2), "hash": (1, 1), "hex": (1, 1),
+        "id": (1, 1), "int": (0, 2), "isinstance": (2, 2), "issubclass": (2, 2),
+        "iter": (1, 2), "len": (1, 1), "list": (0, 1), "memoryview": (1, 1),
+        "next": (1, 2), "object": (0, 0), "oct": (1, 1), "ord": (1, 1),
+        "pow": (2, 3), "repr": (1, 1), "reversed": (1, 1), "round": (1, 2),
+        "set": (0, 1), "slice": (1, 3), "str": (0, 3), "sum": (1, 2),
+        "tuple": (0, 1), "type": (1, 3),
+    }
+
+    def __init__(self, source, tree, line_starts_utf16, issues, seen):
+        self.source = source
+        self.source_lines = source.splitlines(True)
+        self.line_starts_utf16 = line_starts_utf16
+        self.issues = issues
+        self.seen = seen
+        self.signatures = {}
+        self._collect_functions(tree)
+
+    @staticmethod
+    def _signature(node):
+        args = node.args
+        positional = list(args.posonlyargs) + list(args.args)
+        required = max(0, len(positional) - len(args.defaults))
+        maximum = None if args.vararg else len(positional)
+        required_kwonly = sum(1 for default in args.kw_defaults if default is None)
+        return required, maximum, required_kwonly
+
+    def _collect_functions(self, tree):
+        class Collector(ast.NodeVisitor):
+            def __init__(self, target):
+                self.target = target
+
+            def visit_FunctionDef(self, node):
+                self.target.setdefault(node.name, _CallArityAnalyzer._signature(node))
+                self.generic_visit(node)
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+        Collector(self.signatures).visit(tree)
+
+    def visit_Call(self, node):
+        self.generic_visit(node)
+        if not isinstance(node.func, ast.Name):
+            return
+        if any(isinstance(arg, ast.Starred) for arg in node.args):
+            return
+        if any(keyword.arg is None for keyword in node.keywords):
+            return
+
+        name = node.func.id
+        signature = self.signatures.get(name)
+        if signature is None:
+            builtin_signature = self._BUILTINS.get(name)
+            if builtin_signature is None:
+                return
+            minimum, maximum = builtin_signature
+            required_kwonly = 0
+        else:
+            minimum, maximum, required_kwonly = signature
+        positional = len(node.args)
+        supplied_keywords = {kw.arg for kw in node.keywords if kw.arg}
+        # If a function requires keyword-only arguments we cannot safely know their names
+        # from a compact signature, so only check positional overflow in that case.
+        too_few = required_kwonly == 0 and positional + len(supplied_keywords) < minimum
+        too_many = maximum is not None and positional > maximum
+        if not (too_few or too_many):
+            return
+
+        if maximum is None or minimum != maximum:
+            expected = f"{minimum}" if maximum is None else f"{minimum}-{maximum}"
+        else:
+            expected = str(minimum)
+        got = positional + len(supplied_keywords)
+        start, end = _node_utf16_range(self.source_lines, self.line_starts_utf16, node.func, name)
+        key = (start, end, name, "arity")
+        if key in self.seen:
+            return
+        self.seen.add(key)
+        self.issues.append({
+            "start": start,
+            "end": end,
+            "line": getattr(node, "lineno", 1) or 1,
+            "column": (getattr(node, "col_offset", 0) or 0) + 1,
+            "message": f"{name}() expected {expected} argument(s), got {got}",
+            "fatal": False,
+        })
+
+
 def diagnose(source):
-    """Return syntax errors and conservative unresolved-name warnings with exact ranges."""
+    """Return syntax errors and conservative static warnings with Android-safe ranges."""
     try:
         compile(source, "<editor>", "exec")
         tree = ast.parse(source)
     except SyntaxError as exc:
         lines = source.splitlines(True)
-        line = max(1, exc.lineno or 1)
-        start = sum(len(value) for value in lines[:line - 1]) + max(0, (exc.offset or 1) - 1)
-        end = min(len(source), start + 1)
+        line_no = max(1, exc.lineno or 1)
+        line_index = min(line_no - 1, max(0, len(lines) - 1))
+        before_lines = "".join(lines[:line_index])
+        line_text = lines[line_index] if lines else ""
+        char_column = max(0, (exc.offset or 1) - 1)
+        prefix = line_text[:char_column]
+        start = _utf16_len(before_lines) + _utf16_len(prefix)
+        token_text = line_text[char_column:char_column + 1]
+        end = start + max(1, _utf16_len(token_text))
         return json.dumps([{
             "start": start,
             "end": end,
+            "line": line_no,
+            "column": char_column + 1,
             "message": exc.msg,
             "fatal": True,
         }])
 
-    line_starts = [0]
-    for index, char in enumerate(source):
-        if char == "\n":
-            line_starts.append(index + 1)
+    source_lines = source.splitlines(True)
+    line_starts_utf16 = [0]
+    running = 0
+    for line in source_lines:
+        running += _utf16_len(line)
+        line_starts_utf16.append(running)
+    if not source_lines:
+        source_lines = [""]
 
     module_scope = _Scope("module")
     _prepare_scope(module_scope, tree.body)
     issues = []
     seen = set()
-    analyzer = _UndefinedNameAnalyzer(module_scope, source, line_starts, issues, seen)
+
+    # Android EditText indexes Java/Kotlin strings in UTF-16 code units.
+    analyzer = _UndefinedNameAnalyzer(module_scope, source, line_starts_utf16, issues, seen)
     for item in tree.body:
         analyzer.visit(item)
-    issues.sort(key=lambda item: (item["start"], item["end"]))
+
+    _CallArityAnalyzer(source, tree, line_starts_utf16, issues, seen).visit(tree)
+    issues.sort(key=lambda item: (item["start"], item["end"], item["message"]))
     return json.dumps(issues)
 
-
 def complete(source, cursor, project_dir):
-    """Return Jedi's best local completion as JSON. Runs fully offline."""
+    """Return up to eight Jedi completions with labels, docs and insertion suffixes."""
     try:
         import jedi
         before = source[:cursor]
         line = before.count("\n") + 1
         column = len(before.rsplit("\n", 1)[-1])
         path = os.path.join(project_dir, "main.py")
-        items = jedi.Script(source, path=path).complete(line, column)
+        completions = jedi.Script(source, path=path).complete(line, column)[:8]
+        items = []
+        for item in completions:
+            suffix = item.complete
+            cursor_back = 0
+            if item.type in ("function", "class") and not suffix.endswith(")"):
+                suffix += "()"
+                cursor_back = 1
+            items.append({
+                "label": item.name + ("()" if cursor_back else ""),
+                "suffix": suffix,
+                "cursor_back": cursor_back,
+                "type": item.type,
+                "doc": item.docstring(raw=True)[:320],
+            })
         if not items:
-            return "{}"
-        item = items[0]
-        suffix = item.complete
-        cursor_back = 0
-        if item.type in ("function", "class") and not suffix.endswith(")"):
-            suffix += "()"
-            cursor_back = 1
+            return json.dumps({"items": []})
+        best = items[0]
         return json.dumps({
-            "label": item.name + ("()" if cursor_back else ""),
-            "suffix": suffix,
-            "cursor_back": cursor_back,
-            "type": item.type,
-            "doc": item.docstring(raw=True)[:240],
+            "label": best["label"],
+            "suffix": best["suffix"],
+            "cursor_back": best["cursor_back"],
+            "type": best["type"],
+            "doc": best["doc"],
+            "items": items,
         })
     except Exception:
-        return "{}"
+        return json.dumps({"items": []})
 
 
 class _Stream(io.TextIOBase):

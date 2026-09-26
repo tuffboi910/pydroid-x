@@ -10,7 +10,7 @@ android {
     compileSdk = 35
     defaultConfig {
         applicationId = "com.pydroidx.app"
-        minSdk = 26
+        minSdk = 29
         targetSdk = 35
         versionCode = 3
         versionName = "0.1.2"
@@ -22,6 +22,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+}
+
+kotlin {
+    jvmToolchain(17)
 }
 
 chaquopy {
@@ -40,6 +44,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.0")
+    implementation(project(":llama-kt"))
     testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

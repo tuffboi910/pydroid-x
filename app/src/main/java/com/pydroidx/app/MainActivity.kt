@@ -4,6 +4,8 @@ import android.os.Bundle
 import android.app.Activity
 import android.content.Context
 import android.content.ClipData
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.widget.Toast
 import android.graphics.Color as AndroidColor
 import android.graphics.Typeface
@@ -67,6 +69,7 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -88,9 +91,23 @@ import java.net.URL
 
 data class AiMessage(val fromUser: Boolean, val text: String)
 data class AiSlotConfig(val index: Int, val label: String, val provider: String, val endpoint: String, val model: String, val key: String)
-data class CodeDiagnostic(val start: Int, val end: Int, val message: String, val fatal: Boolean = false)
+data class CodeDiagnostic(
+    val start: Int,
+    val end: Int,
+    val message: String,
+    val fatal: Boolean = false,
+    val line: Int = 1,
+    val column: Int = 1
+)
 data class SavedCode(val name: String, val modified: Long)
 data class PendingCodeChange(val code: String, val fileName: String, val sourceSnapshot: String)
+data class CompletionItem(
+    val label: String,
+    val suffix: String,
+    val cursorBack: Int = 0,
+    val type: String = "",
+    val doc: String = ""
+)
 
 private val FONT_VAULT = """
 Fira Code|firacode,JetBrains Mono|jetbrainsmono,Source Code Pro|sourcecodepro,IBM Plex Mono|ibmplexmono,Cascadia Code|cascadiacode,Victor Mono|victormono,Space Mono|spacemono,Inconsolata|inconsolata,Roboto Mono|robotomono,Noto Sans Mono|notosansmono,
@@ -121,6 +138,12 @@ class IdeViewModel : ViewModel() {
     var waitingInput by mutableStateOf(false)
     var input by mutableStateOf("")
     val inputHistory = ConsoleInputHistory()
+    var consoleMode by mutableStateOf("Python")
+    var terminalInput by mutableStateOf("")
+    var terminalOutput by mutableStateOf("")
+    var terminalPrompt by mutableStateOf("~")
+    val terminalHistory = ConsoleInputHistory()
+    private var terminalSession: TerminalSession? = null
     var runtimeVersion by mutableStateOf("Loading Python…")
     var aiPrompt by mutableStateOf("")
     val aiMessages = mutableStateListOf<AiMessage>()
@@ -140,6 +163,21 @@ class IdeViewModel : ViewModel() {
     var ai3Endpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
     var ai3Model by mutableStateOf("")
     var ai3Provider by mutableStateOf("Auto")
+    var aiMode by mutableStateOf("Online")
+        private set
+    var localModelPath by mutableStateOf("")
+    var localModelName by mutableStateOf("")
+    var localModelStatus by mutableStateOf("Choose a GGUF model")
+    val localBackends = mutableStateListOf<String>()
+    var localBackend by mutableStateOf("CPU")
+    var localGpuLayers by mutableIntStateOf(99)
+    var localContextTokens by mutableIntStateOf(4096)
+    var localCpuThreads by mutableIntStateOf(0)
+    var localMaxTokens by mutableIntStateOf(512)
+    var localTemperature by mutableFloatStateOf(0.7f)
+    var localTopP by mutableFloatStateOf(0.95f)
+    var localMinP by mutableFloatStateOf(0.05f)
+    var localTopK by mutableIntStateOf(40)
     var shareCode by mutableStateOf(false)
     var editorFontSize by mutableFloatStateOf(16f)
     var terminalFontSize by mutableFloatStateOf(13f)
@@ -192,6 +230,7 @@ class IdeViewModel : ViewModel() {
     var pageDotSize by mutableFloatStateOf(8f)
     var showHeader by mutableStateOf(true)
     var showFileInfo by mutableStateOf(true)
+    var swipePages by mutableStateOf(false)
     private val stdin = LinkedBlockingQueue<String>()
     private val stopInputSignal = "\u0000PYDROIDX_STOP\u0000"
     @Volatile private var worker: Thread? = null
@@ -209,6 +248,7 @@ class IdeViewModel : ViewModel() {
     private lateinit var projectsRoot: File
     private lateinit var aiKeys: SecureAiKeyStore
     private lateinit var settings: android.content.SharedPreferences
+    private val localAiEngine = LocalAiEngine()
 
     fun initialize(context: Context) {
         aiKeys = SecureAiKeyStore(context.applicationContext)
@@ -243,6 +283,21 @@ class IdeViewModel : ViewModel() {
         ai2Model = settings.getString("ai2_model", "") ?: ""
         ai3Endpoint = storedEndpoint("ai3_endpoint", ai3Provider)
         ai3Model = settings.getString("ai3_model", "") ?: ""
+        aiMode = settings.getString("ai_mode", "Online") ?: "Online"
+        localModelPath = settings.getString("local_model_path", "") ?: ""
+        localModelName = settings.getString("local_model_name", "") ?: ""
+        localBackend = settings.getString("local_backend", "CPU") ?: "CPU"
+        localGpuLayers = settings.getInt("local_gpu_layers", 99)
+        localContextTokens = settings.getInt("local_context_tokens", 4096)
+        localCpuThreads = settings.getInt("local_cpu_threads", 0)
+        localMaxTokens = settings.getInt("local_max_tokens", 512)
+        localTemperature = settings.getFloat("local_temperature", 0.7f)
+        localTopP = settings.getFloat("local_top_p", 0.95f)
+        localMinP = settings.getFloat("local_min_p", 0.05f)
+        localTopK = settings.getInt("local_top_k", 40)
+        if (localModelPath.isNotBlank() && File(localModelPath).isFile) {
+            localModelStatus = "Saved model • " + (localModelName.ifBlank { File(localModelPath).name })
+        }
         lineNumbers = settings.getBoolean("line_numbers", true)
         highlightCurrentLine = settings.getBoolean("current_line", true)
         accentHex = settings.getString("accent_hex", "#FFFFFF") ?: "#FFFFFF"
@@ -270,9 +325,12 @@ class IdeViewModel : ViewModel() {
         toolbarHeight=settings.getFloat("toolbar_height",52f);bubbleRadius=settings.getFloat("bubble_radius",16f)
         bubbleWidth=settings.getFloat("bubble_width",310f);pageDotSize=settings.getFloat("page_dot_size",8f)
         showHeader=settings.getBoolean("show_header",true);showFileInfo=settings.getBoolean("show_file_info",true)
+        swipePages=settings.getBoolean("swipe_pages",false)
         projectsRoot = File(context.filesDir, "projects").apply { mkdirs() }
         currentProjectName = ProjectWorkspace.safeName(settings.getString("current_project","default") ?: "default")
         projectDir = File(projectsRoot,currentProjectName).apply { mkdirs() }
+        terminalSession = TerminalSession(projectDir)
+        terminalPrompt = terminalSession?.prompt() ?: "~"
         val legacyStarter = "print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n"
         val existing = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
         currentFileName = settings.getString("current_file","main.py") ?: "main.py"
@@ -338,7 +396,170 @@ class IdeViewModel : ViewModel() {
         attachedFileText = null
     }
 
+    private fun localAiConfig() = LocalAiConfig(
+        backend=localBackend,
+        gpuLayers=localGpuLayers,
+        contextTokens=localContextTokens,
+        cpuThreads=localCpuThreads,
+        maxTokens=localMaxTokens,
+        temperature=localTemperature,
+        topP=localTopP,
+        minP=localMinP,
+        topK=localTopK
+    ).normalized()
+
+    fun updateAiMode(mode: String) {
+        aiMode = if (mode.equals("Local", true)) "Local" else "Online"
+        settings.edit().putString("ai_mode", aiMode).apply()
+    }
+
+    fun saveLocalAiSettings() {
+        val config=localAiConfig()
+        localGpuLayers=config.gpuLayers
+        localContextTokens=config.contextTokens
+        localCpuThreads=config.cpuThreads
+        localMaxTokens=config.maxTokens
+        localTemperature=config.temperature
+        localTopP=config.topP
+        localMinP=config.minP
+        localTopK=config.topK
+        settings.edit()
+            .putString("ai_mode",aiMode)
+            .putString("local_model_path",localModelPath)
+            .putString("local_model_name",localModelName)
+            .putString("local_backend",localBackend)
+            .putInt("local_gpu_layers",localGpuLayers)
+            .putInt("local_context_tokens",localContextTokens)
+            .putInt("local_cpu_threads",localCpuThreads)
+            .putInt("local_max_tokens",localMaxTokens)
+            .putFloat("local_temperature",localTemperature)
+            .putFloat("local_top_p",localTopP)
+            .putFloat("local_min_p",localMinP)
+            .putInt("local_top_k",localTopK)
+            .apply()
+        localAiEngine.unload()
+    }
+
+    fun importLocalModel(context: Context, uri: Uri) {
+        if (aiBusy) return
+        aiBusy=true
+        localModelStatus="Importing GGUF…"
+        thread(name="PY4U-ModelImport") {
+            val result=runCatching {
+                val displayName=context.contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use { cursor ->
+                    if(cursor.moveToFirst()) cursor.getString(0) else null
+                } ?: "local_model.gguf"
+                require(displayName.endsWith(".gguf",true)) { "Choose a .gguf model file" }
+                val safeName=displayName.replace(Regex("[^A-Za-z0-9._-]+"),"_").takeLast(100)
+                val modelDir=File(context.filesDir,"models").apply{mkdirs()}
+                val target=File(modelDir,safeName)
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    target.outputStream().buffered().use { output -> input.copyTo(output,1024*1024) }
+                } ?: error("Could not open the selected model")
+                require(target.length()>0L) { "The selected model is empty" }
+                val info=localAiEngine.inspect(target.absolutePath) ?: error("This file is not a readable GGUF model")
+                Triple(target,info,localAiEngine.availableBackends())
+            }
+            mainHandler.post {
+                result.onSuccess { (target,info,backends) ->
+                    localModelPath=target.absolutePath
+                    localModelName=info.name.ifBlank{target.name}
+                    localBackends.clear();localBackends.addAll(backends)
+                    localModelStatus="${info.architecture} • ${info.quant} • ${"%.1f".format(info.fileSizeBytes/1_073_741_824.0)} GB"
+                    saveLocalAiSettings()
+                }.onFailure { failure ->
+                    localModelStatus="Model error: ${failure.message ?: "import failed"}"
+                }
+                aiBusy=false
+            }
+        }
+    }
+
+    fun probeLocalBackends() {
+        thread(name="PY4U-BackendProbe") {
+            val result=runCatching { localAiEngine.availableBackends() }
+            mainHandler.post {
+                localBackends.clear()
+                result.onSuccess { localBackends.addAll(it) }
+                    .onFailure { localModelStatus="Backend error: ${it.message ?: "unavailable"}" }
+            }
+        }
+    }
+
+    private fun askLocalAi(testOnly: Boolean = false) {
+        if (aiBusy) return
+        if (localModelPath.isBlank() || !File(localModelPath).isFile) {
+            if(testOnly) aiTestStatus="Choose a GGUF model first"
+            else aiMessages.add(AiMessage(false,"Choose a local GGUF model in Astro settings first."))
+            return
+        }
+        val typedQuestion=if(testOnly) "Connection test" else aiPrompt.trim()
+        if(!testOnly && typedQuestion.isBlank() && attachedFileText.isNullOrBlank()) return
+        val attachmentNameSnapshot=attachedFileName
+        val attachmentTextSnapshot=attachedFileText
+        val fileNameSnapshot=currentFileName
+        val codeSnapshot=code
+        val question=if(testOnly) typedQuestion else buildString {
+            append(typedQuestion.ifBlank{"Review the attached file"})
+            if(!attachmentTextSnapshot.isNullOrBlank()){
+                append("\n\nAttached file: ").append(attachmentNameSnapshot ?: "attachment")
+                append("\n```\n").append(attachmentTextSnapshot).append("\n```")
+            }
+        }
+        val historySnapshot=aiMessages.toList()
+        if(!testOnly){
+            aiMessages.add(AiMessage(true,typedQuestion.ifBlank{"Review this attachment"}))
+            aiPrompt=""
+            clearAttachment()
+            aiMessages.add(AiMessage(false,""))
+            trimAiMessages()
+        } else aiTestStatus="Loading local model…"
+        aiBusy=true
+        thread(name="PY4U-LocalAI") {
+            val result=runCatching {
+                val config=localAiConfig()
+                if(testOnly){
+                    localAiEngine.ensureLoaded(localModelPath,config){ status ->
+                        mainHandler.post { localModelStatus=status }
+                    }
+                    "Local model ready"
+                } else localAiEngine.chat(
+                    path=localModelPath,
+                    rawConfig=config,
+                    prompt=question,
+                    history=historySnapshot,
+                    code=if(shareCode) codeSnapshot else null,
+                    onStatus={ status -> mainHandler.post { localModelStatus=status } },
+                    onPartial={ partial -> mainHandler.post {
+                        if(aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex]=AiMessage(false,partial)
+                    }}
+                )
+            }
+            mainHandler.post {
+                val succeeded=result.isSuccess
+                val answer=result.getOrElse{"Local AI error: ${it.message ?: "inference failed"}"}
+                if(testOnly) aiTestStatus=answer
+                else {
+                    if(aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex]=AiMessage(false,answer)
+                    if(succeeded){
+                        extractPythonFile(answer)?.let { proposed ->
+                            if(currentFileName==fileNameSnapshot && code==codeSnapshot)
+                                pendingCode=PendingCodeChange(proposed,fileNameSnapshot,codeSnapshot)
+                        }
+                        teachingOffer=extractTeachingOffer(answer)
+                    }
+                }
+                aiBusy=false
+            }
+        }
+    }
+
     fun askAi(testOnly: Boolean = false, preferredSlot: Int? = null) {
+        if(aiMode=="Local" && preferredSlot==null) askLocalAi(testOnly)
+        else askOnlineAi(testOnly,preferredSlot)
+    }
+
+    private fun askOnlineAi(testOnly: Boolean = false, preferredSlot: Int? = null) {
         if (aiBusy) return
         var slots = configuredAiSlots()
         if (preferredSlot != null) slots = slots.filter { it.index == preferredSlot }
@@ -457,15 +678,27 @@ class IdeViewModel : ViewModel() {
         askAi()
     }
     fun rejectTeaching() { teachingOffer = null }
-    fun requestCompletion(source: String, cursor: Int, deliver: (String, Int) -> Unit) {
+    fun requestCompletion(source: String, cursor: Int, deliver: (List<CompletionItem>) -> Unit) {
         if (!autocomplete || !::projectDir.isInitialized) return
         thread(name="PyDroidX-Jedi") {
             runCatching {
                 val raw = Python.getInstance().getModule("runner")
                     .callAttr("complete", source, cursor, projectDir.absolutePath).toString()
                 val json = JSONObject(raw)
-                val suffix = json.optString("suffix")
-                if (suffix.isNotEmpty()) deliver(suffix, json.optInt("cursor_back", 0))
+                val array = json.optJSONArray("items") ?: JSONArray()
+                val items = (0 until array.length()).mapNotNull { index ->
+                    array.optJSONObject(index)?.let {
+                        val suffix = it.optString("suffix")
+                        if (suffix.isEmpty()) null else CompletionItem(
+                            label=it.optString("label"),
+                            suffix=suffix,
+                            cursorBack=it.optInt("cursor_back",0),
+                            type=it.optString("type"),
+                            doc=it.optString("doc")
+                        )
+                    }
+                }
+                deliver(items)
             }
         }
     }
@@ -476,7 +709,14 @@ class IdeViewModel : ViewModel() {
                 val values = JSONArray(raw)
                 (0 until values.length()).map { index ->
                     values.getJSONObject(index).let {
-                        CodeDiagnostic(it.getInt("start"), it.getInt("end"), it.optString("message"), it.optBoolean("fatal", false))
+                        CodeDiagnostic(
+                            it.getInt("start"),
+                            it.getInt("end"),
+                            it.optString("message"),
+                            it.optBoolean("fatal", false),
+                            it.optInt("line", 1),
+                            it.optInt("column", 1)
+                        )
                     }
                 }
             }.getOrDefault(emptyList())
@@ -521,6 +761,10 @@ class IdeViewModel : ViewModel() {
         autosaveJob?.cancel()
         namingJob?.cancel()
         projectDir = targetDir
+        terminalSession = TerminalSession(projectDir)
+        terminalPrompt = terminalSession?.prompt() ?: "~"
+        terminalOutput = ""
+        terminalInput = ""
         currentProjectName = safeName
         val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
         var current = files.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
@@ -633,6 +877,72 @@ class IdeViewModel : ViewModel() {
             }
         }
     }
+    fun replaceCurrentCode(value: String) {
+        if (running) return
+        code = value
+        codeDiagnostics = emptyList()
+        pendingCode = null
+        editorRevision++
+        save()
+    }
+
+    fun renameCurrentFile(requestedName: String): Boolean {
+        if (running || !::projectDir.isInitialized) return false
+        val base = requestedName.trim().removeSuffix(".py")
+            .replace(Regex("[^A-Za-z0-9_.-]+"), "_")
+            .trim('_', '.', '-')
+            .take(64)
+        if (base.isBlank()) return false
+        val target = File(projectDir, "$base.py")
+        val current = File(projectDir, currentFileName)
+        if (target.canonicalFile.parentFile != projectDir.canonicalFile) return false
+        if (target.exists() && target.canonicalFile != current.canonicalFile) return false
+        save()
+        val renamed = current.canonicalFile == target.canonicalFile || current.renameTo(target)
+        if (!renamed) return false
+        currentFileName = target.name
+        settings.edit().putString("current_file", currentFileName).apply()
+        refreshSaved()
+        editorRevision++
+        return true
+    }
+
+    fun clearCurrentCode() {
+        if (running) return
+        autosaveJob?.cancel()
+        namingJob?.cancel()
+        code = ""
+        codeDiagnostics = emptyList()
+        pendingCode = null
+        File(projectDir, currentFileName).writeText("")
+        refreshSaved()
+        editorRevision++
+    }
+
+    fun runTerminalCommand() {
+        if (!::projectDir.isInitialized) return
+        val command = terminalInput.trimEnd()
+        if (command.isBlank()) return
+        terminalHistory.record(command)
+        terminalInput = ""
+        val session = terminalSession ?: TerminalSession(projectDir).also { terminalSession = it }
+        val promptBefore = session.prompt()
+        terminalOutput = (terminalOutput + "$promptBefore $command\n").takeLast(200_000)
+        thread(name="PY4U-Terminal") {
+            val result = runCatching { session.execute(command) }
+                .getOrElse { TerminalResult("terminal: ${it.message ?: "command failed"}\n", session.prompt(), exitCode = 1) }
+            mainHandler.post {
+                terminalPrompt = result.cwd
+                terminalOutput = if (result.clear) "" else
+                    (terminalOutput + result.output + if (result.output.isNotEmpty() && !result.output.endsWith("\n")) "\n" else "").takeLast(200_000)
+            }
+        }
+    }
+
+    fun clearTerminal() {
+        terminalOutput = ""
+    }
+
     fun saveAppearance() {
         if (!::settings.isInitialized) return
         settings.edit().putFloat("editor_font",editorFontSize).putFloat("terminal_font",terminalFontSize)
@@ -658,7 +968,8 @@ class IdeViewModel : ViewModel() {
             .putString("run_button_hex",runButtonHex).putString("stop_button_hex",stopButtonHex)
             .putFloat("header_height",headerHeight).putFloat("tab_height",tabHeight).putFloat("toolbar_height",toolbarHeight)
             .putFloat("bubble_radius",bubbleRadius).putFloat("bubble_width",bubbleWidth).putFloat("page_dot_size",pageDotSize)
-            .putBoolean("show_header",showHeader).putBoolean("show_file_info",showFileInfo).apply()
+            .putBoolean("show_header",showHeader).putBoolean("show_file_info",showFileInfo)
+            .putBoolean("swipe_pages",swipePages).apply()
     }
     fun installVaultFont(context: Context, displayName: String, slug: String) {
         if (fontStatus.startsWith("Downloading")) return
@@ -780,6 +1091,8 @@ class IdeViewModel : ViewModel() {
     override fun onCleared() {
         stopRequested = true
         stdin.offer(stopInputSignal)
+        localAiEngine.interrupt()
+        localAiEngine.unload()
         super.onCleared()
     }
 }
@@ -793,7 +1106,7 @@ class MainActivity : ComponentActivity() {
 
 private class PythonEditorView(context: Context) : EditText(context) {
     var onCodeChanged: ((String) -> Unit)? = null
-    var requestSmartCompletion: ((String, Int, (String, Int) -> Unit) -> Unit)? = null
+    var requestSmartCompletion: ((String, Int, (List<CompletionItem>) -> Unit) -> Unit)? = null
     var requestCodeDiagnostics: ((String, (List<CodeDiagnostic>) -> Unit) -> Unit)? = null
     private var applyingHighlight = false
     private var applyingHistory = false
@@ -808,6 +1121,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var ghostAlpha = 122
     private var ghostSuffix: String? = null
     private var ghostCursorBack = 0
+    private var completionItems: List<CompletionItem> = emptyList()
+    private var selectedCompletion = 0
     private var diagnostics: List<CodeDiagnostic> = emptyList()
     private var showLineNumbers = true
     private var showCurrentLine = true
@@ -879,11 +1194,14 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val lineStart = snapshot.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)) + 1
         val currentLine = snapshot.substring(lineStart.coerceIn(0,cursor), cursor)
         if (currentLine.isBlank()) { ghostSuffix = null; invalidate(); return@Runnable }
-        requestSmartCompletion?.invoke(snapshot, cursor) { suffix, cursorBack ->
+        requestSmartCompletion?.invoke(snapshot, cursor) { items ->
             post {
-                if (text.toString() == snapshot && selectionStart == cursor && suffix.isNotEmpty()) {
-                    ghostSuffix = suffix
-                    ghostCursorBack = cursorBack
+                if (text.toString() == snapshot && selectionStart == cursor) {
+                    completionItems = items.filter { it.suffix.isNotEmpty() }.take(8)
+                    selectedCompletion = 0
+                    val first = completionItems.firstOrNull()
+                    ghostSuffix = first?.suffix
+                    ghostCursorBack = first?.cursorBack ?: 0
                     invalidate()
                 }
             }
@@ -930,10 +1248,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     removeCallbacks(diagnosticsRunnable)
                     diagnostics = emptyList()
                     invalidate()
-                    val safeStart = start.coerceIn(0,s?.length ?: 0)
-                    val safeEnd = (start + count).coerceIn(safeStart,s?.length ?: safeStart)
-                    val inserted = s?.subSequence(safeStart,safeEnd)?.toString().orEmpty()
-                    if (inserted.contains('\n')) postDelayed(diagnosticsRunnable, 120)
+                    postDelayed(diagnosticsRunnable, 320)
                 }
             }
             override fun afterTextChanged(s: Editable?) = Unit
@@ -951,6 +1266,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
             history.clear()
             diagnostics = emptyList()
             ghostSuffix = null
+            completionItems = emptyList()
             loadedRevision = revision
         }
         if (text.toString() == value) return
@@ -1030,10 +1346,11 @@ private class PythonEditorView(context: Context) : EditText(context) {
     }
 
     private fun updateGhostSuggestion() {
-        if (!autocompleteEnabled || !hasFocus()) { ghostSuffix=null; invalidate(); return }
+        if (!autocompleteEnabled || !hasFocus()) { ghostSuffix=null; completionItems=emptyList(); invalidate(); return }
         val cursor = selectionStart
         if (text.isEmpty() || cursor < 0 || cursor > text.length) {
             ghostSuffix=null
+            completionItems=emptyList()
             invalidate()
             return
         }
@@ -1046,23 +1363,50 @@ private class PythonEditorView(context: Context) : EditText(context) {
             it.key.startsWith(prefix, ignoreCase = false) && it.key != prefix
         } else null
         val projectMatch = if (prefix.isNotEmpty()) projectNames.firstOrNull { it.startsWith(prefix) && it != prefix } else null
-        ghostSuffix = localMatch?.value?.removePrefix(prefix) ?: projectMatch?.removePrefix(prefix)
-        ghostCursorBack = if (ghostSuffix?.endsWith("()") == true) 1 else 0
+        val localSuffix = localMatch?.value?.removePrefix(prefix) ?: projectMatch?.removePrefix(prefix)
+        ghostSuffix = localSuffix
+        ghostCursorBack = if (localSuffix?.endsWith("()") == true) 1 else 0
+        completionItems = when {
+            localMatch != null && localSuffix != null -> listOf(
+                CompletionItem(localMatch.value, localSuffix, ghostCursorBack, "builtin", "Python completion")
+            )
+            projectMatch != null && localSuffix != null -> listOf(
+                CompletionItem(projectMatch, localSuffix, 0, "project", "Symbol from this file")
+            )
+            else -> emptyList()
+        }
+        selectedCompletion = 0
         invalidate()
     }
 
     fun acceptGhostSuggestion(): Boolean {
-        val suffix = ghostSuffix ?: return false
+        val selected = completionItems.getOrNull(selectedCompletion)
+        val suffix = selected?.suffix ?: ghostSuffix ?: return false
+        val cursorBack = selected?.cursorBack ?: ghostCursorBack
         val cursor = selectionStart.coerceAtLeast(0)
         text.insert(cursor,suffix)
-        val newCursor = cursor + suffix.length - ghostCursorBack
+        val newCursor = cursor + suffix.length - cursorBack
         setSelection(newCursor.coerceAtMost(text.length))
         ghostSuffix=null
+        completionItems=emptyList()
         invalidate()
         return true
     }
 
+    override fun onSelectionChanged(selStart: Int, selEnd: Int) {
+        super.onSelectionChanged(selStart, selEnd)
+        if (!applyingHighlight && !applyingHistory) post { updateGhostSuggestion() }
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (completionItems.isNotEmpty() && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+            selectedCompletion = (selectedCompletion + 1).coerceAtMost(completionItems.lastIndex)
+            val item=completionItems[selectedCompletion];ghostSuffix=item.suffix;ghostCursorBack=item.cursorBack;invalidate();return true
+        }
+        if (completionItems.isNotEmpty() && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+            selectedCompletion = (selectedCompletion - 1).coerceAtLeast(0)
+            val item=completionItems[selectedCompletion];ghostSuffix=item.suffix;ghostCursorBack=item.cursorBack;invalidate();return true
+        }
         if(keyCode==KeyEvent.KEYCODE_TAB && acceptGhostSuggestion()) return true
         return super.onKeyDown(keyCode,event)
     }
@@ -1094,8 +1438,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
                 strokeWidth = resources.displayMetrics.density
             }
             val spaceWidth = paint.measureText(" ")
-            val first = editorLayout.getLineForVertical((scrollY - totalPaddingTop).coerceAtLeast(0))
-            val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop).coerceAtLeast(0))
+            val first = editorLayout.getLineForVertical(scrollY.coerceAtLeast(0))
+            val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop - totalPaddingBottom).coerceAtLeast(0))
             val source = text.toString()
             for (lineIndex in first..last.coerceAtMost(editorLayout.lineCount - 1)) {
                 val start = editorLayout.getLineStart(lineIndex)
@@ -1147,8 +1491,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
                 typeface = Typeface.MONOSPACE
                 textAlign = Paint.Align.RIGHT
             }
-            val first = editorLayout.getLineForVertical((scrollY - totalPaddingTop).coerceAtLeast(0))
-            val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop).coerceAtLeast(0))
+            val first = editorLayout.getLineForVertical(scrollY.coerceAtLeast(0))
+            val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop - totalPaddingBottom).coerceAtLeast(0))
             val right = gutterWidth - (10 * resources.displayMetrics.density)
             val source = text.toString()
             val firstVisual = first.coerceAtMost(editorLayout.lineCount - 1)
@@ -1176,6 +1520,46 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val x=currentLayout.getPrimaryHorizontal(cursor)+totalPaddingLeft-scrollX
         val y=currentLayout.getLineBaseline(line).toFloat()+totalPaddingTop-scrollY
         canvas.drawText(suffix.substringBefore('\n'),x,y,paint)
+
+        if (completionItems.isNotEmpty()) {
+            val density=resources.displayMetrics.density
+            val rowHeight=28f*density
+            val visible=completionItems.take(6)
+            val panelWidth=(300f*density).coerceAtMost(width*0.78f)
+            val docHeight=if(completionItems.getOrNull(selectedCompletion)?.doc.isNullOrBlank()) 0f else 46f*density
+            val panelHeight=rowHeight*visible.size+docHeight+8f*density
+            val rawTop=currentLayout.getLineBottom(line)+totalPaddingTop-scrollY+6f*density
+            val top=if(rawTop+panelHeight<height) rawTop else
+                (currentLayout.getLineTop(line)+totalPaddingTop-scrollY-panelHeight-6f*density).coerceAtLeast(4f*density)
+            val left=x.coerceIn(4f*density,(width-panelWidth-4f*density).coerceAtLeast(4f*density))
+            val right=left+panelWidth
+            val bgPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=AndroidColor.rgb(24,24,27)}
+            canvas.drawRoundRect(left,top,right,top+panelHeight,10f*density,10f*density,bgPaint)
+            val border=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=AndroidColor.rgb(62,65,72);style=Paint.Style.STROKE;strokeWidth=density}
+            canvas.drawRoundRect(left,top,right,top+panelHeight,10f*density,10f*density,border)
+            val labelPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+                color=AndroidColor.rgb(232,232,236);textSize=this@PythonEditorView.textSize*0.86f;typeface=Typeface.MONOSPACE
+            }
+            val metaPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+                color=AndroidColor.rgb(128,134,145);textSize=this@PythonEditorView.textSize*0.67f;typeface=Typeface.MONOSPACE
+            }
+            visible.forEachIndexed { index,item ->
+                val rowTop=top+4f*density+index*rowHeight
+                if(index==selectedCompletion){
+                    val selectedPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=AndroidColor.rgb(48,52,60)}
+                    canvas.drawRoundRect(left+4f*density,rowTop,right-4f*density,rowTop+rowHeight,6f*density,6f*density,selectedPaint)
+                }
+                canvas.drawText(item.label,left+10f*density,rowTop+19f*density,labelPaint)
+                if(item.type.isNotBlank()) canvas.drawText(item.type,right-70f*density,rowTop+19f*density,metaPaint)
+            }
+            completionItems.getOrNull(selectedCompletion)?.doc?.takeIf{it.isNotBlank()}?.let { doc ->
+                val dividerY=top+4f*density+visible.size*rowHeight
+                canvas.drawLine(left+8f*density,dividerY,right-8f*density,dividerY,border)
+                val oneLine=doc.replace('\n',' ').replace(Regex("\\s+")," ").take(78)
+                canvas.drawText(oneLine,left+10f*density,dividerY+20f*density,metaPaint)
+                canvas.drawText("Tab to accept  •  ↑ ↓ to choose",left+10f*density,dividerY+38f*density,metaPaint)
+            }
+        }
     }
 
     private fun highlightNow() {
@@ -1370,7 +1754,9 @@ private fun AchievementNotice(
     val context = LocalContext.current
     val aiScroll = rememberScrollState()
     val consoleScroll = rememberScrollState()
+    val terminalScroll = rememberScrollState()
     val consoleInputFocus = remember { FocusRequester() }
+    val terminalInputFocus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val pages = listOf("FOLDERS", "PYTHON", "CONSOLE", "HELPER", "SETTINGS")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
@@ -1382,6 +1768,10 @@ private fun AchievementNotice(
     var providerDraft by remember { mutableStateOf(vm.aiProvider) }
     var settingsSection by remember { mutableStateOf("Overview") }
     var consoleInputValue by remember { mutableStateOf(TextFieldValue(vm.input)) }
+    var terminalInputValue by remember { mutableStateOf(TextFieldValue(vm.terminalInput)) }
+    var renameDialog by remember { mutableStateOf(false) }
+    var renameDraft by remember { mutableStateOf("") }
+    var clearCodeDialog by remember { mutableStateOf(false) }
     val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             val name = uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
@@ -1487,7 +1877,12 @@ private fun AchievementNotice(
                 }
             }
             }
-            HorizontalPager(state=pager,modifier=Modifier.weight(1f).fillMaxWidth(),beyondViewportPageCount=1) { page ->
+            HorizontalPager(
+                state=pager,
+                modifier=Modifier.weight(1f).fillMaxWidth(),
+                beyondViewportPageCount=1,
+                userScrollEnabled=vm.swipePages
+            ) { page ->
                 val rawOffset = (pager.currentPage - page) + pager.currentPageOffsetFraction
                 val distance = rawOffset.absoluteValue.coerceIn(0f,1f)
                 val motionModifier = Modifier.fillMaxSize().graphicsLayer {
@@ -1586,20 +1981,19 @@ private fun AchievementNotice(
                                 .padding(start=14.dp,end=8.dp),
                             verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                         ){
-                            Box(Modifier.size(24.dp)){
-                                Box(
-                                    Modifier.width(16.dp).height(12.dp)
-                                        .background(Color.White,androidx.compose.foundation.shape.RoundedCornerShape(5.dp))
-                                        .align(androidx.compose.ui.Alignment.TopStart)
-                                )
-                                Box(
-                                    Modifier.width(16.dp).height(12.dp)
-                                        .background(Color(0xFF9A9AA1),androidx.compose.foundation.shape.RoundedCornerShape(5.dp))
-                                        .align(androidx.compose.ui.Alignment.BottomEnd)
-                                )
+                            Icon(
+                                painter=painterResource(id=R.drawable.ic_launcher_foreground),
+                                contentDescription="Python",
+                                tint=Color.Unspecified,
+                                modifier=Modifier.size(28.dp)
+                            )
+                            Spacer(Modifier.width(7.dp))
+                            TextButton(
+                                onClick={renameDraft=vm.currentFileName.removeSuffix(".py");renameDialog=true},
+                                contentPadding=PaddingValues(horizontal=4.dp,vertical=0.dp)
+                            ){
+                                Text(vm.currentFileName,color=Color(0xFFE8E8EC),fontSize=14.sp,fontFamily=FontFamily.Monospace)
                             }
-                            Spacer(Modifier.width(9.dp))
-                            Text(vm.currentFileName,color=Color(0xFFE8E8EC),fontSize=14.sp,fontFamily=FontFamily.Monospace)
                             Spacer(Modifier.width(7.dp))
                             Box(Modifier.size(6.dp).background(Color(0xFF8AB4F8),androidx.compose.foundation.shape.CircleShape))
                             Spacer(Modifier.weight(1f))
@@ -1630,6 +2024,35 @@ private fun AchievementNotice(
                             },
                             modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
                         )
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=10.dp,vertical=3.dp),
+                            horizontalArrangement=Arrangement.spacedBy(6.dp)
+                        ){
+                            OutlinedButton(
+                                onClick={
+                                    val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("PY4U code",vm.code))
+                                    Toast.makeText(context,"Copied all code",Toast.LENGTH_SHORT).show()
+                                },
+                                contentPadding=PaddingValues(horizontal=10.dp,vertical=2.dp),
+                                modifier=Modifier.height(34.dp)
+                            ){Text("Copy all",fontSize=11.sp)}
+                            OutlinedButton(
+                                onClick={
+                                    val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    val pasted=clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()
+                                    if(!pasted.isNullOrEmpty()) vm.replaceCurrentCode(pasted)
+                                },
+                                contentPadding=PaddingValues(horizontal=10.dp,vertical=2.dp),
+                                modifier=Modifier.height(34.dp)
+                            ){Text("Paste all",fontSize=11.sp)}
+                            OutlinedButton(
+                                onClick={clearCodeDialog=true},
+                                colors=ButtonDefaults.outlinedButtonColors(contentColor=Color(0xFFFF6B72)),
+                                contentPadding=PaddingValues(horizontal=10.dp,vertical=2.dp),
+                                modifier=Modifier.height(34.dp)
+                            ){Text("Delete all",fontSize=11.sp)}
+                        }
                         if(vm.showToolbar) {
                             Row(
                                 Modifier.fillMaxWidth().padding(horizontal=14.dp,vertical=4.dp),
@@ -1640,10 +2063,14 @@ private fun AchievementNotice(
                                     shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                                     border=BorderStroke(1.dp,Color.White.copy(alpha=.14f))
                                 ){
+                                    val firstIssue=vm.codeDiagnostics.firstOrNull()
                                     Text(
-                                        if(vm.codeDiagnostics.isEmpty())"✓  No issues" else "⚠  ${vm.codeDiagnostics.size} issue${if(vm.codeDiagnostics.size==1)"" else "s"}",
-                                        color=if(vm.codeDiagnostics.isEmpty())Color(0xFFB8DDBE) else Color(0xFFFF6B72),
-                                        fontSize=10.sp,modifier=Modifier.padding(horizontal=10.dp,vertical=6.dp)
+                                        if(firstIssue==null)"✓  No issues"
+                                        else "⚠ L${firstIssue.line}:${firstIssue.column}  ${firstIssue.message}",
+                                        color=if(firstIssue==null)Color(0xFFB8DDBE) else Color(0xFFFF6B72),
+                                        fontSize=10.sp,
+                                        maxLines=2,
+                                        modifier=Modifier.padding(horizontal=10.dp,vertical=6.dp)
                                     )
                                 }
                             }
@@ -1688,101 +2115,159 @@ private fun AchievementNotice(
                         Modifier.fillMaxSize().background(bg).padding(horizontal=14.dp,vertical=12.dp)
                     ) {
                         Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-                            Box(Modifier.size(39.dp)){
-                                Box(
-                                    Modifier.width(25.dp).height(18.dp)
-                                        .background(Color.White,androidx.compose.foundation.shape.RoundedCornerShape(7.dp))
-                                        .align(androidx.compose.ui.Alignment.TopStart)
-                                ){
-                                    Box(Modifier.size(4.dp).background(Color.Black,androidx.compose.foundation.shape.CircleShape).align(androidx.compose.ui.Alignment.TopStart).offset(6.dp,4.dp))
-                                }
-                                Box(
-                                    Modifier.width(25.dp).height(18.dp)
-                                        .background(Color(0xFFB8B8BE),androidx.compose.foundation.shape.RoundedCornerShape(7.dp))
-                                        .align(androidx.compose.ui.Alignment.BottomEnd)
-                                ){
-                                    Box(Modifier.size(4.dp).background(Color.Black,androidx.compose.foundation.shape.CircleShape).align(androidx.compose.ui.Alignment.BottomEnd).offset((-6).dp,(-4).dp))
-                                }
-                            }
+                            Icon(
+                                painter=painterResource(id=R.drawable.ic_launcher_foreground),
+                                contentDescription="Python",
+                                tint=Color.Unspecified,
+                                modifier=Modifier.size(39.dp)
+                            )
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)){
-                                Text("PYTHON CONSOLE",color=Color.White,fontSize=17.sp,fontWeight=FontWeight.SemiBold,letterSpacing=1.1.sp)
-                                Text("CPython 3.14",color=Color(0xFF77777F),fontSize=10.sp,fontFamily=FontFamily.Monospace)
+                                Text(if(vm.consoleMode=="Python")"PYTHON CONSOLE" else "PROJECT TERMINAL",color=Color.White,fontSize=17.sp,fontWeight=FontWeight.SemiBold,letterSpacing=1.1.sp)
+                                Text(if(vm.consoleMode=="Python")"CPython 3.14" else vm.terminalPrompt,color=Color(0xFF77777F),fontSize=10.sp,fontFamily=FontFamily.Monospace)
                             }
-                            TextButton(onClick={vm.clearOutput()},contentPadding=PaddingValues(8.dp),modifier=Modifier.size(42.dp)){
+                            TextButton(onClick={if(vm.consoleMode=="Python") vm.clearOutput() else vm.clearTerminal()},contentPadding=PaddingValues(8.dp),modifier=Modifier.size(42.dp)){
                                 Text("⌫",color=Color(0xFFB8B8BE),fontSize=21.sp)
                             }
                             Spacer(Modifier.width(6.dp))
                             Button(
-                                onClick={if(vm.running) vm.stop() else vm.run()},
+                                onClick={
+                                    if(vm.consoleMode=="Python") { if(vm.running) vm.stop() else vm.run() }
+                                    else vm.runTerminalCommand()
+                                },
                                 colors=ButtonDefaults.buttonColors(containerColor=Color.White,contentColor=Color.Black),
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
                                 contentPadding=PaddingValues(horizontal=18.dp,vertical=10.dp),
                                 modifier=Modifier.border(1.dp,Color.White.copy(alpha=.24f),androidx.compose.foundation.shape.RoundedCornerShape(22.dp))
-                            ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
+                            ){Text(if(vm.consoleMode=="Terminal")"↵ Run" else if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
                         }
-                        Spacer(Modifier.height(20.dp))
+                        Spacer(Modifier.height(10.dp))
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement=Arrangement.spacedBy(8.dp)
+                        ){
+                            FilterChip(
+                                selected=vm.consoleMode=="Python",
+                                onClick={vm.consoleMode="Python"},
+                                label={Text("Python")}
+                            )
+                            FilterChip(
+                                selected=vm.consoleMode=="Terminal",
+                                onClick={vm.consoleMode="Terminal"},
+                                label={Text("Terminal")}
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
                         Surface(
                             color=safeColor(vm.consoleBackgroundHex,0xFF030303),
                             shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                             border=BorderStroke(1.dp,Color.White.copy(alpha=.12f)),
                             modifier=Modifier.weight(1f).fillMaxWidth()
                         ){
-                            Column(Modifier.fillMaxSize().padding(16.dp)){
-                                Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-                                    Text(">>>",color=Color(0xFFB8B8BE),fontFamily=FontFamily.Monospace,fontSize=12.sp)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        if(vm.running)"running ${vm.currentFileName}" else vm.currentFileName,
-                                        color=Color(0xFF6F6F77),fontFamily=FontFamily.Monospace,fontSize=11.sp
-                                    )
-                                }
-                                Spacer(Modifier.height(12.dp))
-                                Text(
-                                    vm.output.ifEmpty{"Ready"},
-                                    color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
-                                    fontFamily=FontFamily.Monospace,
-                                    fontSize=vm.terminalFontSize.sp,
-                                    lineHeight=(vm.terminalFontSize+6).sp,
-                                    modifier=Modifier.weight(1f).fillMaxWidth().verticalScroll(consoleScroll)
-                                )
-                                ConsoleKeyToolbar(consoleInputValue,{consoleInputValue=it;vm.input=it.text},vm.inputHistory,consoleInputFocus,vm.input,vm.output.length,consoleScroll,safeColor(vm.toolbarHex,0xFF050505))
-                                Surface(
-                                    color=safeColor(vm.consoleBackgroundHex,0xFF050505),
-                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
-                                    border=BorderStroke(1.dp,Color.White.copy(alpha=.16f)),
-                                    modifier=Modifier.fillMaxWidth()
-                                ){
-                                    Row(
-                                        Modifier.padding(start=14.dp,end=7.dp,top=5.dp,bottom=5.dp),
-                                        verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
-                                    ){
-                                        Text(">>>",color=Color.White,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold)
-                                        TextField(
-                                            consoleInputValue,{consoleInputValue=it;vm.input=it.text},
-                                            enabled=vm.waitingInput,
-                                            singleLine=true,
-                                            modifier=Modifier.weight(1f).focusRequester(consoleInputFocus),
-                                            placeholder={Text(if(vm.waitingInput)"Type program input…" else "Waiting for Python input()",color=Color(0xFF66666E),fontSize=13.sp)},
-                                            colors=TextFieldDefaults.colors(
-                                                focusedContainerColor=Color.Transparent,unfocusedContainerColor=Color.Transparent,
-                                                disabledContainerColor=Color.Transparent,focusedIndicatorColor=Color.Transparent,
-                                                unfocusedIndicatorColor=Color.Transparent,disabledIndicatorColor=Color.Transparent,
-                                                focusedTextColor=Color.White,disabledTextColor=Color(0xFF77777F)
-                                            ),
-                                            keyboardOptions=KeyboardOptions(imeAction=ImeAction.None)
+                            if(vm.consoleMode=="Python") {
+                                Column(Modifier.fillMaxSize().padding(16.dp)){
+                                    Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                                        Text(">>>",color=Color(0xFFB8B8BE),fontFamily=FontFamily.Monospace,fontSize=12.sp)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            if(vm.running)"running ${vm.currentFileName}" else vm.currentFileName,
+                                            color=Color(0xFF6F6F77),fontFamily=FontFamily.Monospace,fontSize=11.sp
                                         )
-                                        Button(
-                                            onClick={if(vm.waitingInput) vm.submitInput()},
-                                            enabled=vm.waitingInput,
-                                            shape=androidx.compose.foundation.shape.CircleShape,
-                                            contentPadding=PaddingValues(0.dp),
-                                            colors=ButtonDefaults.buttonColors(
-                                                containerColor=Color.White,contentColor=Color.Black,
-                                                disabledContainerColor=Color(0xFF1A1A1D),disabledContentColor=Color(0xFF66666E)
-                                            ),
-                                            modifier=Modifier.size(42.dp)
-                                        ){Text("➜",fontSize=20.sp)}
+                                    }
+                                    Spacer(Modifier.height(12.dp))
+                                    Text(
+                                        vm.output.ifEmpty{"Ready"},
+                                        color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
+                                        fontFamily=FontFamily.Monospace,
+                                        fontSize=vm.terminalFontSize.sp,
+                                        lineHeight=(vm.terminalFontSize+6).sp,
+                                        modifier=Modifier.weight(1f).fillMaxWidth().verticalScroll(consoleScroll)
+                                    )
+                                    ConsoleKeyToolbar(
+                                        consoleInputValue,{consoleInputValue=it;vm.input=it.text},
+                                        vm.inputHistory,consoleInputFocus,vm.input,vm.output.length,consoleScroll,
+                                        safeColor(vm.toolbarHex,0xFF050505)
+                                    )
+                                    Surface(
+                                        color=safeColor(vm.consoleBackgroundHex,0xFF050505),
+                                        shape=androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                                        border=BorderStroke(1.dp,Color.White.copy(alpha=.16f)),
+                                        modifier=Modifier.fillMaxWidth()
+                                    ){
+                                        Row(
+                                            Modifier.padding(start=14.dp,end=7.dp,top=5.dp,bottom=5.dp),
+                                            verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                                        ){
+                                            Text(">>>",color=Color.White,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold)
+                                            TextField(
+                                                consoleInputValue,{consoleInputValue=it;vm.input=it.text},
+                                                enabled=vm.waitingInput,
+                                                singleLine=true,
+                                                modifier=Modifier.weight(1f).focusRequester(consoleInputFocus),
+                                                placeholder={Text(if(vm.waitingInput)"Type program input…" else "Waiting for Python input()",color=Color(0xFF66666E),fontSize=13.sp)},
+                                                colors=TextFieldDefaults.colors(
+                                                    focusedContainerColor=Color.Transparent,unfocusedContainerColor=Color.Transparent,
+                                                    disabledContainerColor=Color.Transparent,focusedIndicatorColor=Color.Transparent,
+                                                    unfocusedIndicatorColor=Color.Transparent,disabledIndicatorColor=Color.Transparent,
+                                                    focusedTextColor=Color.White,disabledTextColor=Color(0xFF77777F)
+                                                ),
+                                                keyboardOptions=KeyboardOptions(imeAction=ImeAction.None)
+                                            )
+                                            Button(
+                                                onClick={if(vm.waitingInput) vm.submitInput()},
+                                                enabled=vm.waitingInput,
+                                                shape=androidx.compose.foundation.shape.CircleShape,
+                                                contentPadding=PaddingValues(0.dp),
+                                                modifier=Modifier.size(42.dp)
+                                            ){Text("➜",fontSize=20.sp)}
+                                        }
+                                    }
+                                }
+                            } else {
+                                Column(Modifier.fillMaxSize().padding(16.dp)){
+                                    Text(
+                                        vm.terminalOutput.ifEmpty{"PY4U project shell ready\nCommands run inside this project folder."},
+                                        color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
+                                        fontFamily=FontFamily.Monospace,
+                                        fontSize=vm.terminalFontSize.sp,
+                                        lineHeight=(vm.terminalFontSize+6).sp,
+                                        modifier=Modifier.weight(1f).fillMaxWidth().verticalScroll(terminalScroll)
+                                    )
+                                    ConsoleKeyToolbar(
+                                        terminalInputValue,{terminalInputValue=it;vm.terminalInput=it.text},
+                                        vm.terminalHistory,terminalInputFocus,vm.terminalInput,vm.terminalOutput.length,terminalScroll,
+                                        safeColor(vm.toolbarHex,0xFF050505)
+                                    )
+                                    Surface(
+                                        color=safeColor(vm.consoleBackgroundHex,0xFF050505),
+                                        shape=androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                                        border=BorderStroke(1.dp,Color.White.copy(alpha=.16f)),
+                                        modifier=Modifier.fillMaxWidth()
+                                    ){
+                                        Row(
+                                            Modifier.padding(start=12.dp,end=7.dp,top=5.dp,bottom=5.dp),
+                                            verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                                        ){
+                                            Text("${vm.terminalPrompt} $",color=Color.White,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold,fontSize=11.sp)
+                                            TextField(
+                                                terminalInputValue,{terminalInputValue=it;vm.terminalInput=it.text},
+                                                singleLine=true,
+                                                modifier=Modifier.weight(1f).focusRequester(terminalInputFocus),
+                                                placeholder={Text("command",color=Color(0xFF66666E),fontSize=13.sp)},
+                                                colors=TextFieldDefaults.colors(
+                                                    focusedContainerColor=Color.Transparent,unfocusedContainerColor=Color.Transparent,
+                                                    focusedIndicatorColor=Color.Transparent,unfocusedIndicatorColor=Color.Transparent,
+                                                    focusedTextColor=Color.White,unfocusedTextColor=Color.White
+                                                ),
+                                                keyboardOptions=KeyboardOptions(imeAction=ImeAction.None)
+                                            )
+                                            Button(
+                                                onClick={vm.runTerminalCommand()},
+                                                shape=androidx.compose.foundation.shape.CircleShape,
+                                                contentPadding=PaddingValues(0.dp),
+                                                modifier=Modifier.size(42.dp)
+                                            ){Text("➜",fontSize=20.sp)}
+                                        }
                                     }
                                 }
                             }
@@ -2087,8 +2572,9 @@ private fun AchievementNotice(
                         if(settingsSection=="System" || searchMatches("system","programming toolbar","page indicator","runtime","python")){
                         SettingSwitch("Programming toolbar",vm.showToolbar){vm.showToolbar=it;vm.saveAppearance()}
                         SettingSwitch("Page indicator dots",vm.showPageDots){vm.showPageDots=it;vm.saveAppearance()}
+                        SettingSwitch("Swipe between pages",vm.swipePages){vm.swipePages=it;vm.saveAppearance()}
                         HorizontalDivider(color=Color(0xFF202020))
-                        Text("Swipe left or right anywhere outside active text editing to move between pages.",color=Color.Gray,fontSize=12.sp)
+                        Text(if(vm.swipePages)"Page swiping is enabled." else "Page swiping is off so vertical scrolling cannot accidentally change tabs.",color=Color.Gray,fontSize=12.sp)
                         Text("Python  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp)
                         }
                     }
@@ -2100,6 +2586,40 @@ private fun AchievementNotice(
             Text("w astro",color=Color(0xFF181818),fontSize=7.sp,modifier=Modifier.fillMaxWidth().padding(bottom=2.dp),textAlign=androidx.compose.ui.text.style.TextAlign.Center)
         }
     }
+    if(renameDialog) AlertDialog(
+        onDismissRequest={renameDialog=false},
+        title={Text("Rename code")},
+        text={
+            TextField(
+                renameDraft,
+                {renameDraft=it},
+                label={Text("File name")},
+                singleLine=true,
+                suffix={Text(".py")}
+            )
+        },
+        confirmButton={
+            Button(onClick={
+                if(vm.renameCurrentFile(renameDraft)) renameDialog=false
+                else Toast.makeText(context,"That file name is invalid or already exists",Toast.LENGTH_SHORT).show()
+            }){Text("Rename")}
+        },
+        dismissButton={TextButton(onClick={renameDialog=false}){Text("Cancel")}}
+    )
+    if(clearCodeDialog) AlertDialog(
+        onDismissRequest={clearCodeDialog=false},
+        title={Text("Delete all code?")},
+        text={
+            Text("Are you sure you want to permanently delete everything in this code file? This cannot be undone after you leave the editor.")
+        },
+        confirmButton={
+            Button(
+                onClick={vm.clearCurrentCode();clearCodeDialog=false},
+                colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFFF3D71),contentColor=Color.Black)
+            ){Text("Permanently delete")}
+        },
+        dismissButton={TextButton(onClick={clearCodeDialog=false}){Text("Cancel")}}
+    )
     if(showAiSettings) AlertDialog(
         onDismissRequest={showAiSettings=false},
         containerColor=Color(0xFF0A0A0A),

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
@@ -31,6 +32,7 @@ fun ConsoleKeyToolbar(
     var ctrl by remember { mutableStateOf(false) }
     var alt by remember { mutableStateOf(false) }
     var lastNonBlank by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(outputLength) {
         withFrameNanos { }
@@ -55,15 +57,18 @@ fun ConsoleKeyToolbar(
             .padding(horizontal = 6.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(7.dp)
     ) {
-        listOf("Ctrl", "Alt", "←", "↑", "↓", "→", "Home", "End", "Tab").forEach { key ->
+        listOf("Esc", "Ctrl", "Alt", "Tab", "←", "↑", "↓", "→", "Home", "End", "Pg↑", "Pg↓", "/", "-", "_", "|", "~").forEach { key ->
             OutlinedButton(
                 onClick = {
                     when (key) {
                         "Ctrl" -> ctrl = !ctrl
                         "Alt" -> alt = !alt
+                        "Pg↑" -> scope.launch { outputScroll.animateScrollTo((outputScroll.value - 480).coerceAtLeast(0)) }
+                        "Pg↓" -> scope.launch { outputScroll.animateScrollTo((outputScroll.value + 480).coerceAtMost(outputScroll.maxValue)) }
                         else -> {
                             val state = ConsoleInputState(value.text, value.selection.start)
                             val next = when (key) {
+                                "Esc" -> state
                                 "←" -> ConsoleInputController.move(state, -1, ctrl || alt)
                                 "→" -> ConsoleInputController.move(state, 1, ctrl || alt)
                                 "↑" -> {
@@ -76,7 +81,8 @@ fun ConsoleKeyToolbar(
                                 }
                                 "Home" -> ConsoleInputController.home(state)
                                 "End" -> ConsoleInputController.end(state)
-                                else -> ConsoleInputController.insert(state, "	")
+                                "Tab" -> ConsoleInputController.insert(state, "\t")
+                                else -> ConsoleInputController.insert(state, key)
                             }
                             onValueChange(TextFieldValue(next.text, TextRange(next.cursor)))
                             ctrl = false

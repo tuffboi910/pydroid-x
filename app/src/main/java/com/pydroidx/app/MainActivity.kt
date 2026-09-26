@@ -164,6 +164,7 @@ class IdeViewModel : ViewModel() {
     var ai3Model by mutableStateOf("")
     var ai3Provider by mutableStateOf("Auto")
     var aiMode by mutableStateOf("Online")
+        private set
     var localModelPath by mutableStateOf("")
     var localModelName by mutableStateOf("")
     var localModelStatus by mutableStateOf("Choose a GGUF model")

@@ -1327,6 +1327,7 @@ private fun AchievementNotice(
         providerDraft = vm.providerForSlot(selectedAiSlot)
         endpointDraft = vm.endpointForSlot(selectedAiSlot)
         modelDraft = vm.modelForSlot(selectedAiSlot)
+        vm.aiTestStatus = null
     }
     LaunchedEffect(vm.aiMessages.size) {
         aiScroll.animateScrollTo(aiScroll.maxValue)
@@ -1360,12 +1361,12 @@ private fun AchievementNotice(
         Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().padding(top=8.dp).imePadding()) {
             if(vm.showHeader) {
             Row(
-                Modifier.fillMaxWidth().height(vm.headerHeight.coerceAtLeast(vm.tabHeight+8f).dp).padding(start=10.dp,end=10.dp,top=10.dp,bottom=8.dp),
+                Modifier.fillMaxWidth().height(vm.headerHeight.coerceAtLeast(vm.tabHeight+18f).dp).padding(start=10.dp,end=10.dp,top=10.dp,bottom=8.dp),
                 horizontalArrangement=Arrangement.spacedBy(10.dp),
                 verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
             ) {
                 Row(
-                    Modifier.weight(1f).height((vm.tabHeight+8).dp)
+                    Modifier.weight(1f).height(vm.tabHeight.dp)
                         .background(safeColor(vm.tabBarHex,0xFF050505).copy(alpha=0.72f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
                         .border(1.dp,glassEdge,androidx.compose.foundation.shape.RoundedCornerShape(18.dp)),
                     horizontalArrangement=Arrangement.SpaceEvenly,
@@ -1401,7 +1402,7 @@ private fun AchievementNotice(
                         ),
                         shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
                         contentPadding=PaddingValues(horizontal=17.dp,vertical=9.dp),
-                        modifier=Modifier.height((vm.tabHeight+8).dp)
+                        modifier=Modifier.height(vm.tabHeight.dp)
                             .border(1.dp,Color.White.copy(alpha=0.24f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
                     ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
                 }
@@ -1414,6 +1415,7 @@ private fun AchievementNotice(
                     if(vm.motionEnabled) {
                         val amount = vm.motionIntensity.coerceIn(0f,1f)
                         when(vm.motionStyle) {
+                            "Fluid spring" -> { translationX=rawOffset*size.width*0.035f*amount;scaleX=1f-distance*0.018f*amount;scaleY=scaleX }
                             "Soft fade" -> alpha = 1f - distance * 0.35f * amount
                             "Subtle scale" -> { scaleX=1f-distance*0.05f*amount;scaleY=scaleX }
                             "Shared element" -> { scaleX=1f-distance*0.03f*amount;scaleY=scaleX;alpha=1f-distance*0.12f*amount }
@@ -1423,9 +1425,9 @@ private fun AchievementNotice(
                             "Card expansion" -> { scaleX=0.92f+0.08f*(1f-distance*amount);scaleY=scaleX;alpha=1f-distance*0.18f*amount }
                             "Natural sheet" -> { translationY=distance*40f*amount;alpha=1f-distance*0.18f*amount }
                             "Magnetic snap" -> { scaleX=1f-distance*0.018f*amount;scaleY=scaleX }
+                            "Interactive swipe" -> { translationX=rawOffset*size.width*0.055f*amount;alpha=1f-distance*0.08f*amount }
                             "Content morph" -> { scaleX=1f-distance*0.04f*amount;scaleY=1f-distance*0.015f*amount;alpha=1f-distance*0.15f*amount }
                             "Keyboard lift" -> translationY=-distance*18f*amount
-                            "Layer glide" -> { translationX=rawOffset*30f*amount;alpha=1f-distance*0.18f*amount }
                             else -> { scaleX=1f-distance*0.02f*amount;scaleY=scaleX }
                         }
                     }
@@ -1442,7 +1444,10 @@ private fun AchievementNotice(
                             }
                             Button(
                                 onClick={vm.makeNewCode();scope.launch{pager.animateScrollToPage(1)}},
-                                colors=ButtonDefaults.buttonColors(containerColor=Color.White,contentColor=Color.Black),
+                                colors=ButtonDefaults.buttonColors(
+                                    containerColor=(if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676)).copy(alpha=0.90f),
+                                    contentColor=Color.Black
+                                ),
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
                             ){Text("＋ Make new code",fontWeight=FontWeight.Bold)}
                         }

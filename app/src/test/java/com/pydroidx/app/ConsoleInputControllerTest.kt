@@ -16,7 +16,7 @@ class ConsoleInputControllerTest {
     @Test fun ctrlArrowMovesByWord() {
         val text = "hello   python world"
         assertEquals(8, ConsoleInputController.move(ConsoleInputState(text, 0), 1, true).cursor)
-        assertEquals(8, ConsoleInputController.move(ConsoleInputState(text, text.length), -1, true).cursor)
+        assertEquals(15, ConsoleInputController.move(ConsoleInputState(text, text.length), -1, true).cursor)
     }
 
     @Test fun homeAndEndMoveToEdges() {

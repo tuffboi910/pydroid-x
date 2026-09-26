@@ -390,7 +390,6 @@ def run_code(source, filename, project_dir, bridge):
         value = bridge.readLine()
         if value is None:
             raise KeyboardInterrupt()
-        out.write(str(value) + "\n")
         return str(value)
 
     trace_ticks = 0

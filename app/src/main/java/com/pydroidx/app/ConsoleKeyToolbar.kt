@@ -1,0 +1,95 @@
+package com.pydroidx.app
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+@Composable
+fun ConsoleKeyToolbar(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    history: ConsoleInputHistory,
+    focusRequester: FocusRequester,
+    externalText: String,
+    outputLength: Int,
+    outputScroll: ScrollState
+) {
+    var ctrl by remember { mutableStateOf(false) }
+    var alt by remember { mutableStateOf(false) }
+    var lastNonBlank by remember { mutableStateOf("") }
+
+    LaunchedEffect(outputLength) {
+        outputScroll.animateScrollTo(outputScroll.maxValue)
+    }
+    LaunchedEffect(externalText) {
+        if (externalText.isNotBlank()) {
+            lastNonBlank = externalText
+        } else if (lastNonBlank.isNotBlank()) {
+            history.record(lastNonBlank)
+            lastNonBlank = ""
+        }
+        if (value.text != externalText) {
+            onValueChange(TextFieldValue(externalText, TextRange(externalText.length)))
+        }
+    }
+
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        listOf("Ctrl", "Alt", "←", "↑", "↓", "→", "Home", "End", "Tab").forEach { key ->
+            OutlinedButton(
+                onClick = {
+                    when (key) {
+                        "Ctrl" -> ctrl = !ctrl
+                        "Alt" -> alt = !alt
+                        else -> {
+                            val state = ConsoleInputState(value.text, value.selection.start)
+                            val next = when (key) {
+                                "←" -> ConsoleInputController.move(state, -1, ctrl || alt)
+                                "→" -> ConsoleInputController.move(state, 1, ctrl || alt)
+                                "↑" -> {
+                                    val text = history.previous() ?: state.text
+                                    ConsoleInputState(text, text.length)
+                                }
+                                "↓" -> {
+                                    val text = history.next() ?: state.text
+                                    ConsoleInputState(text, text.length)
+                                }
+                                "Home" -> ConsoleInputController.home(state)
+                                "End" -> ConsoleInputController.end(state)
+                                else -> ConsoleInputController.insert(state, "	")
+                            }
+                            onValueChange(TextFieldValue(next.text, TextRange(next.cursor)))
+                            ctrl = false
+                            alt = false
+                            focusRequester.requestFocus()
+                        }
+                    }
+                },
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = if ((key == "Ctrl" && ctrl) || (key == "Alt" && alt)) Color.White.copy(alpha = .16f) else Color.White.copy(alpha = .025f),
+                    contentColor = Color.White
+                ),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = .16f)),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 13.dp),
+                modifier = Modifier.height(38.dp)
+            ) {
+                Text(key, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+            }
+        }
+    }
+}

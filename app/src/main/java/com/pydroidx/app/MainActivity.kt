@@ -1176,8 +1176,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
                 strokeWidth = resources.displayMetrics.density
             }
             val spaceWidth = paint.measureText(" ")
-            val first = editorLayout.getLineForVertical((scrollY - totalPaddingTop).coerceAtLeast(0))
-            val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop).coerceAtLeast(0))
+            val first = editorLayout.getLineForVertical(scrollY.coerceAtLeast(0))
+            val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop - totalPaddingBottom).coerceAtLeast(0))
             val source = text.toString()
             for (lineIndex in first..last.coerceAtMost(editorLayout.lineCount - 1)) {
                 val start = editorLayout.getLineStart(lineIndex)
@@ -1229,8 +1229,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
                 typeface = Typeface.MONOSPACE
                 textAlign = Paint.Align.RIGHT
             }
-            val first = editorLayout.getLineForVertical((scrollY - totalPaddingTop).coerceAtLeast(0))
-            val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop).coerceAtLeast(0))
+            val first = editorLayout.getLineForVertical(scrollY.coerceAtLeast(0))
+            val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop - totalPaddingBottom).coerceAtLeast(0))
             val right = gutterWidth - (10 * resources.displayMetrics.density)
             val source = text.toString()
             val firstVisual = first.coerceAtMost(editorLayout.lineCount - 1)
@@ -1258,6 +1258,46 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val x=currentLayout.getPrimaryHorizontal(cursor)+totalPaddingLeft-scrollX
         val y=currentLayout.getLineBaseline(line).toFloat()+totalPaddingTop-scrollY
         canvas.drawText(suffix.substringBefore('\n'),x,y,paint)
+
+        if (completionItems.isNotEmpty()) {
+            val density=resources.displayMetrics.density
+            val rowHeight=28f*density
+            val visible=completionItems.take(6)
+            val panelWidth=(300f*density).coerceAtMost(width*0.78f)
+            val docHeight=if(completionItems.getOrNull(selectedCompletion)?.doc.isNullOrBlank()) 0f else 46f*density
+            val panelHeight=rowHeight*visible.size+docHeight+8f*density
+            val rawTop=currentLayout.getLineBottom(line)+totalPaddingTop-scrollY+6f*density
+            val top=if(rawTop+panelHeight<height) rawTop else
+                (currentLayout.getLineTop(line)+totalPaddingTop-scrollY-panelHeight-6f*density).coerceAtLeast(4f*density)
+            val left=x.coerceIn(4f*density,(width-panelWidth-4f*density).coerceAtLeast(4f*density))
+            val right=left+panelWidth
+            val bgPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=AndroidColor.rgb(24,24,27)}
+            canvas.drawRoundRect(left,top,right,top+panelHeight,10f*density,10f*density,bgPaint)
+            val border=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=AndroidColor.rgb(62,65,72);style=Paint.Style.STROKE;strokeWidth=density}
+            canvas.drawRoundRect(left,top,right,top+panelHeight,10f*density,10f*density,border)
+            val labelPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+                color=AndroidColor.rgb(232,232,236);textSize=this@PythonEditorView.textSize*0.86f;typeface=Typeface.MONOSPACE
+            }
+            val metaPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+                color=AndroidColor.rgb(128,134,145);textSize=this@PythonEditorView.textSize*0.67f;typeface=Typeface.MONOSPACE
+            }
+            visible.forEachIndexed { index,item ->
+                val rowTop=top+4f*density+index*rowHeight
+                if(index==selectedCompletion){
+                    val selectedPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=AndroidColor.rgb(48,52,60)}
+                    canvas.drawRoundRect(left+4f*density,rowTop,right-4f*density,rowTop+rowHeight,6f*density,6f*density,selectedPaint)
+                }
+                canvas.drawText(item.label,left+10f*density,rowTop+19f*density,labelPaint)
+                if(item.type.isNotBlank()) canvas.drawText(item.type,right-70f*density,rowTop+19f*density,metaPaint)
+            }
+            completionItems.getOrNull(selectedCompletion)?.doc?.takeIf{it.isNotBlank()}?.let { doc ->
+                val dividerY=top+4f*density+visible.size*rowHeight
+                canvas.drawLine(left+8f*density,dividerY,right-8f*density,dividerY,border)
+                val oneLine=doc.replace('\n',' ').replace(Regex("\\s+")," ").take(78)
+                canvas.drawText(oneLine,left+10f*density,dividerY+20f*density,metaPaint)
+                canvas.drawText("Tab to accept  •  ↑ ↓ to choose",left+10f*density,dividerY+38f*density,metaPaint)
+            }
+        }
     }
 
     private fun highlightNow() {

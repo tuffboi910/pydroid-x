@@ -33,7 +33,8 @@ fun ConsoleKeyToolbar(
     var lastNonBlank by remember { mutableStateOf("") }
 
     LaunchedEffect(outputLength) {
-        outputScroll.animateScrollTo(outputScroll.maxValue)
+        withFrameNanos { }
+        outputScroll.scrollTo(outputScroll.maxValue)
     }
     LaunchedEffect(externalText) {
         if (externalText.isNotBlank()) {

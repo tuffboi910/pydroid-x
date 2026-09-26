@@ -95,11 +95,14 @@ def outer(items):
 """
         self.assertEqual(["Undefined name: actually_missing"], messages(source))
 
-    def test_unicode_before_name_uses_character_offsets(self):
+    def test_unicode_before_name_uses_android_utf16_offsets(self):
         source = "label = '🐍'\nprint(not_defined)\n"
         issue = json.loads(runner.diagnose(source))[0]
-        self.assertEqual(source.index("not_defined"), issue["start"])
-        self.assertEqual("not_defined", source[issue["start"]:issue["end"]])
+        prefix = source[:source.index("not_defined")]
+        expected = len(prefix.encode("utf-16-le")) // 2
+        self.assertEqual(expected, issue["start"])
+        self.assertEqual(2, issue["line"])
+        self.assertEqual(7, issue["column"])
 
     def test_match_capture_is_defined(self):
         source = """
@@ -136,6 +139,30 @@ class Example:
         return value
 """
         self.assertEqual(["Undefined name: value"], messages(source))
+
+    def test_direct_function_call_arity_is_reported(self):
+        source = """
+def total(a, b, c):
+    return a + b + c
+value = total(1, 2)
+"""
+        self.assertEqual(
+            ["total() expected 3 argument(s), got 2"],
+            messages(source),
+        )
+
+    def test_valid_direct_function_call_has_no_arity_warning(self):
+        source = """
+def total(a, b=0):
+    return a + b
+print(total(1))
+print(total(1, 2))
+"""
+        self.assertEqual([], messages(source))
+
+    def test_builtin_arity_is_conservative(self):
+        self.assertEqual(["len() expected 1 argument(s), got 2"], messages("len([], [])\n"))
+        self.assertEqual([], messages("print(1, 2, 3)\n"))
 
     def test_syntax_errors_are_fatal_but_name_warnings_are_not(self):
         syntax = json.loads(runner.diagnose("if True print('x')\n"))[0]

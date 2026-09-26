@@ -6,4 +6,5 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = "PyDroidX"
-include(":app")
+include(":app", ":llama-kt")
+project(":llama-kt").projectDir = file("libs/llama.kt/llama-kt")

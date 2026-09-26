@@ -33,4 +33,15 @@ class EditorHistoryTest {
         assertEquals(EditorSnapshot("ab", 2), history.undo(EditorSnapshot("abc", 3)))
         assertNull(history.undo(EditorSnapshot("ab", 2)))
     }
+
+    @Test fun largeFilesAreBoundedByCharacterBudget() {
+        val history = EditorHistory(limit = 100, maxCharacters = 12)
+        history.record(EditorSnapshot("111111", 6))
+        history.record(EditorSnapshot("222222", 6))
+        history.record(EditorSnapshot("333333", 6))
+
+        assertEquals(EditorSnapshot("333333", 6), history.undo(EditorSnapshot("444444", 6)))
+        assertEquals(EditorSnapshot("222222", 6), history.undo(EditorSnapshot("333333", 6)))
+        assertNull(history.undo(EditorSnapshot("222222", 6)))
+    }
 }

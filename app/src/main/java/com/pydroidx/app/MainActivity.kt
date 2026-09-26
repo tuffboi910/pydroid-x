@@ -1308,13 +1308,20 @@ private fun AchievementNotice(
     var providerDraft by remember { mutableStateOf(vm.aiProvider) }
     var settingsSection by remember { mutableStateOf("Overview") }
     var consoleInputValue by remember { mutableStateOf(TextFieldValue(vm.input)) }
-    var consoleCtrl by remember { mutableStateOf(false) }
-    var consoleAlt by remember { mutableStateOf(false) }
     val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             val name = uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
             val content = runCatching {
-                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText().take(100_000) }
+                context.contentResolver.openInputStream(uri)?.reader()?.buffered()?.use { reader ->
+                    val output = StringBuilder()
+                    val buffer = CharArray(8192)
+                    while (output.length < 100_000) {
+                        val count = reader.read(buffer, 0, minOf(buffer.size, 100_000 - output.length))
+                        if (count < 0) break
+                        output.append(buffer, 0, count)
+                    }
+                    output.toString()
+                }
             }.getOrNull()
             if (content != null) vm.attachFile(name,content)
             else Toast.makeText(context,"Could not read that attachment",Toast.LENGTH_SHORT).show()
@@ -1336,7 +1343,6 @@ private fun AchievementNotice(
             keyboardController?.show()
         }
     }
-    var showAdvancedAi by remember { mutableStateOf(false) }
     var lastBackPress by remember { mutableLongStateOf(0L) }
 
     BackHandler(enabled=!showAiSettings) {
@@ -1348,14 +1354,13 @@ private fun AchievementNotice(
         }
     }
 
-    val glassShape=androidx.compose.foundation.shape.RoundedCornerShape(22.dp)
     val glass=Color.White.copy(alpha=0.065f)
     val glassEdge=Color.White.copy(alpha=0.16f)
-    val liquidBackground=Brush.verticalGradient(listOf(bg,accent.copy(alpha=0.10f),bg,bg))
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=Color.Transparent,surfaceVariant=glass,outline=glassEdge)) {
-        Column(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().padding(top=8.dp).imePadding()) {
+        Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().padding(top=8.dp).imePadding()) {
+            if(vm.showHeader) {
             Row(
-                Modifier.fillMaxWidth().padding(start=10.dp,end=10.dp,top=10.dp,bottom=8.dp),
+                Modifier.fillMaxWidth().height(vm.headerHeight.coerceAtLeast(vm.tabHeight+8f).dp).padding(start=10.dp,end=10.dp,top=10.dp,bottom=8.dp),
                 horizontalArrangement=Arrangement.spacedBy(10.dp),
                 verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
             ) {
@@ -1400,6 +1405,7 @@ private fun AchievementNotice(
                             .border(1.dp,Color.White.copy(alpha=0.24f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
                     ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
                 }
+            }
             }
             HorizontalPager(state=pager,modifier=Modifier.weight(1f).fillMaxWidth(),beyondViewportPageCount=1) { page ->
                 val rawOffset = (pager.currentPage - page) + pager.currentPageOffsetFraction
@@ -1471,7 +1477,8 @@ private fun AchievementNotice(
                             }
                         }
                     }
-                    1 -> Column(Modifier.fillMaxSize().background(Color.Black)) {
+                    1 -> Column(Modifier.fillMaxSize().background(bg)) {
+                        if(vm.showFileInfo) {
                         Row(
                             Modifier.fillMaxWidth().height(44.dp)
                                 .background(Color(0xFF030303))
@@ -1505,23 +1512,23 @@ private fun AchievementNotice(
                                 contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
                             ){Text("+",color=Color(0xFFBFC0C7),fontSize=22.sp)}
                         }
+                        }
                         AndroidView(
                             factory={context->PythonEditorView(context).also{view->
                                 editorView=view
                                 view.onCodeChanged=vm::updateCode
                                 view.requestSmartCompletion=vm::requestCompletion
                                 view.requestCodeDiagnostics=vm::requestDiagnostics
-                                view.setCodeIfDifferent(vm.code)
+                                view.setCodeIfDifferent(vm.code,revision)
                             }},
                             update={view->
-                                if(revision>0)view.setCodeIfDifferent(vm.code)
+                                view.setCodeIfDifferent(vm.code,revision)
                                 view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting,vm.fontName,
-                                    vm.lineSpacing,vm.editorPadding,vm.typingAnimation,vm.animationDuration,
-                                    vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness,
+                                    vm.lineSpacing,vm.editorPadding,vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness,
                                     vm.lineNumbers,vm.highlightCurrentLine,vm.customFontPath,
                                     listOf(vm.editorTextHex,vm.commentHex,vm.stringHex,vm.numberHex,vm.keywordHex,vm.functionHex,vm.variableHex))
                             },
-                            modifier=Modifier.weight(1f).fillMaxWidth().background(Color.Black)
+                            modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
                         )
                         if(vm.showToolbar) {
                             Row(
@@ -1534,14 +1541,14 @@ private fun AchievementNotice(
                                     border=BorderStroke(1.dp,Color.White.copy(alpha=.14f))
                                 ){
                                     Text(
-                                        if(vm.codeDiagnostics.isEmpty())"✓  No issues" else "⚠  \${vm.codeDiagnostics.size} issue",
+                                        if(vm.codeDiagnostics.isEmpty())"✓  No issues" else "⚠  ${vm.codeDiagnostics.size} issue${if(vm.codeDiagnostics.size==1)"" else "s"}",
                                         color=if(vm.codeDiagnostics.isEmpty())Color(0xFFB8DDBE) else Color(0xFFFF6B72),
                                         fontSize=10.sp,modifier=Modifier.padding(horizontal=10.dp,vertical=6.dp)
                                     )
                                 }
                             }
                             Surface(
-                                color=Color(0xFF030303),
+                                color=safeColor(vm.toolbarHex,0xFF050505),
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
                                 border=BorderStroke(1.dp,Color.White.copy(alpha=.16f)),
                                 modifier=Modifier.fillMaxWidth().padding(horizontal=10.dp,vertical=5.dp)
@@ -1578,7 +1585,7 @@ private fun AchievementNotice(
                         }
                     }
                     2 -> Column(
-                        Modifier.fillMaxSize().background(Color.Black).padding(horizontal=14.dp,vertical=12.dp)
+                        Modifier.fillMaxSize().background(bg).padding(horizontal=14.dp,vertical=12.dp)
                     ) {
                         Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                             Box(Modifier.size(39.dp)){
@@ -1602,7 +1609,7 @@ private fun AchievementNotice(
                                 Text("PYTHON CONSOLE",color=Color.White,fontSize=17.sp,fontWeight=FontWeight.SemiBold,letterSpacing=1.1.sp)
                                 Text("CPython 3.14",color=Color(0xFF77777F),fontSize=10.sp,fontFamily=FontFamily.Monospace)
                             }
-                            TextButton(onClick={vm.output=""},contentPadding=PaddingValues(8.dp),modifier=Modifier.size(42.dp)){
+                            TextButton(onClick={vm.clearOutput()},contentPadding=PaddingValues(8.dp),modifier=Modifier.size(42.dp)){
                                 Text("⌫",color=Color(0xFFB8B8BE),fontSize=21.sp)
                             }
                             Spacer(Modifier.width(6.dp))
@@ -1616,7 +1623,7 @@ private fun AchievementNotice(
                         }
                         Spacer(Modifier.height(20.dp))
                         Surface(
-                            color=Color.Black,
+                            color=safeColor(vm.consoleBackgroundHex,0xFF030303),
                             shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                             border=BorderStroke(1.dp,Color.White.copy(alpha=.12f)),
                             modifier=Modifier.weight(1f).fillMaxWidth()
@@ -1626,22 +1633,22 @@ private fun AchievementNotice(
                                     Text(">>>",color=Color(0xFFB8B8BE),fontFamily=FontFamily.Monospace,fontSize=12.sp)
                                     Spacer(Modifier.width(8.dp))
                                     Text(
-                                        if(vm.running)"running \${vm.currentFileName}" else vm.currentFileName,
+                                        if(vm.running)"running ${vm.currentFileName}" else vm.currentFileName,
                                         color=Color(0xFF6F6F77),fontFamily=FontFamily.Monospace,fontSize=11.sp
                                     )
                                 }
                                 Spacer(Modifier.height(12.dp))
                                 Text(
                                     vm.output.ifEmpty{"Ready"},
-                                    color=Color(0xFFE8E8EC),
+                                    color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
                                     fontFamily=FontFamily.Monospace,
                                     fontSize=vm.terminalFontSize.sp,
                                     lineHeight=(vm.terminalFontSize+6).sp,
                                     modifier=Modifier.weight(1f).fillMaxWidth().verticalScroll(consoleScroll)
                                 )
-                                ConsoleKeyToolbar(consoleInputValue,{consoleInputValue=it;vm.input=it.text},vm.inputHistory,consoleInputFocus,vm.input,vm.output.length,consoleScroll)
+                                ConsoleKeyToolbar(consoleInputValue,{consoleInputValue=it;vm.input=it.text},vm.inputHistory,consoleInputFocus,vm.input,vm.output.length,consoleScroll,safeColor(vm.toolbarHex,0xFF050505))
                                 Surface(
-                                    color=Color(0xFF050505),
+                                    color=safeColor(vm.consoleBackgroundHex,0xFF050505),
                                     shape=androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
                                     border=BorderStroke(1.dp,Color.White.copy(alpha=.16f)),
                                     modifier=Modifier.fillMaxWidth()
@@ -1663,8 +1670,7 @@ private fun AchievementNotice(
                                                 unfocusedIndicatorColor=Color.Transparent,disabledIndicatorColor=Color.Transparent,
                                                 focusedTextColor=Color.White,disabledTextColor=Color(0xFF77777F)
                                             ),
-                                            keyboardOptions=KeyboardOptions(imeAction=ImeAction.Send),
-                                            keyboardActions=KeyboardActions(onSend={if(vm.waitingInput){vm.submitInput();keyboardController?.hide()}})
+                                            keyboardOptions=KeyboardOptions(imeAction=ImeAction.None)
                                         )
                                         Button(
                                             onClick={if(vm.waitingInput) vm.submitInput()},
@@ -1683,7 +1689,7 @@ private fun AchievementNotice(
                         }
                     }
                     3 -> Column(
-                        Modifier.fillMaxSize().background(Color.Black).padding(horizontal=14.dp,vertical=10.dp),
+                        Modifier.fillMaxSize().background(bg).padding(horizontal=14.dp,vertical=10.dp),
                         verticalArrangement=Arrangement.spacedBy(9.dp)
                     ) {
                         Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.Top) {
@@ -1727,9 +1733,9 @@ private fun AchievementNotice(
                                     Column(Modifier.fillMaxWidth(),horizontalAlignment=androidx.compose.ui.Alignment.End) {
                                         Text("You   now",color=Color(0xFF858993),fontSize=10.sp,modifier=Modifier.padding(end=8.dp,bottom=4.dp))
                                         Surface(
-                                            color=Color(0xFF292A2D),
+                                            color=safeColor(vm.userBubbleHex,0xFF292A2D),
                                             contentColor=Color.White,
-                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(vm.bubbleRadius.dp),
                                             modifier=Modifier.widthIn(max=vm.bubbleWidth.dp)
                                         ) {
                                             MarkdownMessage(message.text,Color.White,Modifier.padding(horizontal=14.dp,vertical=11.dp))
@@ -1751,8 +1757,8 @@ private fun AchievementNotice(
                                         Column(Modifier.weight(1f)) {
                                             Text("Astro   now",color=Color(0xFF858993),fontSize=10.sp,modifier=Modifier.padding(start=3.dp,bottom=5.dp))
                                             Surface(
-                                                color=Color(0xFF030303),contentColor=Color.White,
-                                                shape=androidx.compose.foundation.shape.RoundedCornerShape(13.dp),
+                                                color=safeColor(vm.helperBubbleHex,0xFF030303),contentColor=Color.White,
+                                                shape=androidx.compose.foundation.shape.RoundedCornerShape(vm.bubbleRadius.dp),
                                                 border=BorderStroke(1.dp,Color(0xFF393C42)),
                                                 modifier=Modifier.fillMaxWidth()
                                             ) {
@@ -1767,11 +1773,11 @@ private fun AchievementNotice(
                         vm.aiFallbackNotice?.let { status ->
                             SwitchingModelNotice(status=status,accent=accent,onFinished={vm.aiFallbackNotice=null})
                         }
-                        vm.pendingCode?.let {
+                        vm.pendingCode?.let { change ->
                             AchievementNotice(
                                 badge="ACTION REQUIRED",
                                 title="Code change ready",
-                                subtitle="Astro wants permission to update ${vm.currentFileName}",
+                                subtitle="Astro wants permission to update ${change.fileName}",
                                 accent=accent,
                                 primaryLabel="Apply",
                                 secondaryLabel="Ignore",

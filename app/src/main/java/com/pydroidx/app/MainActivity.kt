@@ -325,6 +325,10 @@ class IdeViewModel : ViewModel() {
         AiSlotConfig(2,"Third",ai3Provider,ai3Endpoint,ai3Model,aiKeys.load(2).orEmpty())
     ).filter { it.key.isNotBlank() }
 
+    private fun trimAiMessages() {
+        while (aiMessages.size > 80) aiMessages.removeAt(0)
+    }
+
     fun attachFile(name: String, content: String) {
         attachedFileName = name.takeLast(80)
         attachedFileText = content.take(100_000)
@@ -363,6 +367,7 @@ class IdeViewModel : ViewModel() {
             aiPrompt = ""
             clearAttachment()
             aiMessages.add(AiMessage(false, ""))
+            trimAiMessages()
         } else {
             aiTestStatus = "Testing connection…"
         }

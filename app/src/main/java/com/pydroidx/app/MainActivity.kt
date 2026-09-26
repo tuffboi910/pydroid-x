@@ -72,6 +72,8 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -119,6 +121,7 @@ class IdeViewModel : ViewModel() {
     var codeDiagnostics by mutableStateOf<List<CodeDiagnostic>>(emptyList())
     var waitingInput by mutableStateOf(false)
     var input by mutableStateOf("")
+    val inputHistory = ConsoleInputHistory()
     var runtimeVersion by mutableStateOf("Loading Python…")
     var aiPrompt by mutableStateOf("")
     var aiReply by mutableStateOf("Ask about Python, your error, or your selected code")
@@ -1250,6 +1253,7 @@ private fun AchievementNotice(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val aiScroll = rememberScrollState()
+    val consoleScroll = rememberScrollState()
     val consoleInputFocus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val pages = listOf("FOLDERS", "PYTHON", "CONSOLE", "HELPER", "SETTINGS")
@@ -1261,6 +1265,9 @@ private fun AchievementNotice(
     var modelDraft by remember { mutableStateOf(vm.aiModel) }
     var providerDraft by remember { mutableStateOf(vm.aiProvider) }
     var settingsSection by remember { mutableStateOf("Overview") }
+    var consoleInputValue by remember { mutableStateOf(TextFieldValue(vm.input)) }
+    var consoleCtrl by remember { mutableStateOf(false) }
+    var consoleAlt by remember { mutableStateOf(false) }
     val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             val name = uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
@@ -1588,8 +1595,9 @@ private fun AchievementNotice(
                                     fontFamily=FontFamily.Monospace,
                                     fontSize=vm.terminalFontSize.sp,
                                     lineHeight=(vm.terminalFontSize+6).sp,
-                                    modifier=Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                                    modifier=Modifier.weight(1f).fillMaxWidth().verticalScroll(consoleScroll)
                                 )
+                                ConsoleKeyToolbar(consoleInputValue,{consoleInputValue=it;vm.input=it.text},vm.inputHistory,consoleInputFocus,vm.input,vm.output.length,consoleScroll)
                                 Surface(
                                     color=Color(0xFF050505),
                                     shape=androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
@@ -1602,7 +1610,7 @@ private fun AchievementNotice(
                                     ){
                                         Text(">>>",color=Color.White,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold)
                                         TextField(
-                                            vm.input,{vm.input=it},
+                                            consoleInputValue,{consoleInputValue=it;vm.input=it.text},
                                             enabled=vm.waitingInput,
                                             singleLine=true,
                                             modifier=Modifier.weight(1f).focusRequester(consoleInputFocus),

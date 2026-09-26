@@ -524,6 +524,8 @@ class IdeViewModel : ViewModel() {
         code = current.readText()
         codeDiagnostics = emptyList()
         pendingCode = null
+        shareCode = false
+        clearAttachment()
         settings.edit().putString("current_project",currentProjectName).putString("current_file",currentFileName).apply()
         refreshProjects()
         refreshSaved()
@@ -579,6 +581,7 @@ class IdeViewModel : ViewModel() {
         code=""
         codeDiagnostics=emptyList()
         pendingCode=null
+        shareCode=false
         settings.edit().putString("current_file",currentFileName).apply()
         refreshSaved()
         editorRevision++
@@ -594,6 +597,7 @@ class IdeViewModel : ViewModel() {
         code=file.readText()
         codeDiagnostics=emptyList()
         pendingCode=null
+        shareCode=false
         settings.edit().putString("current_file",currentFileName).apply()
         editorRevision++
         refreshSaved()
@@ -1984,7 +1988,7 @@ private fun AchievementNotice(
                         ColorSetting("Functions",vm.functionHex){vm.functionHex=it;vm.saveAppearance()}
                         ColorSetting("Variables",vm.variableHex){vm.variableHex=it;vm.saveAppearance()}
                         }
-                        if(settingsSection=="Console & Helper" || searchMatches("console","helper","chat","bubble","terminal","keyboard toolbar","run button","stop button","typing animation")){
+                        if(settingsSection=="Console & Helper" || searchMatches("console","helper","chat","bubble","terminal","keyboard toolbar","run button","stop button","typing animation","component colors")){
                         Text("COMPONENT COLORS",color=accent,fontSize=12.sp)
                         ColorSetting("Console text",vm.consoleTextHex){vm.consoleTextHex=it;vm.saveAppearance()}
                         ColorSetting("Console background",vm.consoleBackgroundHex){vm.consoleBackgroundHex=it;vm.saveAppearance()}
@@ -2058,7 +2062,8 @@ private fun AchievementNotice(
                         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("Monospace","Sans","Serif").forEach{font->FilterChip(selected=vm.fontName==font,onClick={vm.fontName=font;vm.customFontPath="";vm.saveAppearance()},label={Text(font)})}}
                         Text("FONT VAULT  •  ${FONT_VAULT.size} REAL FONTS",color=accent,fontSize=12.sp)
                         Text(vm.fontStatus,color=Color.Gray,fontSize=11.sp)
-                        FONT_VAULT.filter { vm.settingsQuery.isBlank() || it.first.contains(vm.settingsQuery,true) }.forEach { font ->
+                        val genericFontSearch = searchMatches("fonts","font family","font vault","typeface")
+                        FONT_VAULT.filter { settingsSearch.isBlank() || genericFontSearch || it.first.contains(settingsSearch,true) }.forEach { font ->
                             Surface(color=Color.White.copy(alpha=0.055f),shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.12f),androidx.compose.foundation.shape.RoundedCornerShape(14.dp))){
                             Row(Modifier.fillMaxWidth().padding(horizontal=14.dp,vertical=8.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                                 Column(Modifier.weight(1f)){Text(font.first,color=text,fontSize=14.sp);Text("Google Fonts · OFL",color=Color.DarkGray,fontSize=9.sp)}

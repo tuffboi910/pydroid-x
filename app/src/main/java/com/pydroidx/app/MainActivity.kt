@@ -866,7 +866,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
         if (!autocompleteEnabled) return@Runnable
         val snapshot = text.toString()
         val cursor = selectionStart
-        if (snapshot.isEmpty() || cursor < 0 || cursor > snapshot.length) {
+        if (snapshot.isEmpty() || snapshot.length > 200_000 || cursor < 0 || cursor > snapshot.length) {
             ghostSuffix = null
             invalidate()
             return@Runnable
@@ -1179,6 +1179,11 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val source = editable.toString()
         applyingHighlight = true
         editable.getSpans(0, editable.length, ForegroundColorSpan::class.java).forEach(editable::removeSpan)
+        if (source.length > 250_000) {
+            setTextColor(editorTextColor)
+            applyingHighlight = false
+            return
+        }
         fun color(start: Int, end: Int, value: Int) {
             if (end > start) editable.setSpan(ForegroundColorSpan(value), start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
         }

@@ -92,8 +92,7 @@ object AiClient {
         val safeEndpoint = when (provider) {
             "OpenRouter" -> "https://openrouter.ai/api/v1/chat/completions"
             "Groq" -> "https://api.groq.com/openai/v1/chat/completions"
-            "Custom" -> endpoint.trim().takeIf { it.startsWith("https://") }
-                ?: throw IllegalArgumentException("Custom provider needs an https endpoint")
+            "Custom" -> AiEndpointPolicy.requireSafeCustom(endpoint)
             else -> "https://api.openai.com/v1/chat/completions"
         }
         val messages = JSONArray()

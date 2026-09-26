@@ -1050,10 +1050,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     removeCallbacks(diagnosticsRunnable)
                     diagnostics = emptyList()
                     invalidate()
-                    val safeStart = start.coerceIn(0,s?.length ?: 0)
-                    val safeEnd = (start + count).coerceIn(safeStart,s?.length ?: safeStart)
-                    val inserted = s?.subSequence(safeStart,safeEnd)?.toString().orEmpty()
-                    if (inserted.contains('\n')) postDelayed(diagnosticsRunnable, 120)
+                    postDelayed(diagnosticsRunnable, 320)
                 }
             }
             override fun afterTextChanged(s: Editable?) = Unit
@@ -1868,10 +1865,14 @@ private fun AchievementNotice(
                                     shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                                     border=BorderStroke(1.dp,Color.White.copy(alpha=.14f))
                                 ){
+                                    val firstIssue=vm.codeDiagnostics.firstOrNull()
                                     Text(
-                                        if(vm.codeDiagnostics.isEmpty())"✓  No issues" else "⚠  ${vm.codeDiagnostics.size} issue${if(vm.codeDiagnostics.size==1)"" else "s"}",
-                                        color=if(vm.codeDiagnostics.isEmpty())Color(0xFFB8DDBE) else Color(0xFFFF6B72),
-                                        fontSize=10.sp,modifier=Modifier.padding(horizontal=10.dp,vertical=6.dp)
+                                        if(firstIssue==null)"✓  No issues"
+                                        else "⚠ L${firstIssue.line}:${firstIssue.column}  ${firstIssue.message}",
+                                        color=if(firstIssue==null)Color(0xFFB8DDBE) else Color(0xFFFF6B72),
+                                        fontSize=10.sp,
+                                        maxLines=2,
+                                        modifier=Modifier.padding(horizontal=10.dp,vertical=6.dp)
                                     )
                                 }
                             }
@@ -1927,7 +1928,7 @@ private fun AchievementNotice(
                                 Text(if(vm.consoleMode=="Python")"PYTHON CONSOLE" else "PROJECT TERMINAL",color=Color.White,fontSize=17.sp,fontWeight=FontWeight.SemiBold,letterSpacing=1.1.sp)
                                 Text(if(vm.consoleMode=="Python")"CPython 3.14" else vm.terminalPrompt,color=Color(0xFF77777F),fontSize=10.sp,fontFamily=FontFamily.Monospace)
                             }
-                            TextButton(onClick={if(vm.consoleMode=="Python") vm::clearOutput else vm::clearTerminal},contentPadding=PaddingValues(8.dp),modifier=Modifier.size(42.dp)){
+                            TextButton(onClick={if(vm.consoleMode=="Python") vm.clearOutput() else vm.clearTerminal()},contentPadding=PaddingValues(8.dp),modifier=Modifier.size(42.dp)){
                                 Text("⌫",color=Color(0xFFB8B8BE),fontSize=21.sp)
                             }
                             Spacer(Modifier.width(6.dp))
@@ -2015,7 +2016,7 @@ private fun AchievementNotice(
                                                 keyboardOptions=KeyboardOptions(imeAction=ImeAction.None)
                                             )
                                             Button(
-                                                onClick={if(vm.waitingInput) vm::submitInput else ({})},
+                                                onClick={if(vm.waitingInput) vm.submitInput()},
                                                 enabled=vm.waitingInput,
                                                 shape=androidx.compose.foundation.shape.CircleShape,
                                                 contentPadding=PaddingValues(0.dp),
@@ -2373,8 +2374,9 @@ private fun AchievementNotice(
                         if(settingsSection=="System" || searchMatches("system","programming toolbar","page indicator","runtime","python")){
                         SettingSwitch("Programming toolbar",vm.showToolbar){vm.showToolbar=it;vm.saveAppearance()}
                         SettingSwitch("Page indicator dots",vm.showPageDots){vm.showPageDots=it;vm.saveAppearance()}
+                        SettingSwitch("Swipe between pages",vm.swipePages){vm.swipePages=it;vm.saveAppearance()}
                         HorizontalDivider(color=Color(0xFF202020))
-                        Text("Swipe left or right anywhere outside active text editing to move between pages.",color=Color.Gray,fontSize=12.sp)
+                        Text(if(vm.swipePages)"Page swiping is enabled." else "Page swiping is off so vertical scrolling cannot accidentally change tabs.",color=Color.Gray,fontSize=12.sp)
                         Text("Python  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp)
                         }
                     }

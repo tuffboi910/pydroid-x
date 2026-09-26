@@ -5,6 +5,7 @@ import importlib
 import io
 import json
 import os
+import shutil
 import sys
 import traceback
 
@@ -365,6 +366,10 @@ def _purge_project_modules(project_dir):
             continue
         if real_path == root or real_path.startswith(prefix):
             sys.modules.pop(name, None)
+    for current_root, directories, _ in os.walk(root):
+        if "__pycache__" in directories:
+            shutil.rmtree(os.path.join(current_root, "__pycache__"), ignore_errors=True)
+            directories.remove("__pycache__")
     importlib.invalidate_caches()
 
 
@@ -373,6 +378,7 @@ def run_code(source, filename, project_dir, bridge):
     old_cwd = os.getcwd()
     old_sys_path = list(sys.path)
     old_trace = sys.gettrace()
+    old_dont_write_bytecode = sys.dont_write_bytecode
     out = _Stream(bridge, False)
     err = _Stream(bridge, True)
 
@@ -403,6 +409,7 @@ def run_code(source, filename, project_dir, bridge):
         if project_dir not in sys.path:
             sys.path.insert(0, project_dir)
         builtins.input = android_input
+        sys.dont_write_bytecode = True
         scope = {"__name__": "__main__", "__file__": filename}
         sys.settrace(stop_trace)
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -426,6 +433,7 @@ def run_code(source, filename, project_dir, bridge):
     finally:
         sys.settrace(old_trace)
         builtins.input = old_input
+        sys.dont_write_bytecode = old_dont_write_bytecode
         os.chdir(old_cwd)
         sys.path[:] = old_sys_path
 

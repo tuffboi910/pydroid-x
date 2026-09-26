@@ -1865,7 +1865,10 @@ private fun AchievementNotice(
                             Column(Modifier.weight(1f)){Text(if(settingsSection=="Overview") "SETTINGS" else settingsSection.uppercase(),color=accent,fontSize=18.sp);Text(if(settingsSection=="Overview") "Make PY4U yours" else "Focused controls",color=Color.Gray,fontSize=11.sp)}
                         }
                         TextField(vm.settingsQuery,{vm.settingsQuery=it},singleLine=true,modifier=Modifier.fillMaxWidth(),placeholder={Text("Search every setting…")})
-                        if(settingsSection=="Overview" && vm.settingsQuery.isBlank()){
+                        val settingsSearch = vm.settingsQuery.trim()
+                        fun searchMatches(vararg terms:String):Boolean =
+                            settingsSearch.isNotBlank() && terms.any { it.contains(settingsSearch,true) || settingsSearch.contains(it,true) }
+                        if(settingsSection=="Overview" && settingsSearch.isBlank()){
                             SettingsCategory("Appearance","Theme, accents and component colors",accent){settingsSection="Appearance"}
                             SettingsCategory("Editor","Text, cursor, autocomplete and saving",accent){settingsSection="Editor"}
                             SettingsCategory("Fonts","100 downloadable typefaces",accent){settingsSection="Fonts"}
@@ -1874,7 +1877,7 @@ private fun AchievementNotice(
                             SettingsCategory("Console & Helper","Output and chat appearance",accent){settingsSection="Console & Helper"}
                             SettingsCategory("System","Runtime and interface switches",accent){settingsSection="System"}
                         }
-                        if(settingsSection=="Appearance" || vm.settingsQuery.isNotBlank()){
+                        if(settingsSection=="Appearance" || searchMatches("appearance","theme","accent color","background","editor token colors","comments","strings","numbers","keywords","functions","variables")){
                         Text("ACCENT COLOR",color=accent,fontSize=12.sp)
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){
                             listOf("#00E5FF","#0A84FF","#30D158","#BF5AF2","#FF375F","#FFD60A","#FF9F0A","#FFFFFF").forEach{hex->
@@ -1898,7 +1901,7 @@ private fun AchievementNotice(
                         ColorSetting("Functions",vm.functionHex){vm.functionHex=it;vm.saveAppearance()}
                         ColorSetting("Variables",vm.variableHex){vm.variableHex=it;vm.saveAppearance()}
                         }
-                        if(settingsSection=="Console & Helper" || vm.settingsQuery.isNotBlank()){
+                        if(settingsSection=="Console & Helper" || searchMatches("console","helper","chat","bubble","terminal","keyboard toolbar","run button","stop button","typing animation")){
                         Text("COMPONENT COLORS",color=accent,fontSize=12.sp)
                         ColorSetting("Console text",vm.consoleTextHex){vm.consoleTextHex=it;vm.saveAppearance()}
                         ColorSetting("Console background",vm.consoleBackgroundHex){vm.consoleBackgroundHex=it;vm.saveAppearance()}
@@ -1914,8 +1917,13 @@ private fun AchievementNotice(
                         Slider(vm.bubbleWidth,{vm.bubbleWidth=it;vm.saveAppearance()},valueRange=180f..420f)
                         Text("Terminal font  ${vm.terminalFontSize.toInt()} sp",color=text)
                         Slider(vm.terminalFontSize,{vm.terminalFontSize=it;vm.saveAppearance()},valueRange=10f..24f,steps=13)
+                        SettingSwitch("Astro typing animation",vm.typingAnimation){vm.typingAnimation=it;vm.saveAppearance()}
+                        if(vm.typingAnimation) {
+                            Text("Astro word delay  ${(vm.animationDuration/6.7f).toInt()} ms",color=text)
+                            Slider(vm.animationDuration,{vm.animationDuration=it;vm.saveAppearance()},valueRange=30f..400f)
                         }
-                        if(settingsSection=="Motion" || vm.settingsQuery.isNotBlank()){
+                        }
+                        if(settingsSection=="Motion" || searchMatches("motion","animation","fade","scale","parallax","spring")){
                         Text("MOTION",color=accent,fontSize=12.sp)
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(7.dp)){
                             listOf("Fluid spring","Soft fade","Subtle scale","Shared element","Smooth blur reveal","Layered depth","Gentle parallax","Card expansion","Natural sheet","Magnetic snap","Interactive swipe","Content morph","Keyboard lift").forEach{motion->
@@ -1926,7 +1934,7 @@ private fun AchievementNotice(
                         Slider(vm.motionIntensity,{vm.motionIntensity=it;vm.saveAppearance()},valueRange=0.1f..1f)
                         SettingSwitch("Interface motion",vm.motionEnabled){vm.motionEnabled=it;vm.saveAppearance()}
                         }
-                        if(settingsSection=="Layout" || vm.settingsQuery.isNotBlank()){
+                        if(settingsSection=="Layout" || searchMatches("layout","header","tab","toolbar height","page dot","interface scale","padding","file information")){
                         Text("Header height  ${vm.headerHeight.toInt()} dp",color=text)
                         Slider(vm.headerHeight,{vm.headerHeight=it;vm.saveAppearance()},valueRange=48f..110f)
                         Text("Tab bar height  ${vm.tabHeight.toInt()} dp",color=text)
@@ -1942,7 +1950,7 @@ private fun AchievementNotice(
                         Text("Editor padding  ${vm.editorPadding.toInt()} px",color=text)
                         Slider(vm.editorPadding,{vm.editorPadding=it;vm.saveAppearance()},valueRange=0f..48f,steps=11)
                         }
-                        if(settingsSection=="Editor" || vm.settingsQuery.isNotBlank()){
+                        if(settingsSection=="Editor" || searchMatches("editor","font size","line spacing","highlight delay","autosave","ghost text","cursor","word wrap","syntax","autocomplete","line numbers","saving")){
                         Text("Editor font  ${vm.editorFontSize.toInt()} sp",color=text)
                         Slider(vm.editorFontSize,{vm.editorFontSize=it;vm.saveAppearance()},valueRange=12f..28f,steps=15)
                         Text("Line spacing  ${"%.2f".format(vm.lineSpacing)}×",color=text)
@@ -1962,7 +1970,7 @@ private fun AchievementNotice(
                         SettingSwitch("Highlight active line",vm.highlightCurrentLine){vm.highlightCurrentLine=it;vm.saveAppearance()}
                         SettingSwitch("Automatic saving",vm.autoSave){vm.autoSave=it;vm.saveAppearance()}
                         }
-                        if(settingsSection=="Fonts" || (vm.settingsQuery.isNotBlank() && FONT_VAULT.any{it.first.contains(vm.settingsQuery,true)})){
+                        if(settingsSection=="Fonts" || searchMatches("fonts","font family","font vault","typeface") || (settingsSearch.isNotBlank() && FONT_VAULT.any{it.first.contains(settingsSearch,true)})){
                         Text("Font family",color=text)
                         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("Monospace","Sans","Serif").forEach{font->FilterChip(selected=vm.fontName==font,onClick={vm.fontName=font;vm.customFontPath="";vm.saveAppearance()},label={Text(font)})}}
                         Text("FONT VAULT  •  ${FONT_VAULT.size} REAL FONTS",color=accent,fontSize=12.sp)
@@ -1975,7 +1983,7 @@ private fun AchievementNotice(
                             }}
                         }
                         }
-                        if(settingsSection=="System" || vm.settingsQuery.isNotBlank()){
+                        if(settingsSection=="System" || searchMatches("system","programming toolbar","page indicator","runtime","python")){
                         SettingSwitch("Programming toolbar",vm.showToolbar){vm.showToolbar=it;vm.saveAppearance()}
                         SettingSwitch("Page indicator dots",vm.showPageDots){vm.showPageDots=it;vm.saveAppearance()}
                         HorizontalDivider(color=Color(0xFF202020))
@@ -2045,6 +2053,9 @@ private fun AchievementNotice(
                         onClick={vm.removeAiKey(selectedAiSlot)},
                         colors=ButtonDefaults.outlinedButtonColors(contentColor=Color(0xFFFF3D71))
                     ){Text("Remove")}
+                }
+                vm.aiTestStatus?.let { status ->
+                    Text(status,color=if(status.contains("successful",true)) Color(0xFF7EE787) else Color(0xFFB8BEC7),fontSize=11.sp)
                 }
             }
         },
@@ -2144,7 +2155,7 @@ private fun pythonCodeColors(source:String):AnnotatedString=buildAnnotatedString
 }
 
 @Composable private fun AstroCodeBlock(code:String,language:String="python"){
-    val clipboard=LocalClipboardManager.current
+    val context=LocalContext.current
     val shape=androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
     Surface(
         color=Color(0xFF050505),
@@ -2159,7 +2170,10 @@ private fun pythonCodeColors(source:String):AnnotatedString=buildAnnotatedString
                 Text(language.ifBlank{"python"},color=Color(0xFFB7B7BD),fontSize=11.sp,fontFamily=FontFamily.Monospace)
                 Spacer(Modifier.weight(1f))
                 TextButton(
-                    onClick={clipboard.setText(AnnotatedString(code))},
+                    onClick={
+                        val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("PY4U code",code))
+                    },
                     contentPadding=PaddingValues(horizontal=8.dp,vertical=0.dp)
                 ){Text("▱  Copy",color=Color(0xFFEDEDF2),fontSize=11.sp)}
             }

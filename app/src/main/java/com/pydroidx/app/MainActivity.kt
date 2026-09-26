@@ -28,6 +28,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -62,6 +63,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.window.Popup
@@ -1271,28 +1273,31 @@ private class PythonEditorView(context: Context) : EditText(context) {
             val density = resources.displayMetrics.density
             val popupLeft = (x - 8f * density).coerceIn(8f * density, (width - 300f * density).coerceAtLeast(8f * density))
             val rowHeight = 38f * density
-            val docsHeight = 48f * density
+            val docsHeight = 66f * density
             val popupWidth = minOf(330f * density, width - popupLeft - 8f * density)
             val popupHeight = rowHeight * completionItems.size + docsHeight
             var popupTop = y + 12f * density
             if (popupTop + popupHeight > height) popupTop = (y - popupHeight - 24f * density).coerceAtLeast(8f * density)
             val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(31, 32, 36) }
             canvas.drawRoundRect(popupLeft, popupTop, popupLeft + popupWidth, popupTop + popupHeight, 16f, 16f, panelPaint)
-            val selectedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(53, 56, 64) }
+            val selectedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(0, 91, 181) }
             canvas.drawRoundRect(popupLeft + 5f, popupTop + 5f, popupLeft + popupWidth - 5f, popupTop + rowHeight, 10f, 10f, selectedPaint)
             val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.WHITE; textSize = 15f * density; typeface = Typeface.DEFAULT_BOLD }
             val typePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(155, 158, 170); textSize = 11f * density }
             completionItems.forEachIndexed { index, item ->
                 val baseline = popupTop + index * rowHeight + 25f * density
-                canvas.drawText(item.label.take(30), popupLeft + 14f * density, baseline, labelPaint)
+                canvas.drawText("◇", popupLeft + 14f * density, baseline, Paint(labelPaint).apply { color=AndroidColor.rgb(191,91,255) })
+                canvas.drawText(item.label.take(30), popupLeft + 38f * density, baseline, labelPaint)
                 val typeWidth = typePaint.measureText(item.type)
                 canvas.drawText(item.type, popupLeft + popupWidth - typeWidth - 14f * density, baseline, typePaint)
             }
             val dividerY = popupTop + rowHeight * completionItems.size
             canvas.drawLine(popupLeft + 10f, dividerY, popupLeft + popupWidth - 10f, dividerY, Paint().apply { color = AndroidColor.rgb(70, 72, 78) })
             val doc = completionItems.first().doc.replace('\n', ' ').replace(Regex("\\s+"), " ").ifBlank { "Python ${completionItems.first().type}" }.take(92)
-            canvas.drawText(doc, popupLeft + 14f * density, dividerY + 28f * density, typePaint)
-            canvas.drawText("Tab to accept", popupLeft + 14f * density, dividerY + 43f * density, typePaint)
+            canvas.drawText(doc.take(70), popupLeft + 14f * density, dividerY + 25f * density, typePaint)
+            canvas.drawText(doc.drop(70).take(70), popupLeft + 14f * density, dividerY + 43f * density, typePaint)
+            val tabText="Tab to accept"
+            canvas.drawText(tabText, popupLeft + popupWidth - typePaint.measureText(tabText) - 14f*density, dividerY + 60f * density, typePaint)
         }
     }
 
@@ -1491,6 +1496,7 @@ private fun AchievementNotice(
     val consoleInputFocus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val pages = listOf("FOLDERS", "PYTHON", "CONSOLE", "HELPER", "SETTINGS")
+    val pageIcons = listOf("▱", "", "▣", "▤", "⚙")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
     var showAiSettings by remember { mutableStateOf(false) }
     var selectedAiSlot by remember { mutableIntStateOf(0) }
@@ -1558,14 +1564,15 @@ private fun AchievementNotice(
         Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().padding(top=8.dp).imePadding()) {
             if(vm.showHeader) {
             Row(
-                Modifier.fillMaxWidth().height(vm.headerHeight.coerceAtLeast(vm.tabHeight+18f).dp).padding(start=10.dp,end=10.dp,top=10.dp,bottom=8.dp),
-                horizontalArrangement=Arrangement.spacedBy(10.dp),
+                Modifier.fillMaxWidth().height(vm.headerHeight.coerceAtLeast(82f).dp)
+                    .padding(start=10.dp,end=10.dp,top=8.dp,bottom=8.dp),
+                horizontalArrangement=Arrangement.spacedBy(8.dp),
                 verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
             ) {
                 Row(
-                    Modifier.weight(1f).height(vm.tabHeight.dp)
-                        .background(safeColor(vm.tabBarHex,0xFF050505).copy(alpha=0.72f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
-                        .border(1.dp,glassEdge,androidx.compose.foundation.shape.RoundedCornerShape(18.dp)),
+                    Modifier.weight(1f).fillMaxHeight()
+                        .background(Color(0xFF080B0F),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
+                        .border(1.dp,Color.White.copy(alpha=.07f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp)),
                     horizontalArrangement=Arrangement.SpaceEvenly,
                     verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                 ) {
@@ -1575,11 +1582,22 @@ private fun AchievementNotice(
                             contentPadding=PaddingValues(horizontal=5.dp,vertical=0.dp)
                         ) {
                             Column(horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally) {
-                                Text(label,color=if(pager.currentPage==index) Color.White else Color(0xFF66666D),fontSize=9.sp)
-                                Spacer(Modifier.height(3.dp))
+                                if(index==1) {
+                                    Image(
+                                        painter=painterResource(com.pydroidx.app.R.drawable.ic_launcher_foreground),
+                                        contentDescription="Python",
+                                        modifier=Modifier.size(25.dp)
+                                    )
+                                } else Text(
+                                    pageIcons[index],
+                                    color=if(pager.currentPage==index) Color(0xFF15AFFF) else Color(0xFFA4A9B0),
+                                    fontSize=20.sp
+                                )
+                                Text(label,color=if(pager.currentPage==index) Color(0xFF15AFFF) else Color(0xFFC0C3C9),fontSize=8.sp)
+                                Spacer(Modifier.height(2.dp))
                                 Box(
-                                    Modifier.width(28.dp).height(2.dp).background(
-                                        if(pager.currentPage==index) Color.White else Color.Transparent,
+                                    Modifier.width(34.dp).height(3.dp).background(
+                                        if(pager.currentPage==index) Color(0xFF00AFFF) else Color.Transparent,
                                         androidx.compose.foundation.shape.RoundedCornerShape(1.dp)
                                     )
                                 )
@@ -1599,7 +1617,7 @@ private fun AchievementNotice(
                         ),
                         shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
                         contentPadding=PaddingValues(horizontal=17.dp,vertical=9.dp),
-                        modifier=Modifier.height(vm.tabHeight.dp)
+                        modifier=Modifier.fillMaxHeight().widthIn(min=86.dp)
                             .border(1.dp,Color.White.copy(alpha=0.24f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
                     ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
                 }
@@ -1703,26 +1721,19 @@ private fun AchievementNotice(
                     1 -> Column(Modifier.fillMaxSize().background(bg)) {
                         if(vm.showFileInfo) {
                         Row(
-                            Modifier.fillMaxWidth().height(44.dp)
-                                .background(Color(0xFF030303))
-                                .border(1.dp,Color.White.copy(alpha=.10f))
-                                .padding(start=14.dp,end=8.dp),
+                            Modifier.fillMaxWidth().height(58.dp).padding(horizontal=10.dp,vertical=4.dp)
+                                .background(Color(0xFF080B0F),androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                                .border(1.dp,Color.White.copy(alpha=.06f),androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                                .padding(start=12.dp,end=6.dp),
                             verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                         ){
-                            Box(Modifier.size(24.dp)){
-                                Box(
-                                    Modifier.width(16.dp).height(12.dp)
-                                        .background(Color.White,androidx.compose.foundation.shape.RoundedCornerShape(5.dp))
-                                        .align(androidx.compose.ui.Alignment.TopStart)
-                                )
-                                Box(
-                                    Modifier.width(16.dp).height(12.dp)
-                                        .background(Color(0xFF9A9AA1),androidx.compose.foundation.shape.RoundedCornerShape(5.dp))
-                                        .align(androidx.compose.ui.Alignment.BottomEnd)
-                                )
-                            }
+                            Image(
+                                painter=painterResource(com.pydroidx.app.R.drawable.ic_launcher_foreground),
+                                contentDescription="Python file",
+                                modifier=Modifier.size(30.dp)
+                            )
                             Spacer(Modifier.width(9.dp))
-                            Text(vm.currentFileName,color=Color(0xFFE8E8EC),fontSize=14.sp,fontFamily=FontFamily.Monospace)
+                            Text(vm.currentFileName,color=Color.White,fontSize=16.sp,fontWeight=FontWeight.Bold)
                             Spacer(Modifier.width(7.dp))
                             Box(Modifier.size(6.dp).background(Color(0xFF8AB4F8),androidx.compose.foundation.shape.CircleShape))
                             Spacer(Modifier.width(8.dp))
@@ -1761,22 +1772,6 @@ private fun AchievementNotice(
                             modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
                         )
                         if(vm.showToolbar) {
-                            Row(
-                                Modifier.fillMaxWidth().padding(horizontal=14.dp,vertical=4.dp),
-                                horizontalArrangement=Arrangement.End
-                            ){
-                                Surface(
-                                    color=Color(0xFF080808),
-                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-                                    border=BorderStroke(1.dp,Color.White.copy(alpha=.14f))
-                                ){
-                                    Text(
-                                        if(vm.codeDiagnostics.isEmpty())"✓  No issues" else "⚠  ${vm.codeDiagnostics.size} issue${if(vm.codeDiagnostics.size==1)"" else "s"}",
-                                        color=if(vm.codeDiagnostics.isEmpty())Color(0xFFB8DDBE) else Color(0xFFFF6B72),
-                                        fontSize=10.sp,modifier=Modifier.padding(horizontal=10.dp,vertical=6.dp)
-                                    )
-                                }
-                            }
                             Surface(
                                 color=safeColor(vm.toolbarHex,0xFF050505),
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),

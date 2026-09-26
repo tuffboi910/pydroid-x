@@ -350,10 +350,15 @@ class _CallArityAnalyzer(ast.NodeVisitor):
             return
 
         name = node.func.id
-        signature = self.signatures.get(name) or self._BUILTINS.get(name)
+        signature = self.signatures.get(name)
         if signature is None:
-            return
-        minimum, maximum, required_kwonly = signature
+            builtin_signature = self._BUILTINS.get(name)
+            if builtin_signature is None:
+                return
+            minimum, maximum = builtin_signature
+            required_kwonly = 0
+        else:
+            minimum, maximum, required_kwonly = signature
         positional = len(node.args)
         supplied_keywords = {kw.arg for kw in node.keywords if kw.arg}
         # If a function requires keyword-only arguments we cannot safely know their names

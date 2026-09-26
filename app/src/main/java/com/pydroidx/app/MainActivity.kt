@@ -1356,6 +1356,11 @@ private fun AchievementNotice(
 
     val glass=Color.White.copy(alpha=0.065f)
     val glassEdge=Color.White.copy(alpha=0.16f)
+    val baseDensity=LocalDensity.current
+    val scaledDensity=remember(baseDensity.density,baseDensity.fontScale,vm.uiScale) {
+        Density(baseDensity.density * vm.uiScale, baseDensity.fontScale)
+    }
+    CompositionLocalProvider(LocalDensity provides scaledDensity) {
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=Color.Transparent,surfaceVariant=glass,outline=glassEdge)) {
         Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().padding(top=8.dp).imePadding()) {
             if(vm.showHeader) {
@@ -2068,6 +2073,7 @@ private fun AchievementNotice(
         },
         dismissButton={TextButton(onClick={showAiSettings=false}){Text("Cancel")}}
     )
+    }
 }
 
 @Composable private fun SettingSwitch(label:String,checked:Boolean,onChange:(Boolean)->Unit){

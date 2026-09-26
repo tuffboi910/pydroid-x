@@ -9,11 +9,13 @@ PY4U is an open-source Android Python IDE focused on reliable local execution an
 - Offline execution with stdout, stderr and tracebacks
 - Interactive `input()` without blocking the UI
 - Stop control and dedicated worker thread
-- Persistent `main.py` project
+- Bounded console buffering, input history, navigation keys and reliable auto-scroll
+- Multiple local project folders with persistent Python files
 - Dark Compose editor, terminal and programming-key toolbar
 - Actual runtime version displayed from `sys.version`
+- BYOK AI fallback chain with Android Keystore-protected API keys
 
-This repository is under active development toward project exploration, rich syntax highlighting, offline IntelliSense, package management, SAF import/export and BYOK AI providers
+This repository is under active development toward richer project exploration, package management, SAF import/export and broader Android package compatibility
 
 ## Build
 

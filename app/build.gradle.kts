@@ -24,6 +24,10 @@ android {
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 
+kotlin {
+    jvmToolchain(17)
+}
+
 chaquopy {
     defaultConfig {
         version = "3.14"

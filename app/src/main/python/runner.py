@@ -326,18 +326,24 @@ def complete(source, cursor, project_dir):
         items = jedi.Script(source, path=path).complete(line, column)
         if not items:
             return "{}"
-        item = items[0]
-        suffix = item.complete
-        cursor_back = 0
-        if item.type in ("function", "class") and not suffix.endswith(")"):
-            suffix += "()"
-            cursor_back = 1
+        def serialized(completion):
+            suffix = completion.complete
+            cursor_back = 0
+            if completion.type in ("function", "class") and not suffix.endswith(")"):
+                suffix += "()"
+                cursor_back = 1
+            return {
+                "label": completion.name + ("()" if cursor_back else ""),
+                "suffix": suffix,
+                "cursor_back": cursor_back,
+                "type": completion.type,
+                "doc": completion.docstring(raw=True)[:240],
+            }
+
+        first = serialized(items[0])
         return json.dumps({
-            "label": item.name + ("()" if cursor_back else ""),
-            "suffix": suffix,
-            "cursor_back": cursor_back,
-            "type": item.type,
-            "doc": item.docstring(raw=True)[:240],
+            **first,
+            "items": [serialized(item) for item in items[:3]],
         })
     except Exception:
         return "{}"

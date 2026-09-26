@@ -9,6 +9,8 @@ import shutil
 import sys
 import traceback
 import difflib
+import shlex
+import importlib.metadata
 
 
 class _Scope:
@@ -481,3 +483,59 @@ def run_code(source, filename, project_dir, bridge):
 
 def version():
     return sys.version
+
+
+def run_terminal_command(command, project_dir, bridge):
+    """Project-scoped terminal for Android, where a desktop shell isn't available."""
+    out, err = _Stream(bridge, False), _Stream(bridge, True)
+    try:
+        parts = shlex.split(command)
+        if not parts:
+            bridge.exited(0)
+            return
+        name, args = parts[0].lower(), parts[1:]
+        root = os.path.realpath(project_dir)
+
+        def project_path(value):
+            path = os.path.realpath(os.path.join(root, value))
+            if path != root and not path.startswith(root + os.sep):
+                raise ValueError("Path must stay inside this project")
+            return path
+
+        if name == "help":
+            out.write("Commands: help, pwd, ls, cat FILE, python FILE.py, packages, mkdir DIR, touch FILE, clear\n")
+        elif name == "pwd":
+            out.write(root + "\n")
+        elif name in ("ls", "dir"):
+            target = project_path(args[0] if args else ".")
+            for item in sorted(os.listdir(target), key=str.lower):
+                out.write(item + ("/" if os.path.isdir(os.path.join(target, item)) else "") + "\n")
+        elif name == "cat":
+            if not args: raise ValueError("Usage: cat FILE")
+            with open(project_path(args[0]), "r", encoding="utf-8") as handle:
+                out.write(handle.read() + "\n")
+        elif name == "mkdir":
+            if not args: raise ValueError("Usage: mkdir DIR")
+            os.makedirs(project_path(args[0]), exist_ok=True)
+        elif name == "touch":
+            if not args: raise ValueError("Usage: touch FILE")
+            open(project_path(args[0]), "a", encoding="utf-8").close()
+        elif name == "packages" or (name == "pip" and (not args or args[0] == "list")):
+            rows = sorted((d.metadata.get("Name", d.name), d.version) for d in importlib.metadata.distributions())
+            out.write("Installed packages:\n" + "\n".join("%s %s" % row for row in rows) + "\n")
+        elif name in ("python", "py"):
+            if not args:
+                out.write(sys.version + "\n")
+            else:
+                filename = args[0]
+                with open(project_path(filename), "r", encoding="utf-8") as handle:
+                    run_code(handle.read(), filename, root, bridge)
+                return
+        elif name == "pip" and args and args[0] == "install":
+            raise ValueError("Only Android-compatible packages can be installed; the full installer is not ready yet")
+        else:
+            raise ValueError("Unknown command: %s. Type help." % name)
+        bridge.exited(0)
+    except BaseException as exc:
+        err.write("%s: %s\n" % (type(exc).__name__, str(exc)))
+        bridge.exited(1)

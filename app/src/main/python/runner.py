@@ -198,16 +198,15 @@ class _UndefinedNameAnalyzer(ast.NodeVisitor):
     def visit_Name(self, node):
         if not isinstance(node.ctx, ast.Load) or _resolve(node.id, self.scope):
             return
-        line_text = self.source_lines[node.lineno - 1]
-        char_column = len(line_text.encode("utf-8")[:node.col_offset].decode("utf-8", errors="ignore"))
-        start = self.line_starts[node.lineno - 1] + char_column
-        end = start + len(node.id)
+        start, end = _node_utf16_range(self.source_lines, self.line_starts, node, node.id)
         key = (start, end, node.id)
         if key not in self.seen:
             self.seen.add(key)
             self.issues.append({
                 "start": start,
                 "end": end,
+                "line": node.lineno,
+                "column": node.col_offset + 1,
                 "message": "Undefined name: " + node.id,
                 "fatal": False,
             })
@@ -423,30 +422,8 @@ def diagnose(source):
     issues = []
     seen = set()
 
-    # Undefined-name analysis uses UTF-16 offsets because Android EditText indexes
-    # Java/Kotlin strings in UTF-16 code units.
-    analyzer = _UndefinedNameAnalyzer(module_scope, source, [0], issues, seen)
-    analyzer.source_lines = source_lines
-    analyzer.line_starts = line_starts_utf16
-    original_visit_name = analyzer.visit_Name
-
-    def visit_name_utf16(node):
-        if not isinstance(node.ctx, ast.Load) or _resolve(node.id, analyzer.scope):
-            return
-        start, end = _node_utf16_range(source_lines, line_starts_utf16, node, node.id)
-        key = (start, end, node.id)
-        if key not in seen:
-            seen.add(key)
-            issues.append({
-                "start": start,
-                "end": end,
-                "line": node.lineno,
-                "column": node.col_offset + 1,
-                "message": "Undefined name: " + node.id,
-                "fatal": False,
-            })
-
-    analyzer.visit_Name = visit_name_utf16
+    # Android EditText indexes Java/Kotlin strings in UTF-16 code units.
+    analyzer = _UndefinedNameAnalyzer(module_scope, source, line_starts_utf16, issues, seen)
     for item in tree.body:
         analyzer.visit(item)
 

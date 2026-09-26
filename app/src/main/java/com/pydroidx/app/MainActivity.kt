@@ -89,6 +89,10 @@ import java.net.URL
 data class AiMessage(val fromUser: Boolean, val text: String)
 data class AiSlotConfig(val index: Int, val label: String, val provider: String, val endpoint: String, val model: String, val key: String)
 data class CodeDiagnostic(val start: Int, val end: Int, val message: String, val fatal: Boolean = false)
+data class RuntimeIssue(
+    val title: String, val explanation: String, val line: Int, val codeLine: String,
+    val hint: String, val details: String, val replaceFrom: String = "", val replaceTo: String = ""
+)
 data class SavedCode(val name: String, val modified: Long)
 data class PendingCodeChange(val code: String, val fileName: String, val sourceSnapshot: String)
 
@@ -118,6 +122,7 @@ class IdeViewModel : ViewModel() {
     var output by mutableStateOf("")
     var running by mutableStateOf(false)
     var codeDiagnostics by mutableStateOf<List<CodeDiagnostic>>(emptyList())
+    var runtimeIssue by mutableStateOf<RuntimeIssue?>(null)
     var waitingInput by mutableStateOf(false)
     var input by mutableStateOf("")
     val inputHistory = ConsoleInputHistory()
@@ -709,6 +714,29 @@ class IdeViewModel : ViewModel() {
         mainHandler.removeCallbacks(outputFlushRunnable)
         outputFlushScheduled = false
         output = ""
+        runtimeIssue = null
+    }
+
+    fun applyRuntimeFix() {
+        val issue = runtimeIssue ?: return
+        if (issue.replaceFrom.isNotBlank() && issue.replaceTo.isNotBlank()) {
+            val lines = code.lines().toMutableList()
+            val index = issue.line - 1
+            if (index in lines.indices && lines[index].contains(issue.replaceFrom)) {
+                lines[index] = lines[index].replaceFirst(issue.replaceFrom, issue.replaceTo)
+                code = lines.joinToString("\n").let { if (it.endsWith("\n")) it else "$it\n" }
+                editorRevision++
+                save()
+                clearOutput()
+                return
+            }
+        }
+        aiPrompt = "Fix this Python error in $currentFileName without changing unrelated code:\n${issue.title} on line ${issue.line}: ${issue.explanation}\n${issue.hint}"
+    }
+
+    fun prepareRuntimeQuestion() {
+        val issue = runtimeIssue ?: return
+        aiPrompt = "Explain and fix this Python error in simple words:\n${issue.title} on line ${issue.line}\n${issue.explanation}\nCode: ${issue.codeLine}\nHint: ${issue.hint}"
     }
 
     fun run() {
@@ -759,6 +787,9 @@ class IdeViewModel : ViewModel() {
     }
     inner class Bridge {
         fun write(text: String, error: Boolean) { appendOutput(text) }
+        fun reportError(title: String, explanation: String, line: Int, codeLine: String, hint: String, details: String, replaceFrom: String, replaceTo: String) {
+            mainHandler.post { runtimeIssue = RuntimeIssue(title, explanation, line, codeLine, hint, details, replaceFrom, replaceTo) }
+        }
         fun shouldStop(): Boolean = stopRequested
         fun readLine(): String? {
             if (stopRequested) return null
@@ -1738,14 +1769,38 @@ private fun AchievementNotice(
                                     )
                                 }
                                 Spacer(Modifier.height(12.dp))
-                                Text(
-                                    vm.output.ifEmpty{"Ready"},
-                                    color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
-                                    fontFamily=FontFamily.Monospace,
-                                    fontSize=vm.terminalFontSize.sp,
-                                    lineHeight=(vm.terminalFontSize+6).sp,
-                                    modifier=Modifier.weight(1f).fillMaxWidth().verticalScroll(consoleScroll)
-                                )
+                                Box(Modifier.weight(1f).fillMaxWidth()) {
+                                    Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
+                                        fontFamily=FontFamily.Monospace,fontSize=vm.terminalFontSize.sp,
+                                        lineHeight=(vm.terminalFontSize+6).sp,
+                                        modifier=Modifier.fillMaxSize().verticalScroll(consoleScroll).padding(bottom=150.dp))
+                                    vm.runtimeIssue?.let { issue ->
+                                        var showDetails by remember(issue.details) { mutableStateOf(false) }
+                                        Surface(color=Color(0xFF151316),shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                                            border=BorderStroke(1.dp,Color(0xFFFF6B81).copy(alpha=.48f)),
+                                            modifier=Modifier.align(androidx.compose.ui.Alignment.BottomCenter).fillMaxWidth()) {
+                                            Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                                                Text("⚠ ${issue.title}",color=Color(0xFFFF8798),fontWeight=FontWeight.Bold,fontSize=14.sp)
+                                                Text("Line ${issue.line}: ${issue.explanation}",color=Color.White,fontSize=13.sp,lineHeight=18.sp)
+                                                if(issue.codeLine.isNotBlank()) Text(issue.codeLine,color=Color(0xFFB8C7FF),fontFamily=FontFamily.Monospace,fontSize=12.sp)
+                                                if(showDetails) Text(issue.details,color=Color(0xFF9B9BA4),fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=6)
+                                                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                                    listOf("Details","Fix","Ask Astro").forEach { label ->
+                                                        OutlinedButton(onClick={ when(label){
+                                                            "Details" -> showDetails=!showDetails
+                                                            "Fix" -> { vm.applyRuntimeFix(); if(vm.runtimeIssue!=null) scope.launch{pager.animateScrollToPage(3)} }
+                                                            else -> { vm.prepareRuntimeQuestion(); scope.launch{pager.animateScrollToPage(3)} }
+                                                        }},modifier=Modifier.weight(1f),contentPadding=PaddingValues(horizontal=4.dp,vertical=7.dp),
+                                                            border=BorderStroke(1.dp,Color.White.copy(alpha=.18f)),
+                                                            colors=ButtonDefaults.outlinedButtonColors(contentColor=Color.White)) {
+                                                            Text(label,fontSize=11.sp,maxLines=1)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 ConsoleKeyToolbar(consoleInputValue,{consoleInputValue=it;vm.input=it.text},vm.inputHistory,consoleInputFocus,vm.input,vm.output.length,consoleScroll,safeColor(vm.toolbarHex,0xFF050505))
                                 Surface(
                                     color=safeColor(vm.consoleBackgroundHex,0xFF050505),

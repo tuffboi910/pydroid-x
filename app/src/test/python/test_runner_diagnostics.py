@@ -81,5 +81,47 @@ def outer(items):
         self.assertEqual(source.index("not_defined"), issue["start"])
         self.assertEqual("not_defined", source[issue["start"]:issue["end"]])
 
+    def test_match_capture_is_defined(self):
+        source = """
+value = {"x": 3}
+match value:
+    case {"x": captured}:
+        print(captured)
+"""
+        self.assertEqual([], messages(source))
+
+    def test_comprehension_target_does_not_leak(self):
+        source = "values = [1, 2]\nsquares = [item * item for item in values]\nprint(item)\n"
+        self.assertEqual(["Undefined name: item"], messages(source))
+
+    def test_function_local_does_not_leak_to_module(self):
+        source = "def build():\n    secret = 3\n    return secret\nprint(secret)\n"
+        self.assertEqual(["Undefined name: secret"], messages(source))
+
+    def test_nested_closure_resolves_outer_local(self):
+        source = """
+def outer():
+    value = 4
+    def inner():
+        return value
+    return inner()
+"""
+        self.assertEqual([], messages(source))
+
+    def test_method_does_not_see_class_namespace_as_local(self):
+        source = """
+class Example:
+    value = 4
+    def read(self):
+        return value
+"""
+        self.assertEqual(["Undefined name: value"], messages(source))
+
+    def test_syntax_errors_are_fatal_but_name_warnings_are_not(self):
+        syntax = json.loads(runner.diagnose("if True print('x')\n"))[0]
+        name = json.loads(runner.diagnose("print(missing)\n"))[0]
+        self.assertTrue(syntax["fatal"])
+        self.assertFalse(name["fatal"])
+
 if __name__ == "__main__":
     unittest.main()

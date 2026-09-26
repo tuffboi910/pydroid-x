@@ -88,7 +88,14 @@ import java.net.URL
 
 data class AiMessage(val fromUser: Boolean, val text: String)
 data class AiSlotConfig(val index: Int, val label: String, val provider: String, val endpoint: String, val model: String, val key: String)
-data class CodeDiagnostic(val start: Int, val end: Int, val message: String, val fatal: Boolean = false)
+data class CodeDiagnostic(
+    val start: Int,
+    val end: Int,
+    val message: String,
+    val fatal: Boolean = false,
+    val line: Int = 1,
+    val column: Int = 1
+)
 data class SavedCode(val name: String, val modified: Long)
 data class PendingCodeChange(val code: String, val fileName: String, val sourceSnapshot: String)
 
@@ -121,6 +128,12 @@ class IdeViewModel : ViewModel() {
     var waitingInput by mutableStateOf(false)
     var input by mutableStateOf("")
     val inputHistory = ConsoleInputHistory()
+    var consoleMode by mutableStateOf("Python")
+    var terminalInput by mutableStateOf("")
+    var terminalOutput by mutableStateOf("")
+    var terminalPrompt by mutableStateOf("~")
+    val terminalHistory = ConsoleInputHistory()
+    private var terminalSession: TerminalSession? = null
     var runtimeVersion by mutableStateOf("Loading Python…")
     var aiPrompt by mutableStateOf("")
     val aiMessages = mutableStateListOf<AiMessage>()
@@ -192,6 +205,7 @@ class IdeViewModel : ViewModel() {
     var pageDotSize by mutableFloatStateOf(8f)
     var showHeader by mutableStateOf(true)
     var showFileInfo by mutableStateOf(true)
+    var swipePages by mutableStateOf(false)
     private val stdin = LinkedBlockingQueue<String>()
     private val stopInputSignal = "\u0000PYDROIDX_STOP\u0000"
     @Volatile private var worker: Thread? = null
@@ -270,9 +284,12 @@ class IdeViewModel : ViewModel() {
         toolbarHeight=settings.getFloat("toolbar_height",52f);bubbleRadius=settings.getFloat("bubble_radius",16f)
         bubbleWidth=settings.getFloat("bubble_width",310f);pageDotSize=settings.getFloat("page_dot_size",8f)
         showHeader=settings.getBoolean("show_header",true);showFileInfo=settings.getBoolean("show_file_info",true)
+        swipePages=settings.getBoolean("swipe_pages",false)
         projectsRoot = File(context.filesDir, "projects").apply { mkdirs() }
         currentProjectName = ProjectWorkspace.safeName(settings.getString("current_project","default") ?: "default")
         projectDir = File(projectsRoot,currentProjectName).apply { mkdirs() }
+        terminalSession = TerminalSession(projectDir)
+        terminalPrompt = terminalSession?.prompt() ?: "~"
         val legacyStarter = "print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n"
         val existing = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
         currentFileName = settings.getString("current_file","main.py") ?: "main.py"
@@ -521,6 +538,10 @@ class IdeViewModel : ViewModel() {
         autosaveJob?.cancel()
         namingJob?.cancel()
         projectDir = targetDir
+        terminalSession = TerminalSession(projectDir)
+        terminalPrompt = terminalSession?.prompt() ?: "~"
+        terminalOutput = ""
+        terminalInput = ""
         currentProjectName = safeName
         val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
         var current = files.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
@@ -658,7 +679,8 @@ class IdeViewModel : ViewModel() {
             .putString("run_button_hex",runButtonHex).putString("stop_button_hex",stopButtonHex)
             .putFloat("header_height",headerHeight).putFloat("tab_height",tabHeight).putFloat("toolbar_height",toolbarHeight)
             .putFloat("bubble_radius",bubbleRadius).putFloat("bubble_width",bubbleWidth).putFloat("page_dot_size",pageDotSize)
-            .putBoolean("show_header",showHeader).putBoolean("show_file_info",showFileInfo).apply()
+            .putBoolean("show_header",showHeader).putBoolean("show_file_info",showFileInfo)
+            .putBoolean("swipe_pages",swipePages).apply()
     }
     fun installVaultFont(context: Context, displayName: String, slug: String) {
         if (fontStatus.startsWith("Downloading")) return

@@ -282,6 +282,7 @@ class _UndefinedNameAnalyzer(ast.NodeVisitor):
 def diagnose(source):
     """Return syntax errors and conservative unresolved-name warnings with exact ranges."""
     try:
+        compile(source, "<editor>", "exec")
         tree = ast.parse(source)
     except SyntaxError as exc:
         lines = source.splitlines(True)

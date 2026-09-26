@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import pathlib
+import tempfile
 import unittest
 
 RUNNER_PATH = pathlib.Path(__file__).parents[2] / "main" / "python" / "runner.py"
@@ -10,6 +11,25 @@ SPEC.loader.exec_module(runner)
 
 def messages(source):
     return [item["message"] for item in json.loads(runner.diagnose(source))]
+
+
+class FakeBridge:
+    def __init__(self):
+        self.output = []
+        self.exit_code = None
+
+    def write(self, value, error):
+        self.output.append(value)
+
+    def readLine(self):
+        return None
+
+    def shouldStop(self):
+        return False
+
+    def exited(self, code):
+        self.exit_code = code
+
 
 class DiagnosticTests(unittest.TestCase):
     def test_exception_aliases_are_valid_in_each_handler(self):
@@ -80,6 +100,71 @@ def outer(items):
         issue = json.loads(runner.diagnose(source))[0]
         self.assertEqual(source.index("not_defined"), issue["start"])
         self.assertEqual("not_defined", source[issue["start"]:issue["end"]])
+
+    def test_match_capture_is_defined(self):
+        source = """
+value = {"x": 3}
+match value:
+    case {"x": captured}:
+        print(captured)
+"""
+        self.assertEqual([], messages(source))
+
+    def test_comprehension_target_does_not_leak(self):
+        source = "values = [1, 2]\nsquares = [item * item for item in values]\nprint(item)\n"
+        self.assertEqual(["Undefined name: item"], messages(source))
+
+    def test_function_local_does_not_leak_to_module(self):
+        source = "def build():\n    secret = 3\n    return secret\nprint(secret)\n"
+        self.assertEqual(["Undefined name: secret"], messages(source))
+
+    def test_nested_closure_resolves_outer_local(self):
+        source = """
+def outer():
+    value = 4
+    def inner():
+        return value
+    return inner()
+"""
+        self.assertEqual([], messages(source))
+
+    def test_method_does_not_see_class_namespace_as_local(self):
+        source = """
+class Example:
+    value = 4
+    def read(self):
+        return value
+"""
+        self.assertEqual(["Undefined name: value"], messages(source))
+
+    def test_syntax_errors_are_fatal_but_name_warnings_are_not(self):
+        syntax = json.loads(runner.diagnose("if True print('x')\n"))[0]
+        semantic = json.loads(runner.diagnose("return 3\n"))[0]
+        name = json.loads(runner.diagnose("print(missing)\n"))[0]
+        self.assertTrue(syntax["fatal"])
+        self.assertTrue(semantic["fatal"])
+        self.assertFalse(name["fatal"])
+
+class RunnerExecutionTests(unittest.TestCase):
+    def test_system_exit_uses_requested_exit_code_without_traceback(self):
+        with tempfile.TemporaryDirectory() as project:
+            bridge = FakeBridge()
+            runner.run_code("raise SystemExit(7)\n", "main.py", project, bridge)
+            self.assertEqual(7, bridge.exit_code)
+            self.assertNotIn("Traceback", "".join(bridge.output))
+
+    def test_project_import_is_reloaded_after_file_changes(self):
+        with tempfile.TemporaryDirectory() as project:
+            helper = pathlib.Path(project) / "helper.py"
+            helper.write_text("VALUE = 1\n", encoding="utf-8")
+            first = FakeBridge()
+            runner.run_code("import helper\nprint(helper.VALUE)\n", "main.py", project, first)
+            helper.write_text("VALUE = 2\n", encoding="utf-8")
+            second = FakeBridge()
+            runner.run_code("import helper\nprint(helper.VALUE)\n", "main.py", project, second)
+            self.assertIn("1", "".join(first.output))
+            self.assertIn("2", "".join(second.output))
+
 
 if __name__ == "__main__":
     unittest.main()

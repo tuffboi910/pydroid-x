@@ -17,6 +17,8 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.widget.EditText
@@ -89,6 +91,8 @@ import java.net.URL
 data class AiMessage(val fromUser: Boolean, val text: String)
 data class AiSlotConfig(val index: Int, val label: String, val provider: String, val endpoint: String, val model: String, val key: String)
 data class CodeDiagnostic(val start: Int, val end: Int, val message: String, val fatal: Boolean = false)
+data class CompletionItem(val label: String, val suffix: String, val cursorBack: Int, val type: String, val doc: String)
+data class CompletionResult(val suffix: String, val cursorBack: Int, val items: List<CompletionItem>)
 data class RuntimeIssue(
     val title: String, val explanation: String, val line: Int, val codeLine: String,
     val hint: String, val details: String, val replaceFrom: String = "", val replaceTo: String = ""
@@ -463,7 +467,7 @@ class IdeViewModel : ViewModel() {
         askAi()
     }
     fun rejectTeaching() { teachingOffer = null }
-    fun requestCompletion(source: String, cursor: Int, deliver: (String, Int) -> Unit) {
+    fun requestCompletion(source: String, cursor: Int, deliver: (CompletionResult) -> Unit) {
         if (!autocomplete || !::projectDir.isInitialized) return
         thread(name="PyDroidX-Jedi") {
             runCatching {
@@ -471,7 +475,16 @@ class IdeViewModel : ViewModel() {
                     .callAttr("complete", source, cursor, projectDir.absolutePath).toString()
                 val json = JSONObject(raw)
                 val suffix = json.optString("suffix")
-                if (suffix.isNotEmpty()) deliver(suffix, json.optInt("cursor_back", 0))
+                val rawItems = json.optJSONArray("items") ?: JSONArray()
+                val items = (0 until rawItems.length()).map { index ->
+                    rawItems.getJSONObject(index).let { item ->
+                        CompletionItem(
+                            item.optString("label"), item.optString("suffix"),
+                            item.optInt("cursor_back", 0), item.optString("type"), item.optString("doc")
+                        )
+                    }
+                }
+                if (suffix.isNotEmpty()) deliver(CompletionResult(suffix, json.optInt("cursor_back", 0), items))
             }
         }
     }
@@ -839,7 +852,7 @@ class MainActivity : ComponentActivity() {
 
 private class PythonEditorView(context: Context) : EditText(context) {
     var onCodeChanged: ((String) -> Unit)? = null
-    var requestSmartCompletion: ((String, Int, (String, Int) -> Unit) -> Unit)? = null
+    var requestSmartCompletion: ((String, Int, (CompletionResult) -> Unit) -> Unit)? = null
     var requestCodeDiagnostics: ((String, (List<CodeDiagnostic>) -> Unit) -> Unit)? = null
     private var applyingHighlight = false
     private var applyingHistory = false
@@ -854,6 +867,12 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var ghostAlpha = 122
     private var ghostSuffix: String? = null
     private var ghostCursorBack = 0
+    private var completionItems: List<CompletionItem> = emptyList()
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+    private var touchStartX = 0f
+    private var touchStartY = 0f
+    private var touchStartScrollX = 0
+    private var touchAxis = 0
     private var diagnostics: List<CodeDiagnostic> = emptyList()
     private var showLineNumbers = true
     private var showCurrentLine = true
@@ -925,11 +944,12 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val lineStart = snapshot.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)) + 1
         val currentLine = snapshot.substring(lineStart.coerceIn(0,cursor), cursor)
         if (currentLine.isBlank()) { ghostSuffix = null; invalidate(); return@Runnable }
-        requestSmartCompletion?.invoke(snapshot, cursor) { suffix, cursorBack ->
+        requestSmartCompletion?.invoke(snapshot, cursor) { result ->
             post {
-                if (text.toString() == snapshot && selectionStart == cursor && suffix.isNotEmpty()) {
-                    ghostSuffix = suffix
-                    ghostCursorBack = cursorBack
+                if (text.toString() == snapshot && selectionStart == cursor && result.suffix.isNotEmpty()) {
+                    ghostSuffix = result.suffix
+                    ghostCursorBack = result.cursorBack
+                    completionItems = result.items
                     invalidate()
                 }
             }
@@ -975,6 +995,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     postDelayed(completionRunnable, 140)
                     removeCallbacks(diagnosticsRunnable)
                     diagnostics = emptyList()
+                    completionItems = emptyList()
                     invalidate()
                     val safeStart = start.coerceIn(0,s?.length ?: 0)
                     val safeEnd = (start + count).coerceIn(safeStart,s?.length ?: safeStart)
@@ -1080,6 +1101,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val cursor = selectionStart
         if (text.isEmpty() || cursor < 0 || cursor > text.length) {
             ghostSuffix=null
+            completionItems=emptyList()
             invalidate()
             return
         }
@@ -1104,8 +1126,30 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val newCursor = cursor + suffix.length - ghostCursorBack
         setSelection(newCursor.coerceAtMost(text.length))
         ghostSuffix=null
+        completionItems=emptyList()
         invalidate()
         return true
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                touchStartX = event.x
+                touchStartY = event.y
+                touchStartScrollX = scrollX
+                touchAxis = 0
+                parent?.requestDisallowInterceptTouchEvent(true)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = kotlin.math.abs(event.x - touchStartX)
+                val dy = kotlin.math.abs(event.y - touchStartY)
+                if (touchAxis == 0 && maxOf(dx, dy) > touchSlop) touchAxis = if (dy >= dx) 1 else 2
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> touchAxis = 0
+        }
+        val handled = super.onTouchEvent(event)
+        if (touchAxis == 1 && scrollX != touchStartScrollX) scrollTo(touchStartScrollX, scrollY)
+        return handled
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -1222,6 +1266,34 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val x=currentLayout.getPrimaryHorizontal(cursor)+totalPaddingLeft-scrollX
         val y=currentLayout.getLineBaseline(line).toFloat()+totalPaddingTop-scrollY
         canvas.drawText(suffix.substringBefore('\n'),x,y,paint)
+
+        if (completionItems.isNotEmpty()) {
+            val density = resources.displayMetrics.density
+            val popupLeft = (x - 8f * density).coerceIn(8f * density, (width - 300f * density).coerceAtLeast(8f * density))
+            val rowHeight = 38f * density
+            val docsHeight = 48f * density
+            val popupWidth = minOf(330f * density, width - popupLeft - 8f * density)
+            val popupHeight = rowHeight * completionItems.size + docsHeight
+            var popupTop = y + 12f * density
+            if (popupTop + popupHeight > height) popupTop = (y - popupHeight - 24f * density).coerceAtLeast(8f * density)
+            val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(31, 32, 36) }
+            canvas.drawRoundRect(popupLeft, popupTop, popupLeft + popupWidth, popupTop + popupHeight, 16f, 16f, panelPaint)
+            val selectedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(53, 56, 64) }
+            canvas.drawRoundRect(popupLeft + 5f, popupTop + 5f, popupLeft + popupWidth - 5f, popupTop + rowHeight, 10f, 10f, selectedPaint)
+            val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.WHITE; textSize = 15f * density; typeface = Typeface.DEFAULT_BOLD }
+            val typePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(155, 158, 170); textSize = 11f * density }
+            completionItems.forEachIndexed { index, item ->
+                val baseline = popupTop + index * rowHeight + 25f * density
+                canvas.drawText(item.label.take(30), popupLeft + 14f * density, baseline, labelPaint)
+                val typeWidth = typePaint.measureText(item.type)
+                canvas.drawText(item.type, popupLeft + popupWidth - typeWidth - 14f * density, baseline, typePaint)
+            }
+            val dividerY = popupTop + rowHeight * completionItems.size
+            canvas.drawLine(popupLeft + 10f, dividerY, popupLeft + popupWidth - 10f, dividerY, Paint().apply { color = AndroidColor.rgb(70, 72, 78) })
+            val doc = completionItems.first().doc.replace('\n', ' ').replace(Regex("\\s+"), " ").ifBlank { "Python ${completionItems.first().type}" }.take(92)
+            canvas.drawText(doc, popupLeft + 14f * density, dividerY + 28f * density, typePaint)
+            canvas.drawText("Tab to accept", popupLeft + 14f * density, dividerY + 43f * density, typePaint)
+        }
     }
 
     private fun highlightNow() {
@@ -1533,7 +1605,12 @@ private fun AchievementNotice(
                 }
             }
             }
-            HorizontalPager(state=pager,modifier=Modifier.weight(1f).fillMaxWidth(),beyondViewportPageCount=1) { page ->
+            HorizontalPager(
+                state=pager,
+                modifier=Modifier.weight(1f).fillMaxWidth(),
+                beyondViewportPageCount=1,
+                userScrollEnabled=pager.currentPage != 1
+            ) { page ->
                 val rawOffset = (pager.currentPage - page) + pager.currentPageOffsetFraction
                 val distance = rawOffset.absoluteValue.coerceIn(0f,1f)
                 val motionModifier = Modifier.fillMaxSize().graphicsLayer {

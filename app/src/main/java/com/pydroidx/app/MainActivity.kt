@@ -98,6 +98,13 @@ data class CodeDiagnostic(
 )
 data class SavedCode(val name: String, val modified: Long)
 data class PendingCodeChange(val code: String, val fileName: String, val sourceSnapshot: String)
+data class CompletionItem(
+    val label: String,
+    val suffix: String,
+    val cursorBack: Int = 0,
+    val type: String = "",
+    val doc: String = ""
+)
 
 private val FONT_VAULT = """
 Fira Code|firacode,JetBrains Mono|jetbrainsmono,Source Code Pro|sourcecodepro,IBM Plex Mono|ibmplexmono,Cascadia Code|cascadiacode,Victor Mono|victormono,Space Mono|spacemono,Inconsolata|inconsolata,Roboto Mono|robotomono,Noto Sans Mono|notosansmono,
@@ -474,15 +481,27 @@ class IdeViewModel : ViewModel() {
         askAi()
     }
     fun rejectTeaching() { teachingOffer = null }
-    fun requestCompletion(source: String, cursor: Int, deliver: (String, Int) -> Unit) {
+    fun requestCompletion(source: String, cursor: Int, deliver: (List<CompletionItem>) -> Unit) {
         if (!autocomplete || !::projectDir.isInitialized) return
         thread(name="PyDroidX-Jedi") {
             runCatching {
                 val raw = Python.getInstance().getModule("runner")
                     .callAttr("complete", source, cursor, projectDir.absolutePath).toString()
                 val json = JSONObject(raw)
-                val suffix = json.optString("suffix")
-                if (suffix.isNotEmpty()) deliver(suffix, json.optInt("cursor_back", 0))
+                val array = json.optJSONArray("items") ?: JSONArray()
+                val items = (0 until array.length()).mapNotNull { index ->
+                    array.optJSONObject(index)?.let {
+                        val suffix = it.optString("suffix")
+                        if (suffix.isEmpty()) null else CompletionItem(
+                            label=it.optString("label"),
+                            suffix=suffix,
+                            cursorBack=it.optInt("cursor_back",0),
+                            type=it.optString("type"),
+                            doc=it.optString("doc")
+                        )
+                    }
+                }
+                deliver(items)
             }
         }
     }
@@ -493,7 +512,14 @@ class IdeViewModel : ViewModel() {
                 val values = JSONArray(raw)
                 (0 until values.length()).map { index ->
                     values.getJSONObject(index).let {
-                        CodeDiagnostic(it.getInt("start"), it.getInt("end"), it.optString("message"), it.optBoolean("fatal", false))
+                        CodeDiagnostic(
+                            it.getInt("start"),
+                            it.getInt("end"),
+                            it.optString("message"),
+                            it.optBoolean("fatal", false),
+                            it.optInt("line", 1),
+                            it.optInt("column", 1)
+                        )
                     }
                 }
             }.getOrDefault(emptyList())
@@ -815,7 +841,7 @@ class MainActivity : ComponentActivity() {
 
 private class PythonEditorView(context: Context) : EditText(context) {
     var onCodeChanged: ((String) -> Unit)? = null
-    var requestSmartCompletion: ((String, Int, (String, Int) -> Unit) -> Unit)? = null
+    var requestSmartCompletion: ((String, Int, (List<CompletionItem>) -> Unit) -> Unit)? = null
     var requestCodeDiagnostics: ((String, (List<CodeDiagnostic>) -> Unit) -> Unit)? = null
     private var applyingHighlight = false
     private var applyingHistory = false
@@ -830,6 +856,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var ghostAlpha = 122
     private var ghostSuffix: String? = null
     private var ghostCursorBack = 0
+    private var completionItems: List<CompletionItem> = emptyList()
+    private var selectedCompletion = 0
     private var diagnostics: List<CodeDiagnostic> = emptyList()
     private var showLineNumbers = true
     private var showCurrentLine = true
@@ -901,11 +929,14 @@ private class PythonEditorView(context: Context) : EditText(context) {
         val lineStart = snapshot.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)) + 1
         val currentLine = snapshot.substring(lineStart.coerceIn(0,cursor), cursor)
         if (currentLine.isBlank()) { ghostSuffix = null; invalidate(); return@Runnable }
-        requestSmartCompletion?.invoke(snapshot, cursor) { suffix, cursorBack ->
+        requestSmartCompletion?.invoke(snapshot, cursor) { items ->
             post {
-                if (text.toString() == snapshot && selectionStart == cursor && suffix.isNotEmpty()) {
-                    ghostSuffix = suffix
-                    ghostCursorBack = cursorBack
+                if (text.toString() == snapshot && selectionStart == cursor) {
+                    completionItems = items.filter { it.suffix.isNotEmpty() }.take(8)
+                    selectedCompletion = 0
+                    val first = completionItems.firstOrNull()
+                    ghostSuffix = first?.suffix
+                    ghostCursorBack = first?.cursorBack ?: 0
                     invalidate()
                 }
             }
@@ -973,6 +1004,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
             history.clear()
             diagnostics = emptyList()
             ghostSuffix = null
+            completionItems = emptyList()
             loadedRevision = revision
         }
         if (text.toString() == value) return
@@ -1052,10 +1084,11 @@ private class PythonEditorView(context: Context) : EditText(context) {
     }
 
     private fun updateGhostSuggestion() {
-        if (!autocompleteEnabled || !hasFocus()) { ghostSuffix=null; invalidate(); return }
+        if (!autocompleteEnabled || !hasFocus()) { ghostSuffix=null; completionItems=emptyList(); invalidate(); return }
         val cursor = selectionStart
         if (text.isEmpty() || cursor < 0 || cursor > text.length) {
             ghostSuffix=null
+            completionItems=emptyList()
             invalidate()
             return
         }
@@ -1068,23 +1101,50 @@ private class PythonEditorView(context: Context) : EditText(context) {
             it.key.startsWith(prefix, ignoreCase = false) && it.key != prefix
         } else null
         val projectMatch = if (prefix.isNotEmpty()) projectNames.firstOrNull { it.startsWith(prefix) && it != prefix } else null
-        ghostSuffix = localMatch?.value?.removePrefix(prefix) ?: projectMatch?.removePrefix(prefix)
-        ghostCursorBack = if (ghostSuffix?.endsWith("()") == true) 1 else 0
+        val localSuffix = localMatch?.value?.removePrefix(prefix) ?: projectMatch?.removePrefix(prefix)
+        ghostSuffix = localSuffix
+        ghostCursorBack = if (localSuffix?.endsWith("()") == true) 1 else 0
+        completionItems = when {
+            localMatch != null && localSuffix != null -> listOf(
+                CompletionItem(localMatch.value, localSuffix, ghostCursorBack, "builtin", "Python completion")
+            )
+            projectMatch != null && localSuffix != null -> listOf(
+                CompletionItem(projectMatch, localSuffix, 0, "project", "Symbol from this file")
+            )
+            else -> emptyList()
+        }
+        selectedCompletion = 0
         invalidate()
     }
 
     fun acceptGhostSuggestion(): Boolean {
-        val suffix = ghostSuffix ?: return false
+        val selected = completionItems.getOrNull(selectedCompletion)
+        val suffix = selected?.suffix ?: ghostSuffix ?: return false
+        val cursorBack = selected?.cursorBack ?: ghostCursorBack
         val cursor = selectionStart.coerceAtLeast(0)
         text.insert(cursor,suffix)
-        val newCursor = cursor + suffix.length - ghostCursorBack
+        val newCursor = cursor + suffix.length - cursorBack
         setSelection(newCursor.coerceAtMost(text.length))
         ghostSuffix=null
+        completionItems=emptyList()
         invalidate()
         return true
     }
 
+    override fun onSelectionChanged(selStart: Int, selEnd: Int) {
+        super.onSelectionChanged(selStart, selEnd)
+        if (!applyingHighlight && !applyingHistory) post { updateGhostSuggestion() }
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (completionItems.isNotEmpty() && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+            selectedCompletion = (selectedCompletion + 1).coerceAtMost(completionItems.lastIndex)
+            val item=completionItems[selectedCompletion];ghostSuffix=item.suffix;ghostCursorBack=item.cursorBack;invalidate();return true
+        }
+        if (completionItems.isNotEmpty() && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+            selectedCompletion = (selectedCompletion - 1).coerceAtLeast(0)
+            val item=completionItems[selectedCompletion];ghostSuffix=item.suffix;ghostCursorBack=item.cursorBack;invalidate();return true
+        }
         if(keyCode==KeyEvent.KEYCODE_TAB && acceptGhostSuggestion()) return true
         return super.onKeyDown(keyCode,event)
     }

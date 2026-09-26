@@ -28,7 +28,19 @@ chaquopy {
     defaultConfig {
         version = "3.14"
         pyc { src = false }
-        pip { install("jedi==0.19.2") }
+        pip {
+            install("jedi==0.19.2")
+            // Popular Android-safe packages are bundled so imports work offline.
+            install("requests")
+            install("beautifulsoup4")
+            install("rich")
+            install("colorama")
+            install("python-dateutil")
+            install("pytz")
+            install("packaging")
+            install("pyfiglet")
+            install("humanize")
+        }
     }
 }
 

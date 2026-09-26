@@ -408,7 +408,7 @@ class IdeViewModel : ViewModel() {
         topK=localTopK
     ).normalized()
 
-    fun setAiMode(mode: String) {
+    fun updateAiMode(mode: String) {
         aiMode = if (mode.equals("Local", true)) "Local" else "Online"
         settings.edit().putString("ai_mode", aiMode).apply()
     }

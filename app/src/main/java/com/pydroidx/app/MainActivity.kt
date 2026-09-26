@@ -812,6 +812,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var keywordColor=AndroidColor.rgb(197,134,192)
     private var functionColor=AndroidColor.rgb(220,220,170)
     private var variableColor=AndroidColor.rgb(156,220,254)
+    private var lastPreferenceSignature: String? = null
     private val gutterWidth get() = if(showLineNumbers) (52 * resources.displayMetrics.density).toInt() else 0
     private val completions = linkedMapOf(
         "print" to "print()", "input" to "input()", "range" to "range()", "len" to "len()",
@@ -982,6 +983,12 @@ private class PythonEditorView(context: Context) : EditText(context) {
                          padding: Float, highlightDelay: Float, cursor: String, autocomplete: Boolean,
                          ghostBrightness: Float, lineNumbers: Boolean, currentLine: Boolean,
                          customFontPath: String, palette: List<String>) {
+        val signature = listOf(
+            font,wrap,syntax,family,spacing,padding,highlightDelay,cursor,autocomplete,
+            ghostBrightness,lineNumbers,currentLine,customFontPath,palette.joinToString(",")
+        ).joinToString("|")
+        if (signature == lastPreferenceSignature) return
+        lastPreferenceSignature = signature
         textSize = font
         setHorizontallyScrolling(!wrap)
         isHorizontalScrollBarEnabled = !wrap

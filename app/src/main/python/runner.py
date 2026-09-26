@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 import traceback
+import difflib
 
 
 class _Scope:
@@ -428,8 +429,48 @@ def run_code(source, filename, project_dir, bridge):
             err.write(str(exc.code) + "\n")
             code = 1
         bridge.exited(code)
-    except BaseException:
-        err.write(traceback.format_exc())
+    except BaseException as exc:
+        raw = traceback.format_exc()
+        extracted = traceback.extract_tb(exc.__traceback__)
+        frame = next((item for item in reversed(extracted) if item.filename == filename), extracted[-1] if extracted else None)
+        line = frame.lineno if frame else 1
+        code_line = (frame.line or "").strip() if frame else ""
+        title = type(exc).__name__
+        replace_from = ""
+        replace_to = ""
+        if isinstance(exc, NameError):
+            missing = getattr(exc, "name", None) or "that name"
+            match = difflib.get_close_matches(missing, list(dir(builtins)) + list(scope.keys()), n=1, cutoff=0.72)
+            replace_from = missing if match else ""
+            replace_to = match[0] if match else ""
+            explanation = "Python doesn’t know what ‘%s’ means." % missing
+            hint = ("Did you mean ‘%s’?" % replace_to) if replace_to else "Define it first, or put quotes around it if it should be text."
+        elif isinstance(exc, TypeError):
+            explanation = "This operation received the wrong kind or number of values: %s" % str(exc)
+            hint = "Check the values and arguments used on this line."
+        elif isinstance(exc, IndexError):
+            explanation = "You tried to use a list position that doesn’t exist."
+            hint = "List positions start at 0 and must be smaller than len(the_list)."
+        elif isinstance(exc, KeyError):
+            explanation = "This dictionary has no key named %s." % str(exc)
+            hint = "Check the key spelling, or use dictionary.get(key)."
+        elif isinstance(exc, ValueError):
+            explanation = "The value has the right type, but Python can’t use it here: %s" % str(exc)
+            hint = "Check the input or conversion on this line."
+        elif isinstance(exc, ZeroDivisionError):
+            explanation = "This line tried to divide by zero."
+            hint = "Make sure the divisor isn’t 0 before dividing."
+        elif isinstance(exc, AttributeError):
+            explanation = "That object doesn’t have the property or function you asked for: %s" % str(exc)
+            hint = "Check the object type and the attribute spelling."
+        elif isinstance(exc, ModuleNotFoundError):
+            explanation = "Python can’t find the module %s." % str(exc)
+            hint = "Check its spelling or install the package first."
+        else:
+            explanation = str(exc) or "Python stopped because of an unexpected error."
+            hint = "Open Details for the technical traceback, or ask Astro for help."
+        bridge.reportError(title, explanation, line, code_line, hint, raw, replace_from, replace_to)
+        err.write("\n%s on line %s: %s\n" % (title, line, explanation))
         bridge.exited(1)
     finally:
         sys.settrace(old_trace)

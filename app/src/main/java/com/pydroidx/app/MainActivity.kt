@@ -2318,6 +2318,40 @@ private fun AchievementNotice(
             Text("w astro",color=Color(0xFF181818),fontSize=7.sp,modifier=Modifier.fillMaxWidth().padding(bottom=2.dp),textAlign=androidx.compose.ui.text.style.TextAlign.Center)
         }
     }
+    if(renameDialog) AlertDialog(
+        onDismissRequest={renameDialog=false},
+        title={Text("Rename code")},
+        text={
+            TextField(
+                renameDraft,
+                {renameDraft=it},
+                label={Text("File name")},
+                singleLine=true,
+                suffix={Text(".py")}
+            )
+        },
+        confirmButton={
+            Button(onClick={
+                if(vm.renameCurrentFile(renameDraft)) renameDialog=false
+                else Toast.makeText(context,"That file name is invalid or already exists",Toast.LENGTH_SHORT).show()
+            }){Text("Rename")}
+        },
+        dismissButton={TextButton(onClick={renameDialog=false}){Text("Cancel")}}
+    )
+    if(clearCodeDialog) AlertDialog(
+        onDismissRequest={clearCodeDialog=false},
+        title={Text("Delete all code?")},
+        text={
+            Text("Are you sure you want to permanently delete everything in this code file? This cannot be undone after you leave the editor.")
+        },
+        confirmButton={
+            Button(
+                onClick={vm.clearCurrentCode();clearCodeDialog=false},
+                colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFFF3D71),contentColor=Color.Black)
+            ){Text("Permanently delete")}
+        },
+        dismissButton={TextButton(onClick={clearCodeDialog=false}){Text("Cancel")}}
+    )
     if(showAiSettings) AlertDialog(
         onDismissRequest={showAiSettings=false},
         containerColor=Color(0xFF0A0A0A),

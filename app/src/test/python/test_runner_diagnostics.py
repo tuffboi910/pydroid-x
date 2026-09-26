@@ -139,8 +139,10 @@ class Example:
 
     def test_syntax_errors_are_fatal_but_name_warnings_are_not(self):
         syntax = json.loads(runner.diagnose("if True print('x')\n"))[0]
+        semantic = json.loads(runner.diagnose("return 3\n"))[0]
         name = json.loads(runner.diagnose("print(missing)\n"))[0]
         self.assertTrue(syntax["fatal"])
+        self.assertTrue(semantic["fatal"])
         self.assertFalse(name["fatal"])
 
 class RunnerExecutionTests(unittest.TestCase):

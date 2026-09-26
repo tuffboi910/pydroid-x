@@ -1492,8 +1492,8 @@ private fun AchievementNotice(
                     ) {
                         Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text("SAVED",color=Color.White,fontSize=22.sp,fontWeight=FontWeight.Bold)
-                                Text("Your Python files",color=Color.Gray,fontSize=11.sp)
+                                Text("FOLDERS",color=Color.White,fontSize=22.sp,fontWeight=FontWeight.Bold)
+                                Text("Project  •  ${vm.currentProjectName}",color=Color.Gray,fontSize=11.sp)
                             }
                             Button(
                                 onClick={vm.makeNewCode();scope.launch{pager.animateScrollToPage(1)}},
@@ -1503,6 +1503,22 @@ private fun AchievementNotice(
                                 ),
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
                             ){Text("＋ Make new code",fontWeight=FontWeight.Bold)}
+                        }
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement=Arrangement.spacedBy(7.dp)
+                        ) {
+                            vm.projectNames.forEach { project ->
+                                FilterChip(
+                                    selected=project==vm.currentProjectName,
+                                    onClick={vm.switchProject(project)},
+                                    label={Text(project,maxLines=1)}
+                                )
+                            }
+                            OutlinedButton(
+                                onClick={vm.makeNewProject()},
+                                shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
+                            ){Text("＋ Project")}
                         }
                         HorizontalDivider(color=Color.White.copy(alpha=0.12f))
                         if(vm.savedCodes.isEmpty()) {

@@ -1,6 +1,7 @@
 package com.pydroidx.app
 
 import android.os.Bundle
+import android.net.Uri
 import android.app.Activity
 import android.animation.ValueAnimator
 import android.content.Context
@@ -157,6 +158,8 @@ class IdeViewModel : ViewModel() {
     var aiEndpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
     var aiModel by mutableStateOf("gpt-4o-mini")
     var aiProvider by mutableStateOf("Auto")
+    var localImportStatus by mutableStateOf<String?>(null)
+    private lateinit var appContext: Context
     var ai2Endpoint by mutableStateOf("https://api.openai.com/v1/chat/completions")
     var ai2Model by mutableStateOf("")
     var ai2Provider by mutableStateOf("Auto")
@@ -234,6 +237,7 @@ class IdeViewModel : ViewModel() {
     private lateinit var settings: android.content.SharedPreferences
 
     fun initialize(context: Context) {
+        appContext = context.applicationContext
         aiKeys = SecureAiKeyStore(context.applicationContext)
         settings = context.getSharedPreferences("ide_settings", Context.MODE_PRIVATE)
         // Migrate old defaults once; subsequent custom appearance choices are respected.
@@ -330,11 +334,28 @@ class IdeViewModel : ViewModel() {
     fun providerForSlot(slot: Int) = when(slot) { 1 -> ai2Provider; 2 -> ai3Provider; else -> aiProvider }
     fun endpointForSlot(slot: Int) = when(slot) { 1 -> ai2Endpoint; 2 -> ai3Endpoint; else -> aiEndpoint }
     fun modelForSlot(slot: Int) = when(slot) { 1 -> ai2Model; 2 -> ai3Model; else -> aiModel }
-    fun slotConfigured(slot: Int) = !aiKeys.load(slot).isNullOrBlank()
+    fun localModelForSlot(slot: Int): String = settings.getString("local_model_$slot", "").orEmpty()
+    fun slotConfigured(slot: Int) = if (providerForSlot(slot) == "On-device") File(localModelForSlot(slot)).isFile else !aiKeys.load(slot).isNullOrBlank()
+    fun importLocalModel(uri: Uri, slot: Int) {
+        localImportStatus = "Importing model…"
+        thread(name="PY4U-model-import") {
+            val result = runCatching { LocalAiRuntime.importModel(appContext, uri) { status -> mainHandler.post { localImportStatus=status } } }
+            mainHandler.post {
+                result.onSuccess { file ->
+                    settings.edit().putString("local_model_$slot", file.absolutePath).apply()
+                    localImportStatus = "Ready: ${file.name} (${file.length() / 1048576} MB)"
+                }.onFailure { localImportStatus = "Import failed: ${it.message}" }
+            }
+        }
+    }
+    fun removeLocalModel(slot: Int) {
+        settings.edit().remove("local_model_$slot").apply()
+        localImportStatus = "Model removed from this AI slot"
+    }
 
     fun saveAiSettings(key: String, endpoint: String, model: String, provider: String, slot: Int = 0) {
         if (key.isNotBlank()) aiKeys.save(key, slot)
-        val safeEndpoint = AiEndpointPolicy.normalizeForStorage(provider, endpoint)
+        val safeEndpoint = if (provider == "On-device") "" else AiEndpointPolicy.normalizeForStorage(provider, endpoint)
         val safeModel = model.trim()
         when(slot) {
             1 -> { ai2Provider=provider; ai2Endpoint=safeEndpoint; ai2Model=safeModel }
@@ -355,7 +376,7 @@ class IdeViewModel : ViewModel() {
         AiSlotConfig(0,"Main",aiProvider,aiEndpoint,aiModel,aiKeys.load(0).orEmpty()),
         AiSlotConfig(1,"Second",ai2Provider,ai2Endpoint,ai2Model,aiKeys.load(1).orEmpty()),
         AiSlotConfig(2,"Third",ai3Provider,ai3Endpoint,ai3Model,aiKeys.load(2).orEmpty())
-    ).filter { it.key.isNotBlank() }
+    ).filter { if (it.provider == "On-device") File(localModelForSlot(it.index)).isFile else it.key.isNotBlank() }
 
     private fun trimAiMessages() {
         while (aiMessages.size > 80) aiMessages.removeAt(0)
@@ -375,8 +396,8 @@ class IdeViewModel : ViewModel() {
         var slots = configuredAiSlots()
         if (preferredSlot != null) slots = slots.filter { it.index == preferredSlot }
         if (slots.isEmpty()) {
-            if (testOnly) aiTestStatus = "No API key configured"
-            else aiMessages.add(AiMessage(false, "Open AI settings and add an API key"))
+            if (testOnly) aiTestStatus = "Choose an API key or import an on-device GGUF model"
+            else aiMessages.add(AiMessage(false, "Open AI settings and add an API key or GGUF model"))
             return
         }
         val typedQuestion = if (testOnly) "Reply with: Connection successful" else aiPrompt.trim()
@@ -413,7 +434,12 @@ class IdeViewModel : ViewModel() {
                         if (index > 0) viewModelScope.launch {
                             aiFallbackNotice = "${slots[index-1].label} AI unavailable • switching to ${slot.label} AI"
                         }
-                        return@runCatching AiClient.chat(
+                        return@runCatching if (slot.provider == "On-device") LocalAiRuntime.chat(
+                            appContext, localModelForSlot(slot.index), question,
+                            if (!testOnly && shareCode) codeSnapshot else null, historySnapshot,
+                            onStatus={ status -> viewModelScope.launch { aiFallbackNotice="${slot.label}: $status" } },
+                            onPartial={ partial -> viewModelScope.launch { if (!testOnly && aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex] = AiMessage(false, partial) } }
+                        ) else AiClient.chat(
                             providerSetting=slot.provider,
                             endpoint=slot.endpoint,
                             apiKey=slot.key,
@@ -1026,6 +1052,12 @@ private fun AchievementNotice(
     var consoleInputValue by remember { mutableStateOf(TextFieldValue(vm.input)) }
     var runBurst by remember { mutableIntStateOf(0) }
     val motionAllowed = vm.motionEnabled && ValueAnimator.areAnimatorsEnabled()
+    val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            vm.saveAiSettings(keyDraft, endpointDraft, modelDraft, "On-device", selectedAiSlot)
+            vm.importLocalModel(uri, selectedAiSlot)
+        }
+    }
     val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             val name = uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
@@ -1683,7 +1715,17 @@ private fun AchievementNotice(
                             SettingsCategory("Motion","13 quiet interface animations",accent){settingsSection="Motion"}
                             SettingsCategory("Layout","Header, tabs, toolbar and spacing",accent){settingsSection="Layout"}
                             SettingsCategory("Console & Helper","Output and chat appearance",accent){settingsSection="Console & Helper"}
+                            SettingsCategory("AI","API keys, offline GGUF models and fallback",accent){settingsSection="AI"}
                             SettingsCategory("System","Runtime and interface switches",accent){settingsSection="System"}
+                        }
+                        if(settingsSection=="AI" || searchMatches("ai", "api key", "offline model", "gguf")) {
+                            Text("ASTRO AI", color=accent, fontSize=12.sp, fontWeight=FontWeight.Bold)
+                            Text("Choose an API provider or import a GGUF file to run a model on this phone. Main, Second and Third can act as fallbacks.", color=Color.LightGray, fontSize=12.sp)
+                            Button(onClick={showAiSettings=true}) { Text("Open AI connections") }
+                            listOf(0,1,2).forEach { slot ->
+                                val provider = vm.providerForSlot(slot)
+                                Text("${listOf("Main","Second","Third")[slot]} · $provider · ${if(vm.slotConfigured(slot)) "Ready" else "Not configured"}", color=Color.LightGray, fontSize=12.sp)
+                            }
                         }
                         if(settingsSection=="Appearance" || searchMatches("appearance","theme","accent color","background","editor token colors","comments","strings","numbers","keywords","functions","variables")){
                         Text("ACCENT COLOR",color=accent,fontSize=12.sp)
@@ -1831,21 +1873,32 @@ private fun AchievementNotice(
                     }
                 }
                 Text("${listOf("MAIN","SECOND","THIRD")[selectedAiSlot]} AI",color=MaterialTheme.colorScheme.primary,fontSize=11.sp,fontWeight=FontWeight.Bold)
-                TextField(
-                    keyDraft,{keyDraft=it},
-                    label={Text(if(vm.slotConfigured(selectedAiSlot)) "New API key  optional" else "API key")},
-                    singleLine=true,
-                    visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    modifier=Modifier.fillMaxWidth()
-                )
-                Text("Provider",fontSize=11.sp,color=Color.Gray)
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
-                    listOf("Auto","OpenAI","Gemini","Claude","OpenRouter","Groq","Custom").forEach { provider ->
-                        FilterChip(selected=providerDraft==provider,onClick={providerDraft=provider},label={Text(provider)})
-                    }
+                Text("Connection type",fontSize=11.sp,color=Color.Gray)
+                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected=providerDraft!="On-device",onClick={if(providerDraft=="On-device") providerDraft="Auto"},label={Text("API key")})
+                    FilterChip(selected=providerDraft=="On-device",onClick={providerDraft="On-device"},label={Text("On-device GGUF")})
                 }
-                TextField(modelDraft,{modelDraft=it},label={Text("Model  e g gemini-3.6-flash")},singleLine=true,modifier=Modifier.fillMaxWidth())
-                TextField(endpointDraft,{endpointDraft=it},label={Text("API endpoint or compatible link")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                if(providerDraft=="On-device") {
+                    Text("Runs offline on this phone. Import a quantized .gguf model; large models need plenty of storage and RAM.",color=Color.LightGray,fontSize=12.sp)
+                    Button(onClick={modelPicker.launch(arrayOf("*/*"))}) { Text("Choose GGUF file") }
+                    val selectedPath = vm.localModelForSlot(selectedAiSlot)
+                    if(selectedPath.isNotBlank()) {
+                        Text("Selected: ${File(selectedPath).name}", color=Color.LightGray, fontSize=12.sp)
+                        OutlinedButton(onClick={vm.removeLocalModel(selectedAiSlot)}) { Text("Remove from slot") }
+                    }
+                    vm.localImportStatus?.let { Text(it,color=Color.LightGray,fontSize=12.sp) }
+                } else {
+                    TextField(keyDraft,{keyDraft=it},label={Text(if(vm.slotConfigured(selectedAiSlot)) "New API key (optional)" else "API key")},singleLine=true,
+                        visualTransformation=androidx.compose.ui.text.input.PasswordVisualTransformation(),modifier=Modifier.fillMaxWidth())
+                    Text("Provider",fontSize=11.sp,color=Color.Gray)
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                        listOf("Auto","OpenAI","Gemini","Claude","OpenRouter","Groq","Custom").forEach { provider ->
+                            FilterChip(selected=providerDraft==provider,onClick={providerDraft=provider},label={Text(provider)})
+                        }
+                    }
+                    TextField(modelDraft,{modelDraft=it},label={Text("Model name")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                    TextField(endpointDraft,{endpointDraft=it},label={Text("API endpoint or compatible link")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                }
                 Text(
                     when(selectedAiSlot) { 0->"Used first";1->"Used automatically if Main fails";else->"Used if Main and Second fail" },
                     color=Color.Gray,fontSize=11.sp
@@ -1859,7 +1912,7 @@ private fun AchievementNotice(
                         },
                         modifier=Modifier.weight(1f)
                     ){Text("Save & test")}
-                    if(vm.slotConfigured(selectedAiSlot)) OutlinedButton(
+                    if(providerDraft!="On-device" && vm.slotConfigured(selectedAiSlot)) OutlinedButton(
                         onClick={vm.removeAiKey(selectedAiSlot)},
                         colors=ButtonDefaults.outlinedButtonColors(contentColor=Color(0xFFFF3D71))
                     ){Text("Remove")}
@@ -1897,7 +1950,9 @@ private fun AchievementNotice(
         modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.14f),shape)
     ){
         Row(Modifier.padding(horizontal=16.dp,vertical=15.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-            Box(Modifier.size(9.dp).background(accent,androidx.compose.foundation.shape.CircleShape))
+            Box(Modifier.size(38.dp).background(accent.copy(alpha=0.13f),androidx.compose.foundation.shape.RoundedCornerShape(11.dp)),contentAlignment=androidx.compose.ui.Alignment.Center) {
+                IdeGlyph(title,accent,Modifier.size(21.dp))
+            }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)){Text(title,color=Color(0xFFE6F5FF),fontSize=15.sp);Text(subtitle,color=Color.Gray,fontSize=11.sp)}
             Text("›",color=Color.Gray,fontSize=24.sp)

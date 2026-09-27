@@ -7,3 +7,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "PyDroidX"
 include(":app")
+
+include(":local-llm")

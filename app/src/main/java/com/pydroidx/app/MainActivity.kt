@@ -2,6 +2,7 @@ package com.pydroidx.app
 
 import android.os.Bundle
 import android.app.Activity
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.ClipData
 import android.widget.Toast
@@ -30,6 +31,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.BoxWithConstraints
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -39,6 +41,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -176,8 +187,8 @@ class IdeViewModel : ViewModel() {
     var highlightCurrentLine by mutableStateOf(true)
     var accentHex by mutableStateOf("#FFFFFF")
     var backgroundHex by mutableStateOf("#0B0F14")
-    var motionStyle by mutableStateOf("Fluid spring")
-    var motionIntensity by mutableFloatStateOf(0.5f)
+    var motionStyle by mutableStateOf("Aurora glide")
+    var motionIntensity by mutableFloatStateOf(0.7f)
     var motionEnabled by mutableStateOf(true)
     var settingsQuery by mutableStateOf("")
     var customFontPath by mutableStateOf("")
@@ -269,8 +280,8 @@ class IdeViewModel : ViewModel() {
         highlightCurrentLine = settings.getBoolean("current_line", true)
         accentHex = settings.getString("accent_hex", "#FFFFFF") ?: "#FFFFFF"
         backgroundHex = settings.getString("background_hex", "#11161D") ?: "#11161D"
-        motionStyle = settings.getString("motion_style", "Fluid spring") ?: "Fluid spring"
-        motionIntensity = settings.getFloat("motion_intensity", 0.5f)
+        motionStyle = settings.getString("motion_style", "Aurora glide") ?: "Aurora glide"
+        motionIntensity = settings.getFloat("motion_intensity", 0.7f)
         motionEnabled = settings.getBoolean("motion_enabled", true)
         customFontPath = settings.getString("custom_font_path", "") ?: ""
         editorTextHex=settings.getString("editor_text_hex","#D4D4D4")?:"#D4D4D4"
@@ -1014,6 +1025,8 @@ private fun AchievementNotice(
     var providerDraft by remember { mutableStateOf(vm.aiProvider) }
     var settingsSection by remember { mutableStateOf("Overview") }
     var consoleInputValue by remember { mutableStateOf(TextFieldValue(vm.input)) }
+    var runBurst by remember { mutableIntStateOf(0) }
+    val motionAllowed = vm.motionEnabled && ValueAnimator.areAnimatorsEnabled()
     val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             val name = uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
@@ -1070,41 +1083,73 @@ private fun AchievementNotice(
     CompositionLocalProvider(LocalDensity provides scaledDensity) {
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=Color.Transparent,surfaceVariant=glass,outline=glassEdge)) {
         val keyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-        Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().navigationBarsPadding().imePadding()) {
+        Box(Modifier.fillMaxSize().background(bg)) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             if(vm.showHeader) {
-                Row(
+                BoxWithConstraints(
                     Modifier.fillMaxWidth().padding(horizontal=8.dp, vertical=6.dp)
                         .height(vm.headerHeight.coerceIn(56f, 76f).dp)
-                        .background(Color(0xFF181F29), androidx.compose.foundation.shape.RoundedCornerShape(10.dp)),
-                    verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                        .background(Color(0xFF181F29), androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
                 ) {
-                    pages.forEachIndexed { index, label ->
-                        val active = pager.currentPage == index
-                        val tint = if(active) Color(0xFF32B5FF) else Color(0xFFA4ADBA)
-                        Column(
-                            Modifier.weight(1f).fillMaxHeight().clickable {
-                                scope.launch { pager.animateScrollToPage(index) }
-                            }.padding(top=8.dp),
-                            horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally,
-                            verticalArrangement=Arrangement.SpaceBetween
-                        ) {
-                            if(index==1) Image(painterResource(R.drawable.ic_python_editor), "Python", Modifier.size(22.dp))
-                            else IdeGlyph(pageIcons[index], tint)
-                            Text(label, color=tint, fontSize=7.sp, maxLines=1, softWrap=false)
-                            Box(Modifier.fillMaxWidth().height(2.dp).background(if(active) tint else Color.Transparent))
+                    val tabWidth = (maxWidth - if(pager.currentPage==1) 72.dp else 0.dp) / pages.size
+                    val indicatorX by animateDpAsState(
+                        targetValue=tabWidth*pager.currentPage + 6.dp,
+                        animationSpec=if(motionAllowed) spring(dampingRatio=Spring.DampingRatioMediumBouncy,
+                            stiffness=Spring.StiffnessMediumLow) else tween(0), label="tab position")
+                    val indicatorWidth by animateDpAsState(
+                        targetValue=tabWidth - 12.dp,
+                        animationSpec=if(motionAllowed) spring(stiffness=Spring.StiffnessMediumLow) else tween(0),
+                        label="tab width")
+                    Row(Modifier.fillMaxSize(), verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                        pages.forEachIndexed { index, label ->
+                            val active = pager.currentPage == index
+                            val tint by androidx.compose.animation.animateColorAsState(
+                                if(active) Color(0xFF32B5FF) else Color(0xFFA4ADBA),
+                                animationSpec=tween(if(motionAllowed) 260 else 0), label="tab color")
+                            val iconScale by animateFloatAsState(if(active && motionAllowed) 1.13f else 1f,
+                                animationSpec=spring(dampingRatio=Spring.DampingRatioMediumBouncy), label="tab icon")
+                            Column(
+                                Modifier.weight(1f).fillMaxHeight().clickable {
+                                    scope.launch { pager.animateScrollToPage(index) }
+                                }.padding(top=8.dp),
+                                horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally,
+                                verticalArrangement=Arrangement.SpaceBetween
+                            ) {
+                                if(index==1) Image(painterResource(R.drawable.ic_python_editor), "Python",
+                                    Modifier.size(22.dp).graphicsLayer { scaleX=iconScale;scaleY=iconScale })
+                                else IdeGlyph(pageIcons[index], tint,
+                                    Modifier.graphicsLayer { scaleX=iconScale;scaleY=iconScale })
+                                Text(label, color=tint, fontSize=7.sp, maxLines=1, softWrap=false)
+                                Spacer(Modifier.height(2.dp))
+                            }
+                        }
+                        if(pager.currentPage==1) {
+                            Button(
+                                onClick={if(vm.running) vm.stop() else {
+                                    runBurst++; vm.run(); scope.launch{pager.animateScrollToPage(2)}
+                                }},
+                                colors=ButtonDefaults.buttonColors(
+                                    containerColor=if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676),
+                                    contentColor=Color.Black),
+                                shape=androidx.compose.foundation.shape.RoundedCornerShape(9.dp),
+                                contentPadding=PaddingValues(0.dp),
+                                modifier=Modifier.padding(horizontal=5.dp).width(62.dp).height(44.dp)
+                            ) {
+                                AnimatedContent(targetState=vm.running, label="run button",
+                                    transitionSpec={
+                                        (slideInVertically(tween(180)){it/2}+fadeIn(tween(180))) togetherWith
+                                            (slideOutVertically(tween(180)){-it/2}+fadeOut(tween(180)))
+                                    }) { running ->
+                                    Text(if(running) "■ Stop" else "▶ Start",fontSize=12.sp,
+                                        fontWeight=FontWeight.Bold,maxLines=1)
+                                }
+                            }
                         }
                     }
-                    if(pager.currentPage==1) {
-                        Button(
-                            onClick={if(vm.running) vm.stop() else {vm.run();scope.launch{pager.animateScrollToPage(2)}}},
-                            colors=ButtonDefaults.buttonColors(
-                                containerColor=if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676),
-                                contentColor=Color.Black),
-                            shape=androidx.compose.foundation.shape.RoundedCornerShape(9.dp),
-                            contentPadding=PaddingValues(0.dp),
-                            modifier=Modifier.padding(horizontal=5.dp).width(62.dp).height(44.dp)
-                        ) { Text(if(vm.running) "■ Stop" else "▶ Start",fontSize=12.sp,fontWeight=FontWeight.Bold,maxLines=1) }
-                    }
+                    Box(Modifier.align(androidx.compose.ui.Alignment.BottomStart).offset(x=indicatorX)
+                        .width(indicatorWidth.coerceAtLeast(10.dp)).height(3.dp)
+                        .background(Brush.horizontalGradient(listOf(Color(0xFF24A8FF),Color(0xFF52F5D1))),
+                            androidx.compose.foundation.shape.RoundedCornerShape(4.dp)))
                 }
             }
             HorizontalPager(
@@ -1116,10 +1161,18 @@ private fun AchievementNotice(
                 val rawOffset = (pager.currentPage - page) + pager.currentPageOffsetFraction
                 val distance = rawOffset.absoluteValue.coerceIn(0f,1f)
                 val motionModifier = Modifier.fillMaxSize().graphicsLayer {
-                    if(vm.motionEnabled) {
+                    translationX=0f;translationY=0f;rotationY=0f
+                    scaleX=1f;scaleY=1f;alpha=1f
+                    if(motionAllowed && !keyboardOpen) {
                         val amount = vm.motionIntensity.coerceIn(0f,1f)
                         when(vm.motionStyle) {
-                            "Fluid spring" -> { translationX=rawOffset*size.width*0.035f*amount;scaleX=1f-distance*0.018f*amount;scaleY=scaleX }
+                            "Aurora glide" -> {
+                                translationX=rawOffset*size.width*0.06f*amount
+                                rotationY=rawOffset*9f*amount
+                                scaleX=1f-distance*0.075f*amount;scaleY=scaleX
+                                alpha=1f-distance*0.18f*amount
+                            }
+                            "Fluid spring" -> { translationX=rawOffset*size.width*0.07f*amount;scaleX=1f-distance*0.06f*amount;scaleY=scaleX;rotationY=rawOffset*5f*amount }
                             "Soft fade" -> alpha = 1f - distance * 0.35f * amount
                             "Subtle scale" -> { scaleX=1f-distance*0.05f*amount;scaleY=scaleX }
                             "Shared element" -> { scaleX=1f-distance*0.03f*amount;scaleY=scaleX;alpha=1f-distance*0.12f*amount }
@@ -1323,7 +1376,7 @@ private fun AchievementNotice(
                             }
                             Spacer(Modifier.width(6.dp))
                             Button(
-                                onClick={if(vm.running) vm.stop() else vm.run()},
+                                onClick={if(vm.running) vm.stop() else {runBurst++;vm.run()}},
                                 colors=ButtonDefaults.buttonColors(containerColor=Color.White,contentColor=Color.Black),
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
                                 contentPadding=PaddingValues(horizontal=18.dp,vertical=10.dp),
@@ -1366,12 +1419,15 @@ private fun AchievementNotice(
                                         var showDetails by remember(issue.details) { mutableStateOf(false) }
                                         Surface(color=Color(0xFF151316),shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
                                             border=BorderStroke(1.dp,Color(0xFFFF6B81).copy(alpha=.48f)),
-                                            modifier=Modifier.align(androidx.compose.ui.Alignment.BottomCenter).fillMaxWidth()) {
+                                            modifier=Modifier.align(androidx.compose.ui.Alignment.BottomCenter)
+                                                .fillMaxWidth().animateContentSize()) {
                                             Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                                                 Text("⚠ ${issue.title}",color=Color(0xFFFF8798),fontWeight=FontWeight.Bold,fontSize=14.sp)
                                                 Text("Line ${issue.line}: ${issue.explanation}",color=Color.White,fontSize=13.sp,lineHeight=18.sp)
                                                 if(issue.codeLine.isNotBlank()) Text(issue.codeLine,color=Color(0xFFB8C7FF),fontFamily=FontFamily.Monospace,fontSize=12.sp)
-                                                if(showDetails) Text(issue.details,color=Color(0xFF9B9BA4),fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=6)
+                                                AnimatedVisibility(showDetails) {
+                                                    Text(issue.details,color=Color(0xFF9B9BA4),fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=6)
+                                                }
                                                 Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                                                     listOf("Details","Fix","Ask Astro").forEach { label ->
                                                         OutlinedButton(onClick={ when(label){
@@ -1679,7 +1735,7 @@ private fun AchievementNotice(
                         if(settingsSection=="Motion" || searchMatches("motion","animation","fade","scale","parallax","spring")){
                         Text("MOTION",color=accent,fontSize=12.sp)
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(7.dp)){
-                            listOf("Fluid spring","Soft fade","Subtle scale","Shared element","Smooth blur reveal","Layered depth","Gentle parallax","Card expansion","Natural sheet","Magnetic snap","Interactive swipe","Content morph","Keyboard lift").forEach{motion->
+                            listOf("Aurora glide","Fluid spring","Soft fade","Subtle scale","Shared element","Smooth blur reveal","Layered depth","Gentle parallax","Card expansion","Natural sheet","Magnetic snap","Interactive swipe","Content morph","Keyboard lift").forEach{motion->
                                 FilterChip(selected=vm.motionStyle==motion,onClick={vm.motionStyle=motion;vm.saveAppearance()},label={Text(motion)})
                             }
                         }
@@ -1750,6 +1806,8 @@ private fun AchievementNotice(
             if(vm.showPageDots && !keyboardOpen) Row(Modifier.fillMaxWidth().height(22.dp),horizontalArrangement=Arrangement.Center,verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                 repeat(5){index->Box(Modifier.padding(horizontal=3.dp).size(if(index==pager.currentPage)vm.pageDotSize.dp else (vm.pageDotSize*0.62f).dp).background(if(index==pager.currentPage)accent else Color.DarkGray,androidx.compose.foundation.shape.CircleShape))}
             }
+        }
+        RunBurst(runBurst,vm.currentFileName,motionAllowed)
         }
     }
     if(showAiSettings) AlertDialog(

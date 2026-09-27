@@ -41,14 +41,14 @@ class PythonEditorViewTest {
             View.MeasureSpec.makeMeasureSpec(1200, View.MeasureSpec.EXACTLY))
         editor.layout(0, 0, 1080, 1200)
     }
-    @Test fun waitsTwoSecondsAndRestartsOnEveryKeystroke() {
-        looper.idleFor(Duration.ofMillis(1999)); assertEquals(0, requests)
+    @Test fun waitsOneSecondAndRestartsOnEveryKeystroke() {
+        looper.idleFor(Duration.ofMillis(999)); assertEquals(0, requests)
         editor.text.append("r")
-        looper.idleFor(Duration.ofMillis(1999)); assertEquals(0, requests)
+        looper.idleFor(Duration.ofMillis(999)); assertEquals(0, requests)
         looper.idleFor(Duration.ofMillis(1)); assertEquals(1, requests)
     }
     private fun row(): RectF {
-        looper.idleFor(Duration.ofMillis(2000))
+        looper.idleFor(Duration.ofMillis(1000))
         editor.draw(Canvas(Bitmap.createBitmap(1080,1200,Bitmap.Config.ARGB_8888)))
         val field = PythonEditorView::class.java.getDeclaredField("completionPopupBounds")
         field.isAccessible = true
@@ -84,7 +84,7 @@ class PythonEditorViewTest {
     @Test fun pendingResultCannotApplyAfterTyping() {
         var deliver: ((CompletionResult)->Unit)? = null
         editor.requestSmartCompletion = { _, _, callback -> deliver=callback }
-        looper.idleFor(Duration.ofMillis(2000))
+        looper.idleFor(Duration.ofMillis(1000))
         editor.text.append("r")
         deliver!!(CompletionResult(items)); looper.idle()
         assertFalse(editor.acceptGhostSuggestion())

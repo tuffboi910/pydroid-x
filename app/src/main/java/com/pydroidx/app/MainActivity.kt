@@ -63,6 +63,11 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.AnnotatedString
@@ -1079,6 +1084,9 @@ private fun AchievementNotice(
     var settingsSection by remember { mutableStateOf("Overview") }
     var consoleInputValue by remember { mutableStateOf(TextFieldValue(vm.input)) }
     var runBurst by remember { mutableIntStateOf(0) }
+    var runOrigin by remember { mutableStateOf(Offset.Zero) }
+    var headerRunOrigin by remember { mutableStateOf(Offset.Zero) }
+    var consoleRunOrigin by remember { mutableStateOf(Offset.Zero) }
     val motionAllowed = vm.motionEnabled && ValueAnimator.areAnimatorsEnabled()
     val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -1165,10 +1173,13 @@ private fun AchievementNotice(
                             val tint by androidx.compose.animation.animateColorAsState(
                                 if(active) Color(0xFF32B5FF) else Color(0xFFA4ADBA),
                                 animationSpec=tween(if(motionAllowed) 260 else 0), label="tab color")
-                            val iconScale by animateFloatAsState(if(active && motionAllowed) 1.13f else 1f,
-                                animationSpec=spring(dampingRatio=Spring.DampingRatioMediumBouncy), label="tab icon")
+                            val tabInteraction = remember { MutableInteractionSource() }
+                            val pressed by tabInteraction.collectIsPressedAsState()
+                            val iconScale by animateFloatAsState(
+                                if (motionAllowed && pressed) 0.83f else if(active && motionAllowed) 1.13f else 1f,
+                                animationSpec=spring(dampingRatio=Spring.DampingRatioMediumBouncy,stiffness=Spring.StiffnessMedium), label="tab icon")
                             Column(
-                                Modifier.weight(1f).fillMaxHeight().clickable {
+                                Modifier.weight(1f).fillMaxHeight().clickable(interactionSource=tabInteraction,indication=null) {
                                     scope.launch { pager.animateScrollToPage(index) }
                                 }.padding(top=8.dp),
                                 horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally,
@@ -1185,7 +1196,7 @@ private fun AchievementNotice(
                         if(pager.currentPage==1) {
                             Button(
                                 onClick={if(vm.running) vm.stop() else {
-                                    runBurst++; vm.run(); scope.launch{pager.animateScrollToPage(2)}
+                                    runOrigin=headerRunOrigin;runBurst++; vm.run(); scope.launch{pager.animateScrollToPage(2)}
                                 }},
                                 colors=ButtonDefaults.buttonColors(
                                     containerColor=if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676),
@@ -1193,6 +1204,9 @@ private fun AchievementNotice(
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(9.dp),
                                 contentPadding=PaddingValues(0.dp),
                                 modifier=Modifier.padding(horizontal=5.dp).width(62.dp).height(44.dp)
+                                    .onGloballyPositioned { coords ->
+                                        headerRunOrigin=coords.positionInRoot()+Offset(coords.size.width/2f,coords.size.height/2f)
+                                    }
                             ) {
                                 AnimatedContent(targetState=vm.running, label="run button",
                                     transitionSpec={
@@ -1435,21 +1449,30 @@ private fun AchievementNotice(
                             }
                             Spacer(Modifier.width(6.dp))
                             Button(
-                                onClick={if(vm.running) vm.stop() else {runBurst++;vm.run()}},
+                                onClick={if(vm.running) vm.stop() else {runOrigin=consoleRunOrigin;runBurst++;vm.run()}},
                                 colors=ButtonDefaults.buttonColors(containerColor=Color.White,contentColor=Color.Black),
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
                                 contentPadding=PaddingValues(horizontal=18.dp,vertical=10.dp),
                                 modifier=Modifier.border(1.dp,Color.White.copy(alpha=.24f),androidx.compose.foundation.shape.RoundedCornerShape(22.dp))
+                                    .onGloballyPositioned { coords ->
+                                        consoleRunOrigin=coords.positionInRoot()+Offset(coords.size.width/2f,coords.size.height/2f)
+                                    }
                             ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
                         }
                         Spacer(Modifier.height(14.dp))
                         Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                             listOf("Python","Terminal").forEach { mode ->
                                 val selected=vm.consoleMode==mode
+                                val modeColor by androidx.compose.animation.animateColorAsState(
+                                    if(selected) Color(0xFF655C7A) else Color.Transparent,
+                                    animationSpec=tween(if(motionAllowed) 220 else 0),label="console mode")
+                                val modeScale by animateFloatAsState(if(selected && motionAllowed) 1.04f else 1f,
+                                    animationSpec=spring(dampingRatio=Spring.DampingRatioMediumBouncy),label="console mode scale")
                                 OutlinedButton(onClick={if(!vm.running){vm.consoleMode=mode;vm.input="";consoleInputValue=TextFieldValue("")}},
-                                    colors=ButtonDefaults.outlinedButtonColors(containerColor=if(selected) Color(0xFF655C7A) else Color.Transparent,contentColor=Color.White),
+                                    colors=ButtonDefaults.outlinedButtonColors(containerColor=modeColor,contentColor=Color.White),
                                     border=BorderStroke(1.dp,Color.White.copy(alpha=if(selected).24f else .14f)),
-                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp)){Text(mode)}
+                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                    modifier=Modifier.graphicsLayer { scaleX=modeScale;scaleY=modeScale }){Text(mode)}
                             }
                         }
                         Spacer(Modifier.height(14.dp))
@@ -1461,7 +1484,11 @@ private fun AchievementNotice(
                         ){
                             Column(Modifier.fillMaxSize().padding(10.dp)){
                                 Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-                                    Text(">>>",color=Color(0xFFB8B8BE),fontFamily=FontFamily.Monospace,fontSize=12.sp)
+                                    AnimatedContent(targetState=vm.consoleMode,label="console prompt",
+                                        transitionSpec={ (slideInVertically(tween(180)){it/2}+fadeIn(tween(180))) togetherWith
+                                            (slideOutVertically(tween(140)){-it/2}+fadeOut(tween(140))) }) { currentMode ->
+                                        Text(if(currentMode=="Terminal") "$" else ">>>",color=Color(0xFFB8B8BE),fontFamily=FontFamily.Monospace,fontSize=12.sp)
+                                    }
                                     Spacer(Modifier.width(8.dp))
                                     Text(
                                         if(vm.running)"running ${vm.currentFileName}" else vm.currentFileName,
@@ -1896,7 +1923,7 @@ private fun AchievementNotice(
                 repeat(5){index->Box(Modifier.padding(horizontal=3.dp).size(if(index==pager.currentPage)vm.pageDotSize.dp else (vm.pageDotSize*0.62f).dp).background(if(index==pager.currentPage)accent else Color.DarkGray,androidx.compose.foundation.shape.CircleShape))}
             }
         }
-        RunBurst(runBurst,vm.currentFileName,motionAllowed)
+        RunBurst(runBurst,vm.currentFileName,motionAllowed,runOrigin)
         }
     }
     if(showCodePreview) vm.pendingCode?.let { change ->
@@ -2050,11 +2077,18 @@ private fun codeChangePreview(original: String, proposed: String): CodeChangePre
 
 @Composable private fun SettingsCategory(title:String,subtitle:String,accent:Color,onClick:()->Unit){
     val shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if(pressed) .975f else 1f,
+        animationSpec=spring(dampingRatio=Spring.DampingRatioMediumBouncy),label="setting press")
+    val surfaceColor by androidx.compose.animation.animateColorAsState(
+        if(pressed) accent.copy(alpha=.14f) else Color.White.copy(alpha=.06f),label="setting glow")
     Surface(
-        onClick=onClick,
-        color=Color.White.copy(alpha=0.06f),
+        color=surfaceColor,
         shape=shape,
-        modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.14f),shape)
+        modifier=Modifier.fillMaxWidth().graphicsLayer { scaleX=scale;scaleY=scale }
+            .border(1.dp,Color.White.copy(alpha=0.14f),shape)
+            .clickable(interactionSource=interaction,indication=null,onClick=onClick)
     ){
         Row(Modifier.padding(horizontal=16.dp,vertical=15.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
             Box(Modifier.size(38.dp).background(accent.copy(alpha=0.13f),androidx.compose.foundation.shape.RoundedCornerShape(11.dp)),contentAlignment=androidx.compose.ui.Alignment.Center) {

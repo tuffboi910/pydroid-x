@@ -6,8 +6,11 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import android.app.Application
 
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk=[28], application=Application::class)
 class CompletionPopupTest {
     @Test fun compactPopupKeepsSuggestionsTappable() {
         val canvas = Canvas(Bitmap.createBitmap(400, 700, Bitmap.Config.ARGB_8888))

@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 35961)
-Total output lines: 2260
-
 package com.pydroidx.app
 
 import android.os.Bundle
@@ -1156,7 +1153,326 @@ private fun AchievementNotice(
     CompositionLocalProvider(LocalDensity provides scaledDensity) {
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=Color.Transparent,surfaceVariant=glass,outline=glassEdge)) {
         val keyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-        Box(Modifie…5961 tokens truncated…eScale by animateFloatAsState(if(selected && motionAllowed) 1.04f else 1f,
+        Box(Modifier.fillMaxSize().background(bg)) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+            if(vm.showHeader) {
+                BoxWithConstraints(
+                    Modifier.fillMaxWidth().padding(horizontal=8.dp, vertical=6.dp)
+                        .height(vm.headerHeight.coerceIn(56f, 76f).dp)
+                        .background(Color(0xFF181F29), androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+                ) {
+                    val tabWidth = (maxWidth - if(pager.currentPage==1) 72.dp else 0.dp) / pages.size
+                    val indicatorX by animateDpAsState(
+                        targetValue=tabWidth*pager.currentPage + 6.dp,
+                        animationSpec=if(motionAllowed) spring(dampingRatio=Spring.DampingRatioMediumBouncy,
+                            stiffness=Spring.StiffnessMediumLow) else tween(0), label="tab position")
+                    val indicatorWidth by animateDpAsState(
+                        targetValue=tabWidth - 12.dp,
+                        animationSpec=if(motionAllowed) spring(stiffness=Spring.StiffnessMediumLow) else tween(0),
+                        label="tab width")
+                    Row(Modifier.fillMaxSize(), verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                        pages.forEachIndexed { index, label ->
+                            val active = pager.currentPage == index
+                            val tint by androidx.compose.animation.animateColorAsState(
+                                if(active) Color(0xFF32B5FF) else Color(0xFFA4ADBA),
+                                animationSpec=tween(if(motionAllowed) 260 else 0), label="tab color")
+                            val tabInteraction = remember { MutableInteractionSource() }
+                            val pressed by tabInteraction.collectIsPressedAsState()
+                            val iconScale by animateFloatAsState(
+                                if (motionAllowed && pressed) 0.83f else if(active && motionAllowed) 1.13f else 1f,
+                                animationSpec=spring(dampingRatio=Spring.DampingRatioMediumBouncy,stiffness=Spring.StiffnessMedium), label="tab icon")
+                            Column(
+                                Modifier.weight(1f).fillMaxHeight().clickable(interactionSource=tabInteraction,indication=null) {
+                                    scope.launch { pager.animateScrollToPage(index) }
+                                }.padding(top=8.dp),
+                                horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally,
+                                verticalArrangement=Arrangement.SpaceBetween
+                            ) {
+                                if(index==1) Image(painterResource(R.drawable.ic_python_editor), "Python",
+                                    Modifier.size(22.dp).graphicsLayer { scaleX=iconScale;scaleY=iconScale })
+                                else IdeGlyph(pageIcons[index], tint,
+                                    Modifier.graphicsLayer { scaleX=iconScale;scaleY=iconScale })
+                                Text(label, color=tint, fontSize=7.sp, maxLines=1, softWrap=false)
+                                Spacer(Modifier.height(2.dp))
+                            }
+                        }
+                        if(pager.currentPage==1) {
+                            Button(
+                                onClick={if(vm.running) vm.stop() else {
+                                    runOrigin=headerRunOrigin;runBurst++; vm.run(); scope.launch{pager.animateScrollToPage(2)}
+                                }},
+                                colors=ButtonDefaults.buttonColors(
+                                    containerColor=if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676),
+                                    contentColor=Color.Black),
+                                shape=androidx.compose.foundation.shape.RoundedCornerShape(9.dp),
+                                contentPadding=PaddingValues(0.dp),
+                                modifier=Modifier.padding(horizontal=5.dp).width(62.dp).height(44.dp)
+                                    .onGloballyPositioned { coords ->
+                                        headerRunOrigin=coords.positionInRoot()+Offset(coords.size.width/2f,coords.size.height/2f)
+                                    }
+                            ) {
+                                AnimatedContent(targetState=vm.running, label="run button",
+                                    transitionSpec={
+                                        (slideInVertically(tween(180)){it/2}+fadeIn(tween(180))) togetherWith
+                                            (slideOutVertically(tween(180)){-it/2}+fadeOut(tween(180)))
+                                    }) { running ->
+                                    Text(if(running) "■ Stop" else "▶ Start",fontSize=12.sp,
+                                        fontWeight=FontWeight.Bold,maxLines=1)
+                                }
+                            }
+                        }
+                    }
+                    Box(Modifier.align(androidx.compose.ui.Alignment.BottomStart).offset(x=indicatorX)
+                        .width(indicatorWidth.coerceAtLeast(10.dp)).height(3.dp)
+                        .background(Brush.horizontalGradient(listOf(Color(0xFF24A8FF),Color(0xFF52F5D1))),
+                            androidx.compose.foundation.shape.RoundedCornerShape(4.dp)))
+                }
+            }
+            HorizontalPager(
+                state=pager,
+                modifier=Modifier.weight(1f).fillMaxWidth(),
+                beyondViewportPageCount=1,
+                userScrollEnabled=pager.currentPage != 1 && pager.currentPage != 2
+            ) { page ->
+                val rawOffset = (pager.currentPage - page) + pager.currentPageOffsetFraction
+                val distance = rawOffset.absoluteValue.coerceIn(0f,1f)
+                val motionModifier = Modifier.fillMaxSize().graphicsLayer {
+                    translationX=0f;translationY=0f;rotationY=0f
+                    scaleX=1f;scaleY=1f;alpha=1f
+                    if(motionAllowed && !keyboardOpen) {
+                        val amount = vm.motionIntensity.coerceIn(0f,1f)
+                        when(vm.motionStyle) {
+                            "Aurora glide" -> {
+                                translationX=rawOffset*size.width*0.06f*amount
+                                rotationY=rawOffset*9f*amount
+                                scaleX=1f-distance*0.075f*amount;scaleY=scaleX
+                                alpha=1f-distance*0.18f*amount
+                            }
+                            "Fluid spring" -> { translationX=rawOffset*size.width*0.07f*amount;scaleX=1f-distance*0.06f*amount;scaleY=scaleX;rotationY=rawOffset*5f*amount }
+                            "Soft fade" -> alpha = 1f - distance * 0.35f * amount
+                            "Subtle scale" -> { scaleX=1f-distance*0.05f*amount;scaleY=scaleX }
+                            "Shared element" -> { scaleX=1f-distance*0.03f*amount;scaleY=scaleX;alpha=1f-distance*0.12f*amount }
+                            "Smooth blur reveal" -> { alpha=1f-distance*0.25f*amount;scaleX=1f-distance*0.025f*amount;scaleY=scaleX }
+                            "Layered depth" -> { translationX=rawOffset*size.width*0.08f*amount;scaleX=1f-distance*0.06f*amount;scaleY=scaleX }
+                            "Gentle parallax" -> translationX=rawOffset*size.width*0.12f*amount
+                            "Card expansion" -> { scaleX=0.92f+0.08f*(1f-distance*amount);scaleY=scaleX;alpha=1f-distance*0.18f*amount }
+                            "Natural sheet" -> { translationY=distance*40f*amount;alpha=1f-distance*0.18f*amount }
+                            "Magnetic snap" -> { scaleX=1f-distance*0.018f*amount;scaleY=scaleX }
+                            "Interactive swipe" -> { translationX=rawOffset*size.width*0.055f*amount;alpha=1f-distance*0.08f*amount }
+                            "Content morph" -> { scaleX=1f-distance*0.04f*amount;scaleY=1f-distance*0.015f*amount;alpha=1f-distance*0.15f*amount }
+                            "Keyboard lift" -> translationY=-distance*18f*amount
+                            else -> { scaleX=1f-distance*0.02f*amount;scaleY=scaleX }
+                        }
+                    }
+                }
+                Box(motionModifier) { when(page) {
+                    0 -> Column(
+                        Modifier.fillMaxSize().background(bg).padding(horizontal=18.dp,vertical=14.dp),
+                        verticalArrangement=Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("FOLDERS",color=Color.White,fontSize=22.sp,fontWeight=FontWeight.Bold)
+                                Text("Project  •  ${vm.currentProjectName}",color=Color.Gray,fontSize=11.sp)
+                            }
+                            Button(
+                                onClick={vm.makeNewCode();scope.launch{pager.animateScrollToPage(1)}},
+                                colors=ButtonDefaults.buttonColors(
+                                    containerColor=(if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676)).copy(alpha=0.90f),
+                                    contentColor=Color.Black
+                                ),
+                                shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
+                            ){Text("＋ Make new code",fontWeight=FontWeight.Bold)}
+                        }
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement=Arrangement.spacedBy(7.dp)
+                        ) {
+                            vm.projectNames.forEach { project ->
+                                FilterChip(
+                                    selected=project==vm.currentProjectName,
+                                    onClick={vm.switchProject(project)},
+                                    label={Text(project,maxLines=1)}
+                                )
+                            }
+                            OutlinedButton(
+                                onClick={vm.makeNewProject()},
+                                shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
+                            ){Text("＋ Project")}
+                        }
+                        HorizontalDivider(color=Color.White.copy(alpha=0.12f))
+                        if(vm.savedCodes.isEmpty()) {
+                            Box(Modifier.fillMaxSize(),contentAlignment=androidx.compose.ui.Alignment.Center) {
+                                Text("No saved code yet",color=Color.Gray)
+                            }
+                        } else {
+                            Column(
+                                Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                                verticalArrangement=Arrangement.spacedBy(7.dp)
+                            ) {
+                                vm.savedCodes.forEach { saved ->
+                                    Surface(
+                                        onClick={vm.openSaved(saved.name);scope.launch{pager.animateScrollToPage(1)}},
+                                        color=if(vm.currentFileName.substringBeforeLast('.').replace('_',' ')==saved.name) Color.White.copy(alpha=0.15f) else Color.White.copy(alpha=0.045f),
+                                        shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                                        modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.10f),androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
+                                    ) {
+                                        Row(Modifier.padding(horizontal=15.dp,vertical=14.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                            Text("⌘",color=Color.White,fontSize=18.sp)
+                                            Spacer(Modifier.width(12.dp))
+                                            Column(Modifier.weight(1f)) {
+                                                Text(saved.name,color=Color.White,fontSize=15.sp,fontWeight=FontWeight.SemiBold)
+                                                Text(".py  •  auto-saved",color=Color.Gray,fontSize=10.sp)
+                                            }
+                                            Text("›",color=Color.Gray,fontSize=24.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    1 -> Column(Modifier.fillMaxSize().background(bg)) {
+                        if(vm.showFileInfo) {
+                        Row(
+                            Modifier.fillMaxWidth().height(48.dp).padding(horizontal=8.dp,vertical=2.dp)
+                                .background(Color(0xFF181F29),androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                .border(1.dp,Color.White.copy(alpha=.06f),androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                                .padding(start=12.dp,end=6.dp),
+                            verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                        ){
+                            Image(
+                                painter=painterResource(com.pydroidx.app.R.drawable.ic_python_editor),
+                                contentDescription="Python file",
+                                modifier=Modifier.size(24.dp)
+                            )
+                            Spacer(Modifier.width(9.dp))
+                            Text(vm.currentFileName,color=Color.White,fontSize=14.sp,fontWeight=FontWeight.SemiBold,
+                                maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.weight(1f,fill=false).widthIn(max=112.dp))
+                            Spacer(Modifier.width(7.dp))
+                            Box(Modifier.size(6.dp).background(Color(0xFF8AB4F8),androidx.compose.foundation.shape.CircleShape))
+                            Spacer(Modifier.width(8.dp))
+                            IconButton(onClick={editorView?.undoCode()},modifier=Modifier.size(34.dp)) {
+                                IdeGlyph("Undo",Color(0xFFD8D9E0))
+                            }
+                            IconButton(onClick={editorView?.redoCode()},modifier=Modifier.size(34.dp)) {
+                                IdeGlyph("Redo",Color(0xFFD8D9E0))
+                            }
+                            Spacer(Modifier.weight(0.1f))
+                            TextButton(
+                                onClick={scope.launch{pager.animateScrollToPage(0)}},
+                                contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
+                            ){IdeGlyph("Close",Color(0xFF8C8C94))}
+                            TextButton(
+                                onClick={vm.makeNewCode()},
+                                contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
+                            ){IdeGlyph("New file",Color(0xFFBFC0C7))}
+                        }
+                        }
+                        AndroidView(
+                            factory={context->PythonEditorView(context).also{view->
+                                editorView=view
+                                view.onCodeChanged=vm::updateCode
+                                view.requestSmartCompletion=vm::requestCompletion
+                                view.requestCodeDiagnostics=vm::requestDiagnostics
+                                view.setCodeIfDifferent(vm.code,revision)
+                            }},
+                            update={view->
+                                view.setBackgroundColor(bg.toArgb())
+                                view.setCodeIfDifferent(vm.code,revision)
+                                view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting,vm.fontName,
+                                    vm.lineSpacing,vm.editorPadding,vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness,
+                                    vm.lineNumbers,vm.highlightCurrentLine,vm.customFontPath,
+                                    listOf(vm.editorTextHex,vm.commentHex,vm.stringHex,vm.numberHex,vm.keywordHex,vm.functionHex,vm.variableHex))
+                            },
+                            modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
+                        )
+                        if(vm.showToolbar) {
+                            Surface(
+                                color=safeColor(vm.toolbarHex,0xFF050505),
+                                shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                                border=BorderStroke(1.dp,Color.White.copy(alpha=.16f)),
+                                modifier=Modifier.fillMaxWidth().padding(horizontal=10.dp,vertical=5.dp)
+                            ){
+                                Row(
+                                    Modifier.fillMaxWidth().height(vm.toolbarHeight.coerceIn(44f, 60f).dp)
+                                        .horizontalScroll(rememberScrollState())
+                                        .padding(horizontal=7.dp,vertical=6.dp),
+                                    horizontalArrangement=Arrangement.spacedBy(8.dp),
+                                    verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                                ){
+                                    val matchingPairs = mapOf("(" to ")", "[" to "]", "{" to "}", "\"" to "\"", "'" to "'")
+                                    listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach{key->
+                                        OutlinedButton(
+                                            onClick={
+                                                when {
+                                                    key=="Tab"&&editorView?.acceptGhostSuggestion()==true -> Unit
+                                                    key in matchingPairs -> editorView?.insertPair(key, matchingPairs.getValue(key))
+                                                    key in setOf(")", "]", "}") -> editorView?.insertClosingOrSkip(key)
+                                                    else -> editorView?.insertAtCursor(if(key=="Tab")"    " else key)
+                                                }
+                                                
+                                            },
+                                            modifier=Modifier.width(if(key=="Tab")46.dp else 36.dp).fillMaxHeight(),
+                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(11.dp),
+                                            border=BorderStroke(1.dp,Color.White.copy(alpha=.14f)),
+                                            colors=ButtonDefaults.outlinedButtonColors(
+                                                containerColor=Color.White.copy(alpha=.025f),contentColor=Color.White
+                                            ),
+                                            contentPadding=PaddingValues(0.dp)
+                                        ){Text(key,fontSize=16.sp)}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    2 -> Column(
+                        Modifier.fillMaxSize().background(bg).padding(horizontal=10.dp,vertical=6.dp)
+                    ) {
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                            Box(Modifier.size(39.dp)){
+                                Box(
+                                    Modifier.width(25.dp).height(18.dp)
+                                        .background(Color.White,androidx.compose.foundation.shape.RoundedCornerShape(7.dp))
+                                        .align(androidx.compose.ui.Alignment.TopStart)
+                                ){
+                                    Box(Modifier.size(4.dp).background(Color.Black,androidx.compose.foundation.shape.CircleShape).align(androidx.compose.ui.Alignment.TopStart).offset(6.dp,4.dp))
+                                }
+                                Box(
+                                    Modifier.width(25.dp).height(18.dp)
+                                        .background(Color(0xFFB8B8BE),androidx.compose.foundation.shape.RoundedCornerShape(7.dp))
+                                        .align(androidx.compose.ui.Alignment.BottomEnd)
+                                ){
+                                    Box(Modifier.size(4.dp).background(Color.Black,androidx.compose.foundation.shape.CircleShape).align(androidx.compose.ui.Alignment.BottomEnd).offset((-6).dp,(-4).dp))
+                                }
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)){
+                                Text("PYTHON CONSOLE",color=Color.White,fontSize=17.sp,fontWeight=FontWeight.SemiBold,letterSpacing=1.1.sp)
+                                Text("CPython 3.14",color=Color(0xFF77777F),fontSize=10.sp,fontFamily=FontFamily.Monospace)
+                            }
+                            TextButton(onClick={vm.clearOutput()},contentPadding=PaddingValues(8.dp),modifier=Modifier.size(42.dp)){
+                                Text("⌫",color=Color(0xFFB8B8BE),fontSize=21.sp)
+                            }
+                            Spacer(Modifier.width(6.dp))
+                            Button(
+                                onClick={if(vm.running) vm.stop() else {runOrigin=consoleRunOrigin;runBurst++;vm.run()}},
+                                colors=ButtonDefaults.buttonColors(containerColor=Color.White,contentColor=Color.Black),
+                                shape=androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
+                                contentPadding=PaddingValues(horizontal=18.dp,vertical=10.dp),
+                                modifier=Modifier.border(1.dp,Color.White.copy(alpha=.24f),androidx.compose.foundation.shape.RoundedCornerShape(22.dp))
+                                    .onGloballyPositioned { coords ->
+                                        consoleRunOrigin=coords.positionInRoot()+Offset(coords.size.width/2f,coords.size.height/2f)
+                                    }
+                            ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                            listOf("Python","Terminal").forEach { mode ->
+                                val selected=vm.consoleMode==mode
+                                val modeColor by androidx.compose.animation.animateColorAsState(
+                                    if(selected) Color(0xFF655C7A) else Color.Transparent,
+                                    animationSpec=tween(if(motionAllowed) 220 else 0),label="console mode")
+                                val modeScale by animateFloatAsState(if(selected && motionAllowed) 1.04f else 1f,
                                     animationSpec=spring(dampingRatio=Spring.DampingRatioMediumBouncy),label="console mode scale")
                                 OutlinedButton(onClick={if(!vm.running){vm.consoleMode=mode;vm.input="";consoleInputValue=TextFieldValue("")}},
                                     colors=ButtonDefaults.outlinedButtonColors(containerColor=modeColor,contentColor=Color.White),

@@ -27,6 +27,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -50,6 +52,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -93,8 +96,6 @@ import java.net.URL
 data class AiMessage(val fromUser: Boolean, val text: String)
 data class AiSlotConfig(val index: Int, val label: String, val provider: String, val endpoint: String, val model: String, val key: String)
 data class CodeDiagnostic(val start: Int, val end: Int, val message: String, val fatal: Boolean = false)
-data class CompletionItem(val label: String, val suffix: String, val cursorBack: Int, val type: String, val doc: String)
-data class CompletionResult(val suffix: String, val cursorBack: Int, val items: List<CompletionItem>)
 data class RuntimeIssue(
     val title: String, val explanation: String, val line: Int, val codeLine: String,
     val hint: String, val details: String, val replaceFrom: String = "", val replaceTo: String = ""
@@ -174,7 +175,7 @@ class IdeViewModel : ViewModel() {
     var lineNumbers by mutableStateOf(true)
     var highlightCurrentLine by mutableStateOf(true)
     var accentHex by mutableStateOf("#FFFFFF")
-    var backgroundHex by mutableStateOf("#000000")
+    var backgroundHex by mutableStateOf("#0B0F14")
     var motionStyle by mutableStateOf("Fluid spring")
     var motionIntensity by mutableFloatStateOf(0.5f)
     var motionEnabled by mutableStateOf(true)
@@ -189,7 +190,7 @@ class IdeViewModel : ViewModel() {
     var functionHex by mutableStateOf("#DCDCAA")
     var variableHex by mutableStateOf("#9CDCFE")
     var consoleTextHex by mutableStateOf("#E6F5FF")
-    var consoleBackgroundHex by mutableStateOf("#030303")
+    var consoleBackgroundHex by mutableStateOf("#080B0F")
     var toolbarHex by mutableStateOf("#050505")
     var tabBarHex by mutableStateOf("#050505")
     var userBubbleHex by mutableStateOf("#082F36")
@@ -225,6 +226,15 @@ class IdeViewModel : ViewModel() {
     fun initialize(context: Context) {
         aiKeys = SecureAiKeyStore(context.applicationContext)
         settings = context.getSharedPreferences("ide_settings", Context.MODE_PRIVATE)
+        // Migrate old defaults once; subsequent custom appearance choices are respected.
+        if (!settings.getBoolean("mobile_editor_v2", false)) {
+            val edit = settings.edit().putBoolean("mobile_editor_v2", true).putBoolean("page_dots", false)
+            listOf("background_hex" to "#11161D", "console_background_hex" to "#11161D",
+                "toolbar_hex" to "#181F29", "tab_bar_hex" to "#181F29").forEach { (key, value) ->
+                if (settings.getString(key, "").orEmpty().uppercase() in listOf("", "#000000", "#030303", "#050505", "#0B0F14", "#080B0F")) edit.putString(key, value)
+            }
+            edit.apply()
+        }
         editorFontSize = settings.getFloat("editor_font", 16f)
         terminalFontSize = settings.getFloat("terminal_font", 13f)
         uiScale = settings.getFloat("ui_scale", 1f)
@@ -258,7 +268,7 @@ class IdeViewModel : ViewModel() {
         lineNumbers = settings.getBoolean("line_numbers", true)
         highlightCurrentLine = settings.getBoolean("current_line", true)
         accentHex = settings.getString("accent_hex", "#FFFFFF") ?: "#FFFFFF"
-        backgroundHex = settings.getString("background_hex", "#000000") ?: "#000000"
+        backgroundHex = settings.getString("background_hex", "#11161D") ?: "#11161D"
         motionStyle = settings.getString("motion_style", "Fluid spring") ?: "Fluid spring"
         motionIntensity = settings.getFloat("motion_intensity", 0.5f)
         motionEnabled = settings.getBoolean("motion_enabled", true)
@@ -271,7 +281,7 @@ class IdeViewModel : ViewModel() {
         functionHex=settings.getString("function_hex","#DCDCAA")?:"#DCDCAA"
         variableHex=settings.getString("variable_hex","#9CDCFE")?:"#9CDCFE"
         consoleTextHex=settings.getString("console_text_hex","#E6F5FF")?:"#E6F5FF"
-        consoleBackgroundHex=settings.getString("console_background_hex","#030303")?:"#030303"
+        consoleBackgroundHex=settings.getString("console_background_hex","#11161D")?:"#11161D"
         toolbarHex=settings.getString("toolbar_hex","#050505")?:"#050505"
         tabBarHex=settings.getString("tab_bar_hex","#050505")?:"#050505"
         userBubbleHex=settings.getString("user_bubble_hex","#082F36")?:"#082F36"
@@ -469,25 +479,26 @@ class IdeViewModel : ViewModel() {
         askAi()
     }
     fun rejectTeaching() { teachingOffer = null }
+    private val completionWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private var completionTask: java.util.concurrent.Future<*>? = null
     fun requestCompletion(source: String, cursor: Int, deliver: (CompletionResult) -> Unit) {
-        if (!autocomplete || !::projectDir.isInitialized) return
-        thread(name="PyDroidX-Jedi") {
-            runCatching {
+        if (!autocomplete || !::projectDir.isInitialized) { deliver(CompletionResult(emptyList())); return }
+        completionTask?.cancel(false)
+        completionTask = completionWorker.submit {
+            val items = runCatching {
                 val raw = Python.getInstance().getModule("runner")
                     .callAttr("complete", source, cursor, projectDir.absolutePath).toString()
-                val json = JSONObject(raw)
-                val suffix = json.optString("suffix")
-                val rawItems = json.optJSONArray("items") ?: JSONArray()
-                val items = (0 until rawItems.length()).map { index ->
+                val rawItems = JSONObject(raw).optJSONArray("items") ?: JSONArray()
+                (0 until rawItems.length()).map { index ->
                     rawItems.getJSONObject(index).let { item ->
-                        CompletionItem(
-                            item.optString("label"), item.optString("suffix"),
-                            item.optInt("cursor_back", 0), item.optString("type"), item.optString("doc")
-                        )
+                        CompletionItem(item.optString("label"), item.optString("insert_text"),
+                            item.optInt("replace_start", cursor), item.optInt("replace_end", cursor),
+                            item.optInt("cursor_back", 0), item.optString("type"),
+                            item.optString("signature"), item.optString("doc"))
                     }
                 }
-                if (suffix.isNotEmpty()) deliver(CompletionResult(suffix, json.optInt("cursor_back", 0), items))
-            }
+            }.getOrDefault(emptyList())
+            deliver(CompletionResult(items))
         }
     }
     fun requestDiagnostics(source: String, deliver: (List<CodeDiagnostic>) -> Unit) {
@@ -718,6 +729,10 @@ class IdeViewModel : ViewModel() {
         }
     }
     private fun appendOutput(value: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { appendOutput(value) }
+            return
+        }
         outputBuffer.append(value)
         if (!outputFlushScheduled) {
             outputFlushScheduled = true
@@ -798,7 +813,6 @@ class IdeViewModel : ViewModel() {
         val command = input.trim()
         inputHistory.record(command)
         input = ""
-        appendOutput("\$ $command\n")
         if (command == "clear") { clearOutput(); return }
         running = true
         worker = thread(name = "PY4U-Terminal") {
@@ -839,6 +853,8 @@ class IdeViewModel : ViewModel() {
     }
 
     override fun onCleared() {
+        completionTask?.cancel(true)
+        completionWorker.shutdownNow()
         stopRequested = true
         stdin.offer(stopInputSignal)
         super.onCleared()
@@ -852,7 +868,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private class PythonEditorView(context: Context) : EditText(context) {
+internal class PythonEditorView(context: Context) : EditText(context) {
     var onCodeChanged: ((String) -> Unit)? = null
     var requestSmartCompletion: ((String, Int, (CompletionResult) -> Unit) -> Unit)? = null
     var requestCodeDiagnostics: ((String, (List<CodeDiagnostic>) -> Unit) -> Unit)? = null
@@ -866,10 +882,15 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var highlightingEnabled = true
     private var highlightDelayMs = 220L
     private var autocompleteEnabled = true
-    private var ghostAlpha = 122
-    private var ghostSuffix: String? = null
-    private var ghostCursorBack = 0
-    private var completionItems: List<CompletionItem> = emptyList()
+    private val completionSession = CompletionSession()
+    private val completionItems get() = completionSession.items
+    private var selectedCompletion = 0
+    private var readyForSelectionChanges = false
+    private var popupOwnsGesture = false
+    private var popupTouchMoved = false
+    private var completionPopupBounds: android.graphics.RectF? = null
+    private var completionPopupRowHeight = 0f
+    private var completionTouchIndex = -1
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
     private var touchStartX = 0f
     private var touchStartY = 0f
@@ -888,21 +909,6 @@ private class PythonEditorView(context: Context) : EditText(context) {
     private var variableColor=AndroidColor.rgb(156,220,254)
     private var lastPreferenceSignature: String? = null
     private val gutterWidth get() = if(showLineNumbers) (52 * resources.displayMetrics.density).toInt() else 0
-    private val completions = linkedMapOf(
-        "print" to "print()", "input" to "input()", "range" to "range()", "len" to "len()",
-        "str" to "str()", "int" to "int()", "float" to "float()", "list" to "list()",
-        "dict" to "dict()", "set" to "set()", "tuple" to "tuple()", "bool" to "bool()",
-        "open" to "open()", "sum" to "sum()", "min" to "min()", "max" to "max()",
-        "abs" to "abs()", "all" to "all()", "any" to "any()", "enumerate" to "enumerate()",
-        "zip" to "zip()", "map" to "map()", "filter" to "filter()", "sorted" to "sorted()",
-        "reversed" to "reversed()", "type" to "type()", "isinstance" to "isinstance()",
-        "super" to "super()", "property" to "property()", "format" to "format()",
-        "import" to "import ", "from" to "from ", "return" to "return ",
-        "def" to "def function():\n    pass", "class" to "class Name:\n    pass",
-        "if" to "if condition:\n    pass", "elif" to "elif condition:\n    pass",
-        "else" to "else:\n    pass", "for" to "for item in items:\n    pass",
-        "while" to "while condition:\n    pass", "try" to "try:\n    pass\nexcept Exception:\n    pass"
-    )
     private val keywords = setOf(
         "and", "as", "assert", "async", "await", "break", "case", "class", "continue",
         "def", "del", "elif", "else", "except", "finally", "for", "from", "global",
@@ -935,31 +941,51 @@ private class PythonEditorView(context: Context) : EditText(context) {
         }
     }
     private val completionRunnable = Runnable {
-        if (!autocompleteEnabled) return@Runnable
+        if (!autocompleteEnabled || !hasFocus() || selectionStart != selectionEnd) return@Runnable
         val snapshot = text.toString()
         val cursor = selectionStart
-        if (snapshot.isEmpty() || snapshot.length > 200_000 || cursor < 0 || cursor > snapshot.length) {
-            ghostSuffix = null
-            invalidate()
-            return@Runnable
-        }
-        val lineStart = snapshot.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)) + 1
-        val currentLine = snapshot.substring(lineStart.coerceIn(0,cursor), cursor)
-        if (currentLine.isBlank()) { ghostSuffix = null; invalidate(); return@Runnable }
+        if (snapshot.isEmpty() || snapshot.length > 200_000 || cursor !in 1..snapshot.length) return@Runnable
+        if (!(snapshot[cursor - 1].isLetterOrDigit() || snapshot[cursor - 1] in "_.")) return@Runnable
+        val token = completionSession.generation
         requestSmartCompletion?.invoke(snapshot, cursor) { result ->
             post {
-                if (text.toString() == snapshot && selectionStart == cursor && result.suffix.isNotEmpty()) {
-                    ghostSuffix = result.suffix
-                    ghostCursorBack = result.cursorBack
-                    completionItems = result.items
+                if (hasFocus() && autocompleteEnabled && text.toString() == snapshot &&
+                    selectionStart == cursor && selectionEnd == cursor &&
+                    completionSession.offer(token, snapshot, cursor, result.items)) {
+                    selectedCompletion = 0
                     invalidate()
                 }
             }
         }
     }
 
+    private fun clearCompletion() {
+        removeCallbacks(completionRunnable)
+        completionSession.clear()
+        completionPopupBounds = null
+        invalidate()
+    }
+
+    private fun scheduleCompletion() {
+        clearCompletion()
+        if (autocompleteEnabled && hasFocus()) postDelayed(completionRunnable, CompletionSession.DELAY_MS)
+    }
+
+    override fun onSelectionChanged(start: Int, end: Int) {
+        super.onSelectionChanged(start, end)
+        // TextView invokes this during construction, before Kotlin fields exist.
+        if (readyForSelectionChanges && !applyingHighlight && !applyingHistory) scheduleCompletion()
+    }
+
+    override fun onDetachedFromWindow() {
+        clearCompletion()
+        removeCallbacks(highlightRunnable)
+        removeCallbacks(diagnosticsRunnable)
+        super.onDetachedFromWindow()
+    }
+
     init {
-        setBackgroundColor(AndroidColor.BLACK)
+        setBackgroundColor(AndroidColor.rgb(11, 15, 20))
         setTextColor(AndroidColor.rgb(212, 212, 212))
         setHintTextColor(AndroidColor.DKGRAY)
         typeface = Typeface.MONOSPACE
@@ -992,12 +1018,9 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     onCodeChanged?.invoke(s?.toString().orEmpty())
                     removeCallbacks(highlightRunnable)
                     postDelayed(highlightRunnable, highlightDelayMs)
-                    post { updateGhostSuggestion() }
-                    removeCallbacks(completionRunnable)
-                    postDelayed(completionRunnable, 2_000)
+                    scheduleCompletion()
                     removeCallbacks(diagnosticsRunnable)
                     diagnostics = emptyList()
-                    completionItems = emptyList()
                     invalidate()
                     val safeStart = start.coerceIn(0,s?.length ?: 0)
                     val safeEnd = (start + count).coerceIn(safeStart,s?.length ?: safeStart)
@@ -1007,7 +1030,9 @@ private class PythonEditorView(context: Context) : EditText(context) {
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
+        readyForSelectionChanges = true
         setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) scheduleCompletion() else clearCompletion()
             if (!hasFocus && text.isNotBlank()) {
                 removeCallbacks(diagnosticsRunnable)
                 postDelayed(diagnosticsRunnable, 120)
@@ -1019,10 +1044,11 @@ private class PythonEditorView(context: Context) : EditText(context) {
         if (loadedRevision != revision) {
             history.clear()
             diagnostics = emptyList()
-            ghostSuffix = null
+            clearCompletion()
             loadedRevision = revision
         }
         if (text.toString() == value) return
+        clearCompletion()
         applyingHighlight = true
         val cursor = selectionStart.coerceAtLeast(0).coerceAtMost(value.length)
         setText(value)
@@ -1033,6 +1059,8 @@ private class PythonEditorView(context: Context) : EditText(context) {
 
     private fun restoreHistory(snapshot: EditorSnapshot?) {
         snapshot ?: return
+        clearCompletion()
+        diagnostics = emptyList()
         applyingHistory = true
         setText(snapshot.text)
         setSelection(snapshot.cursor.coerceIn(0, snapshot.text.length))
@@ -1071,7 +1099,6 @@ private class PythonEditorView(context: Context) : EditText(context) {
         highlightingEnabled = syntax
         highlightDelayMs = highlightDelay.toLong()
         autocompleteEnabled = autocomplete
-        ghostAlpha = (ghostBrightness * 255).toInt().coerceIn(35,210)
         showLineNumbers = lineNumbers
         showCurrentLine = currentLine
         fun parsed(index:Int,fallback:Int)=runCatching{AndroidColor.parseColor(palette[index])}.getOrDefault(fallback)
@@ -1095,100 +1122,121 @@ private class PythonEditorView(context: Context) : EditText(context) {
             editable?.getSpans(0, editable.length, ForegroundColorSpan::class.java)?.forEach { editable.removeSpan(it) }
             setTextColor(editorTextColor)
         }
-        updateGhostSuggestion()
+        scheduleCompletion()
     }
 
-    private fun updateGhostSuggestion() {
-        if (!autocompleteEnabled || !hasFocus()) { ghostSuffix=null; invalidate(); return }
-        val cursor = selectionStart
-        if (text.isEmpty() || cursor < 0 || cursor > text.length) {
-            ghostSuffix=null
-            completionItems=emptyList()
-            invalidate()
-            return
-        }
-        var start = cursor
-        while (start > 0 && (text[start-1].isLetterOrDigit() || text[start-1]=='_')) start--
-        val prefix = text.substring(start,cursor)
-        val projectNames = Regex("\\b(?:def|class)\\s+([A-Za-z_]\\w*)|\\b([A-Za-z_]\\w*)\\s*=")
-            .findAll(text).flatMap { it.groupValues.drop(1).asSequence() }.filter { it.isNotEmpty() }
-        val localMatch = if (prefix.isNotEmpty()) completions.entries.firstOrNull {
-            it.key.startsWith(prefix, ignoreCase = false) && it.key != prefix
-        } else null
-        val projectMatch = if (prefix.isNotEmpty()) projectNames.firstOrNull { it.startsWith(prefix) && it != prefix } else null
-        ghostSuffix = localMatch?.value?.removePrefix(prefix) ?: projectMatch?.removePrefix(prefix)
-        ghostCursorBack = if (ghostSuffix?.endsWith("()") == true) 1 else 0
-        invalidate()
+    fun acceptGhostSuggestion(): Boolean = acceptCompletion(selectedCompletion)
+
+    private fun completionIndexAt(x: Float, y: Float): Int {
+        val bounds = completionPopupBounds ?: return -1
+        if (!bounds.contains(x, y) || completionPopupRowHeight <= 0f) return -1
+        val index = ((y - bounds.top) / completionPopupRowHeight).toInt()
+        return index.takeIf { it in completionItems.indices } ?: -1
     }
 
-    fun acceptGhostSuggestion(): Boolean {
-        val suffix = ghostSuffix ?: return false
-        val cursor = selectionStart.coerceAtLeast(0)
-        text.insert(cursor,suffix)
-        val newCursor = cursor + suffix.length - ghostCursorBack
-        setSelection(newCursor.coerceAtMost(text.length))
-        ghostSuffix=null
-        completionItems=emptyList()
-        invalidate()
+    private fun acceptCompletion(index: Int): Boolean {
+        val item = completionItems.getOrNull(index) ?: return false
+        val edit = completionSession.edit(index, text.toString(), selectionStart, selectionEnd) ?: return false
+        clearCompletion()
+        beginBatchEdit()
+        try {
+            text.replace(item.replaceStart, item.replaceEnd, item.insertText)
+            setSelection(edit.cursor)
+        } finally { endBatchEdit() }
+        clearCompletion()
         return true
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if(event.actionMasked==MotionEvent.ACTION_DOWN && completionItems.isNotEmpty()){
-            val d=resources.displayMetrics.density; val l=layout; val c=selectionStart.coerceIn(0,text.length)
-            if(l!=null){val line=l.getLineForOffset(c);val px=l.getPrimaryHorizontal(c)+totalPaddingLeft-scrollX;val py=l.getLineBaseline(line)+totalPaddingTop-scrollY
-                val left=(px-8f*d).coerceIn(8f*d,(width-300f*d).coerceAtLeast(8f*d));val row=38f*d;val docs=66f*d;val pw=minOf(330f*d,width-left-8f*d);val ph=row*completionItems.size+docs
-                var top=py+12f*d;if(top+ph>height)top=(py-ph-24f*d).coerceAtLeast(8f*d)
-                if(event.x in left..(left+pw) && event.y in top..(top+row*completionItems.size)){val i=((event.y-top)/row).toInt();val item=completionItems.getOrNull(i)
-                    if(item!=null){text.insert(c,item.suffix);setSelection((c+item.suffix.length-item.cursorBack).coerceIn(0,text.length));ghostSuffix=null;completionItems=emptyList();invalidate();return true}}
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            touchStartX = event.x; touchStartY = event.y
+            touchStartScrollX = scrollX
+            touchAxis = 0
+            completionTouchIndex = completionIndexAt(event.x, event.y)
+            popupOwnsGesture = completionTouchIndex >= 0
+            popupTouchMoved = false
+            parent?.requestDisallowInterceptTouchEvent(true)
+            if (popupOwnsGesture) {
+                selectedCompletion = completionTouchIndex
+                invalidate()
+                return true
             }
+            clearCompletion()
         }
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                touchStartX = event.x
-                touchStartY = event.y
-                touchStartScrollX = scrollX
-                touchAxis = 0
-                parent?.requestDisallowInterceptTouchEvent(true)
+        if (popupOwnsGesture) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> {
+                    if (kotlin.math.abs(event.x - touchStartX) > touchSlop ||
+                        kotlin.math.abs(event.y - touchStartY) > touchSlop) popupTouchMoved = true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val index = completionTouchIndex
+                    popupOwnsGesture = false
+                    if (!popupTouchMoved && completionIndexAt(event.x, event.y) == index) {
+                        performClick()
+                        acceptCompletion(index)
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> popupOwnsGesture = false
             }
-            MotionEvent.ACTION_MOVE -> {
-                val dx = kotlin.math.abs(event.x - touchStartX)
-                val dy = kotlin.math.abs(event.y - touchStartY)
-                if (touchAxis == 0 && maxOf(dx, dy) > touchSlop) touchAxis = if (dy >= dx) 1 else 2
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> touchAxis = 0
+            return true
+        }
+        if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+            val dx = kotlin.math.abs(event.x - touchStartX)
+            val dy = kotlin.math.abs(event.y - touchStartY)
+            if (touchAxis == 0 && maxOf(dx, dy) > touchSlop) touchAxis = if (dx > dy * 1.5f) 2 else 1
         }
         val handled = super.onTouchEvent(event)
         if (touchAxis == 1 && scrollX != touchStartScrollX) scrollTo(touchStartScrollX, scrollY)
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) touchAxis = 0
         return handled
     }
 
+    override fun performClick(): Boolean { super.performClick(); return true }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if(keyCode==KeyEvent.KEYCODE_TAB && acceptGhostSuggestion()) return true
+        if (completionItems.isNotEmpty()) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_TAB -> if (acceptGhostSuggestion()) return true
+                KeyEvent.KEYCODE_DPAD_DOWN -> { selectedCompletion = (selectedCompletion + 1) % completionItems.size; invalidate(); return true }
+                KeyEvent.KEYCODE_DPAD_UP -> { selectedCompletion = (selectedCompletion + completionItems.size - 1) % completionItems.size; invalidate(); return true }
+                KeyEvent.KEYCODE_ESCAPE -> { clearCompletion(); return true }
+            }
+        }
         return super.onKeyDown(keyCode,event)
     }
 
     override fun onDraw(canvas: Canvas) {
         val editorLayout = layout
+        canvas.save()
+        canvas.translate(scrollX.toFloat(), scrollY.toFloat())
         if (editorLayout != null && editorLayout.lineCount > 0) {
             if (showCurrentLine && selectionStart >= 0) {
                 val activeLine = editorLayout.getLineForOffset(selectionStart.coerceAtMost(text.length))
                 val top = editorLayout.getLineTop(activeLine) + totalPaddingTop - scrollY
                 val bottom = editorLayout.getLineBottom(activeLine) + totalPaddingTop - scrollY
                 canvas.drawRect(gutterWidth.toFloat(), top.toFloat(), width.toFloat(), bottom.toFloat(), Paint().apply {
-                    color = AndroidColor.rgb(8, 13, 20)
+                    color = AndroidColor.rgb(24, 32, 42)
                 })
             }
             if (showLineNumbers) {
                 canvas.drawRect(0f, 0f, gutterWidth.toFloat(), height.toFloat(), Paint().apply {
-                    color = AndroidColor.rgb(3, 3, 3)
+                    color = AndroidColor.rgb(14, 19, 26)
                 })
                 canvas.drawRect((gutterWidth - 1).toFloat(), 0f, gutterWidth.toFloat(), height.toFloat(), Paint().apply {
                     color = AndroidColor.rgb(35, 35, 35)
                 })
             }
         }
+        canvas.restore()
+        canvas.save()
+        canvas.clipRect((scrollX + gutterWidth).toFloat(), scrollY.toFloat(),
+            (scrollX + width).toFloat(), (scrollY + height).toFloat())
         super.onDraw(canvas)
+        canvas.restore()
+        canvas.save()
+        canvas.translate(scrollX.toFloat(), scrollY.toFloat())
+        try {
         if (editorLayout != null && editorLayout.lineCount > 0) {
             val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = AndroidColor.argb(72, 120, 132, 150)
@@ -1264,53 +1312,19 @@ private class PythonEditorView(context: Context) : EditText(context) {
                 canvas.drawText(logicalLine.toString(), right, baseline.toFloat(), numberPaint)
             }
         }
-        val suffix=ghostSuffix ?: return
-        val cursor=selectionStart
-        val currentLayout=editorLayout ?: return
-        if(currentLayout.lineCount<=0 || text.isEmpty() || cursor<0 || cursor>text.length) return
-        val line=currentLayout.getLineForOffset(cursor)
-        val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color=AndroidColor.argb(ghostAlpha,190,200,210)
-            textSize=this@PythonEditorView.textSize
-            typeface=this@PythonEditorView.typeface
-        }
-        val x=currentLayout.getPrimaryHorizontal(cursor)+totalPaddingLeft-scrollX
-        val y=currentLayout.getLineBaseline(line).toFloat()+totalPaddingTop-scrollY
-        canvas.drawText(suffix.substringBefore('\n'),x,y,paint)
-
-        if (completionItems.isNotEmpty()) {
-            val density = resources.displayMetrics.density
-            val popupLeft = (x - 8f * density).coerceIn(8f * density, (width - 300f * density).coerceAtLeast(8f * density))
-            val rowHeight = 38f * density
-            val docsHeight = 66f * density
-            val popupWidth = minOf(330f * density, width - popupLeft - 8f * density)
-            val popupHeight = rowHeight * completionItems.size + docsHeight
-            var popupTop = y + 12f * density
-            if (popupTop + popupHeight > height) popupTop = (y - popupHeight - 24f * density).coerceAtLeast(8f * density)
-            val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(31, 32, 36) }
-            canvas.drawRoundRect(popupLeft, popupTop, popupLeft + popupWidth, popupTop + popupHeight, 16f, 16f, panelPaint)
-            val selectedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(0, 91, 181) }
-            canvas.drawRoundRect(popupLeft + 5f, popupTop + 5f, popupLeft + popupWidth - 5f, popupTop + rowHeight, 10f, 10f, selectedPaint)
-            val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.WHITE; textSize = 15f * density; typeface = Typeface.DEFAULT_BOLD }
-            val typePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(155, 158, 170); textSize = 11f * density }
-            completionItems.forEachIndexed { index, item ->
-                val baseline = popupTop + index * rowHeight + 25f * density
-                val cubePaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=AndroidColor.rgb(191,91,255);style=Paint.Style.STROKE;strokeWidth=1.8f*density;strokeJoin=Paint.Join.ROUND}
-                val cx=popupLeft+20f*density; val cy=baseline-5.5f*density; val cw=8f*density; val ch=6f*density; val cd=4.5f*density
-                val cube=android.graphics.Path().apply{moveTo(cx,cy-ch);lineTo(cx+cw,cy-cd);lineTo(cx+cw,cy+ch);lineTo(cx,cy+ch+cd);lineTo(cx-cw,cy+ch);lineTo(cx-cw,cy-cd);close();moveTo(cx-cw,cy-cd);lineTo(cx,cy);lineTo(cx+cw,cy-cd);moveTo(cx,cy);lineTo(cx,cy+ch+cd)}
-                canvas.drawPath(cube,cubePaint)
-                canvas.drawText(item.label.take(30), popupLeft + 38f * density, baseline, labelPaint)
-                val typeWidth = typePaint.measureText(item.type)
-                canvas.drawText(item.type, popupLeft + popupWidth - typeWidth - 14f * density, baseline, typePaint)
-            }
-            val dividerY = popupTop + rowHeight * completionItems.size
-            canvas.drawLine(popupLeft + 10f, dividerY, popupLeft + popupWidth - 10f, dividerY, Paint().apply { color = AndroidColor.rgb(70, 72, 78) })
-            val doc = completionItems.first().doc.replace('\n', ' ').replace(Regex("\\s+"), " ").ifBlank { "Python ${completionItems.first().type}" }.take(92)
-            canvas.drawText(doc.take(70), popupLeft + 14f * density, dividerY + 25f * density, typePaint)
-            canvas.drawText(doc.drop(70).take(70), popupLeft + 14f * density, dividerY + 43f * density, typePaint)
-            val tabText="Tab to accept"
-            canvas.drawText(tabText, popupLeft + popupWidth - typePaint.measureText(tabText) - 14f*density, dividerY + 60f * density, typePaint)
-        }
+        completionPopupBounds = null
+        if (completionItems.isEmpty() || selectionStart < 0 || selectionStart != selectionEnd) return
+        val currentLayout = editorLayout ?: return
+        val cursor = selectionStart.coerceAtMost(text.length)
+        val line = currentLayout.getLineForOffset(cursor)
+        val x = currentLayout.getPrimaryHorizontal(cursor) + totalPaddingLeft - scrollX
+        val caretTop = currentLayout.getLineTop(line) + totalPaddingTop - scrollY
+        val caretBottom = currentLayout.getLineBottom(line) + totalPaddingTop - scrollY
+        val popup = CompletionPopup.draw(canvas, width, height, x, caretTop.toFloat(), caretBottom.toFloat(),
+            resources.displayMetrics.density, completionItems, selectedCompletion)
+        completionPopupBounds = popup?.first
+        completionPopupRowHeight = popup?.second ?: 0f
+        } finally { canvas.restore() }
     }
 
     private fun highlightNow() {
@@ -1496,7 +1510,7 @@ private fun AchievementNotice(
 
 @Composable fun PyDroidX(vm: IdeViewModel) {
     fun safeColor(value:String,fallback:Long)=runCatching{Color(AndroidColor.parseColor(value))}.getOrDefault(Color(fallback))
-    val bg = safeColor(vm.backgroundHex,0xFF000000)
+    val bg = safeColor(vm.backgroundHex,0xFF0B0F14)
     val text = Color(0xFFE6F5FF)
     val accent = safeColor(vm.accentHex,0xFF00E5FF)
     val revision = vm.editorRevision
@@ -1508,7 +1522,7 @@ private fun AchievementNotice(
     val consoleInputFocus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val pages = listOf("FOLDERS", "PYTHON", "CONSOLE", "HELPER", "SETTINGS")
-    val pageIcons = listOf("▱", "", "▣", "▤", "⚙")
+    val pageIcons = listOf("Folders", "Python", "Console", "Helper", "Settings")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
     var showAiSettings by remember { mutableStateOf(false) }
     var selectedAiSlot by remember { mutableIntStateOf(0) }
@@ -1573,73 +1587,49 @@ private fun AchievementNotice(
     }
     CompositionLocalProvider(LocalDensity provides scaledDensity) {
     MaterialTheme(colorScheme = darkColorScheme(primary=accent,background=bg,surface=Color.Transparent,surfaceVariant=glass,outline=glassEdge)) {
-        Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().padding(top=8.dp).imePadding()) {
+        val keyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+        Column(Modifier.fillMaxSize().background(bg).statusBarsPadding().navigationBarsPadding().imePadding()) {
             if(vm.showHeader) {
-            Row(
-                Modifier.fillMaxWidth().height(vm.headerHeight.coerceAtLeast(82f).dp)
-                    .padding(start=10.dp,end=10.dp,top=8.dp,bottom=8.dp),
-                horizontalArrangement=Arrangement.spacedBy(8.dp),
-                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
-            ) {
                 Row(
-                    Modifier.weight(1f).fillMaxHeight()
-                        .background(Color(0xFF080B0F),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
-                        .border(1.dp,Color.White.copy(alpha=.07f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp)),
-                    horizontalArrangement=Arrangement.SpaceEvenly,
+                    Modifier.fillMaxWidth().padding(horizontal=8.dp, vertical=6.dp)
+                        .height(vm.headerHeight.coerceIn(56f, 76f).dp)
+                        .background(Color(0xFF181F29), androidx.compose.foundation.shape.RoundedCornerShape(10.dp)),
                     verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                 ) {
-                    pages.forEachIndexed { index,label ->
-                        TextButton(
-                            onClick={scope.launch { pager.animateScrollToPage(index) }},
-                            contentPadding=PaddingValues(horizontal=5.dp,vertical=0.dp)
+                    pages.forEachIndexed { index, label ->
+                        val active = pager.currentPage == index
+                        val tint = if(active) Color(0xFF32B5FF) else Color(0xFFA4ADBA)
+                        Column(
+                            Modifier.weight(1f).fillMaxHeight().clickable {
+                                scope.launch { pager.animateScrollToPage(index) }
+                            }.padding(top=8.dp),
+                            horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally,
+                            verticalArrangement=Arrangement.SpaceBetween
                         ) {
-                            Column(horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally) {
-                                if(index==1) {
-                                    Image(
-                                        painter=painterResource(com.pydroidx.app.R.drawable.ic_launcher_foreground),
-                                        contentDescription="Python",
-                                        modifier=Modifier.size(25.dp)
-                                    )
-                                } else Text(
-                                    pageIcons[index],
-                                    color=if(pager.currentPage==index) Color(0xFF15AFFF) else Color(0xFFA4A9B0),
-                                    fontSize=20.sp
-                                )
-                                Text(label,color=if(pager.currentPage==index) Color(0xFF15AFFF) else Color(0xFFC0C3C9),fontSize=8.sp)
-                                Spacer(Modifier.height(2.dp))
-                                Box(
-                                    Modifier.width(34.dp).height(3.dp).background(
-                                        if(pager.currentPage==index) Color(0xFF00AFFF) else Color.Transparent,
-                                        androidx.compose.foundation.shape.RoundedCornerShape(1.dp)
-                                    )
-                                )
-                            }
+                            if(index==1) Image(painterResource(R.drawable.ic_python_editor), "Python", Modifier.size(22.dp))
+                            else IdeGlyph(pageIcons[index], tint)
+                            Text(label, color=tint, fontSize=7.sp, maxLines=1, softWrap=false)
+                            Box(Modifier.fillMaxWidth().height(2.dp).background(if(active) tint else Color.Transparent))
                         }
                     }
+                    if(pager.currentPage==1) {
+                        Button(
+                            onClick={if(vm.running) vm.stop() else {vm.run();scope.launch{pager.animateScrollToPage(2)}}},
+                            colors=ButtonDefaults.buttonColors(
+                                containerColor=if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676),
+                                contentColor=Color.Black),
+                            shape=androidx.compose.foundation.shape.RoundedCornerShape(9.dp),
+                            contentPadding=PaddingValues(0.dp),
+                            modifier=Modifier.padding(horizontal=5.dp).width(62.dp).height(44.dp)
+                        ) { Text(if(vm.running) "■ Stop" else "▶ Start",fontSize=12.sp,fontWeight=FontWeight.Bold,maxLines=1) }
+                    }
                 }
-                if(pager.currentPage==1) {
-                    Button(
-                        onClick={
-                            if(vm.running) vm.stop()
-                            else { vm.run(); scope.launch{pager.animateScrollToPage(2)} }
-                        },
-                        colors=ButtonDefaults.buttonColors(
-                            containerColor=(if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676)).copy(alpha=0.86f),
-                            contentColor=Color.Black
-                        ),
-                        shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
-                        contentPadding=PaddingValues(horizontal=17.dp,vertical=9.dp),
-                        modifier=Modifier.fillMaxHeight().widthIn(min=86.dp)
-                            .border(1.dp,Color.White.copy(alpha=0.24f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
-                    ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
-                }
-            }
             }
             HorizontalPager(
                 state=pager,
                 modifier=Modifier.weight(1f).fillMaxWidth(),
                 beyondViewportPageCount=1,
-                userScrollEnabled=pager.currentPage != 1
+                userScrollEnabled=pager.currentPage != 1 && pager.currentPage != 2
             ) { page ->
                 val rawOffset = (pager.currentPage - page) + pager.currentPageOffsetFraction
                 val distance = rawOffset.absoluteValue.coerceIn(0f,1f)
@@ -1733,37 +1723,38 @@ private fun AchievementNotice(
                     1 -> Column(Modifier.fillMaxSize().background(bg)) {
                         if(vm.showFileInfo) {
                         Row(
-                            Modifier.fillMaxWidth().height(58.dp).padding(horizontal=10.dp,vertical=4.dp)
-                                .background(Color(0xFF080B0F),androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                            Modifier.fillMaxWidth().height(48.dp).padding(horizontal=8.dp,vertical=2.dp)
+                                .background(Color(0xFF181F29),androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
                                 .border(1.dp,Color.White.copy(alpha=.06f),androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
                                 .padding(start=12.dp,end=6.dp),
                             verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                         ){
                             Image(
-                                painter=painterResource(com.pydroidx.app.R.drawable.ic_launcher_foreground),
+                                painter=painterResource(com.pydroidx.app.R.drawable.ic_python_editor),
                                 contentDescription="Python file",
-                                modifier=Modifier.size(30.dp)
+                                modifier=Modifier.size(24.dp)
                             )
                             Spacer(Modifier.width(9.dp))
-                            Text(vm.currentFileName,color=Color.White,fontSize=16.sp,fontWeight=FontWeight.Bold)
+                            Text(vm.currentFileName,color=Color.White,fontSize=14.sp,fontWeight=FontWeight.SemiBold,
+                                maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.widthIn(max=112.dp))
                             Spacer(Modifier.width(7.dp))
                             Box(Modifier.size(6.dp).background(Color(0xFF8AB4F8),androidx.compose.foundation.shape.CircleShape))
                             Spacer(Modifier.width(8.dp))
                             IconButton(onClick={editorView?.undoCode()},modifier=Modifier.size(34.dp)) {
-                                Text("↶",color=Color(0xFFD8D9E0),fontSize=24.sp,fontWeight=FontWeight.Medium)
+                                IdeGlyph("Undo",Color(0xFFD8D9E0))
                             }
                             IconButton(onClick={editorView?.redoCode()},modifier=Modifier.size(34.dp)) {
-                                Text("↷",color=Color(0xFFD8D9E0),fontSize=24.sp,fontWeight=FontWeight.Medium)
+                                IdeGlyph("Redo",Color(0xFFD8D9E0))
                             }
                             Spacer(Modifier.weight(1f))
                             TextButton(
                                 onClick={scope.launch{pager.animateScrollToPage(0)}},
                                 contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
-                            ){Text("×",color=Color(0xFF8C8C94),fontSize=22.sp)}
+                            ){IdeGlyph("Close",Color(0xFF8C8C94))}
                             TextButton(
                                 onClick={vm.makeNewCode()},
                                 contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
-                            ){Text("+",color=Color(0xFFBFC0C7),fontSize=22.sp)}
+                            ){IdeGlyph("New file",Color(0xFFBFC0C7))}
                         }
                         }
                         AndroidView(
@@ -1775,6 +1766,7 @@ private fun AchievementNotice(
                                 view.setCodeIfDifferent(vm.code,revision)
                             }},
                             update={view->
+                                view.setBackgroundColor(bg.toArgb())
                                 view.setCodeIfDifferent(vm.code,revision)
                                 view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting,vm.fontName,
                                     vm.lineSpacing,vm.editorPadding,vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness,
@@ -1791,7 +1783,7 @@ private fun AchievementNotice(
                                 modifier=Modifier.fillMaxWidth().padding(horizontal=10.dp,vertical=5.dp)
                             ){
                                 Row(
-                                    Modifier.fillMaxWidth().height(vm.toolbarHeight.dp)
+                                    Modifier.fillMaxWidth().height(vm.toolbarHeight.coerceIn(44f, 60f).dp)
                                         .horizontalScroll(rememberScrollState())
                                         .padding(horizontal=7.dp,vertical=6.dp),
                                     horizontalArrangement=Arrangement.spacedBy(8.dp),
@@ -1806,7 +1798,7 @@ private fun AchievementNotice(
                                                 }
                                                 
                                             },
-                                            modifier=Modifier.width(if(key=="Tab")70.dp else 54.dp).fillMaxHeight(),
+                                            modifier=Modifier.width(if(key=="Tab")46.dp else 36.dp).fillMaxHeight(),
                                             shape=androidx.compose.foundation.shape.RoundedCornerShape(11.dp),
                                             border=BorderStroke(1.dp,Color.White.copy(alpha=.14f)),
                                             colors=ButtonDefaults.outlinedButtonColors(
@@ -1820,7 +1812,7 @@ private fun AchievementNotice(
                         }
                     }
                     2 -> Column(
-                        Modifier.fillMaxSize().background(bg).padding(horizontal=14.dp,vertical=12.dp)
+                        Modifier.fillMaxSize().background(bg).padding(horizontal=10.dp,vertical=6.dp)
                     ) {
                         Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                             Box(Modifier.size(39.dp)){
@@ -1873,7 +1865,7 @@ private fun AchievementNotice(
                             border=BorderStroke(1.dp,Color.White.copy(alpha=.12f)),
                             modifier=Modifier.weight(1f).fillMaxWidth()
                         ){
-                            Column(Modifier.fillMaxSize().padding(16.dp)){
+                            Column(Modifier.fillMaxSize().padding(10.dp)){
                                 Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                                     Text(">>>",color=Color(0xFFB8B8BE),fontFamily=FontFamily.Monospace,fontSize=12.sp)
                                     Spacer(Modifier.width(8.dp))
@@ -1887,7 +1879,7 @@ private fun AchievementNotice(
                                     Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
                                         fontFamily=FontFamily.Monospace,fontSize=vm.terminalFontSize.sp,
                                         lineHeight=(vm.terminalFontSize+6).sp,
-                                        modifier=Modifier.fillMaxSize().verticalScroll(consoleScroll).padding(bottom=150.dp))
+                                        modifier=Modifier.fillMaxSize().verticalScroll(consoleScroll).padding(bottom=if(vm.runtimeIssue!=null)180.dp else 8.dp))
                                     vm.runtimeIssue?.let { issue ->
                                         var showDetails by remember(issue.details) { mutableStateOf(false) }
                                         Surface(color=Color(0xFF151316),shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
@@ -1948,7 +1940,8 @@ private fun AchievementNotice(
                                                 cursorColor=Color(0xFF00E5FF),
                                                 errorCursorColor=Color(0xFFFF6B81)
                                             ),
-                                            keyboardOptions=KeyboardOptions(imeAction=ImeAction.None)
+                                            keyboardOptions=KeyboardOptions(imeAction=ImeAction.Send),
+                                            keyboardActions=KeyboardActions(onSend={vm.submitConsoleEntry()})
                                         )
                                         Button(
                                             onClick={vm.submitConsoleEntry()},
@@ -2272,10 +2265,9 @@ private fun AchievementNotice(
                     }
                 } }
             }
-            if(vm.showPageDots) Row(Modifier.fillMaxWidth().height(22.dp),horizontalArrangement=Arrangement.Center,verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+            if(vm.showPageDots && !keyboardOpen) Row(Modifier.fillMaxWidth().height(22.dp),horizontalArrangement=Arrangement.Center,verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                 repeat(5){index->Box(Modifier.padding(horizontal=3.dp).size(if(index==pager.currentPage)vm.pageDotSize.dp else (vm.pageDotSize*0.62f).dp).background(if(index==pager.currentPage)accent else Color.DarkGray,androidx.compose.foundation.shape.CircleShape))}
             }
-            Text("w astro",color=Color(0xFF181818),fontSize=7.sp,modifier=Modifier.fillMaxWidth().padding(bottom=2.dp),textAlign=androidx.compose.ui.text.style.TextAlign.Center)
         }
     }
     if(showAiSettings) AlertDialog(

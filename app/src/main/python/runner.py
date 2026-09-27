@@ -316,9 +316,11 @@ def diagnose(source):
 
 
 def complete(source, cursor, project_dir):
-    """Return Jedi's best local completion as JSON. Runs fully offline."""
+    """Return replacement edits in Android UTF-16 coordinates. Runs offline."""
     try:
         import jedi
+        # Android selection offsets count UTF-16 code units, not Python codepoints.
+        cursor = len(source.encode("utf-16-le")[:max(0, cursor) * 2].decode("utf-16-le", errors="ignore"))
         before = source[:cursor]
         line = before.count("\n") + 1
         column = len(before.rsplit("\n", 1)[-1])
@@ -326,23 +328,37 @@ def complete(source, cursor, project_dir):
         items = jedi.Script(source, path=path).complete(line, column)
         if not items:
             return "{}"
+        start = cursor
+        while start > 0 and (source[start - 1].isalnum() or source[start - 1] == "_"):
+            start -= 1
+        end = cursor
+        while end < len(source) and (source[end].isalnum() or source[end] == "_"):
+            end += 1
+        current_line = before.rsplit("\n", 1)[-1].lstrip()
+        importing = current_line.startswith(("import ", "from "))
+        def utf16(position):
+            return len(source[:position].encode("utf-16-le")) // 2
+
         def serialized(completion):
-            suffix = completion.complete
+            insert_text = completion.name
             cursor_back = 0
-            if completion.type in ("function", "class") and not suffix.endswith(")"):
-                suffix += "()"
+            callable_item = completion.type in ("function", "class")
+            if callable_item and not importing and not source[end:].lstrip().startswith("("):
+                insert_text += "()"
                 cursor_back = 1
+            signatures = completion.get_signatures() if callable_item else []
             return {
-                "label": completion.name + ("()" if cursor_back else ""),
-                "suffix": suffix,
+                "label": completion.name + ("()" if callable_item and not importing else ""),
+                "insert_text": insert_text,
+                "replace_start": utf16(start),
+                "replace_end": utf16(end),
                 "cursor_back": cursor_back,
                 "type": completion.type,
-                "doc": completion.docstring(raw=True)[:240],
+                "signature": signatures[0].to_string() if signatures else "",
+                "doc": completion.docstring(raw=True)[:600],
             }
 
-        first = serialized(items[0])
         return json.dumps({
-            **first,
             "items": [serialized(item) for item in items[:3]],
         })
     except Exception:

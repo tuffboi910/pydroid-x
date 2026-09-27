@@ -25,7 +25,8 @@ jobs:
           python -m pip install jedi==0.19.2
           python -m unittest discover -s app/src/test/python -v
       - name: Install native build tools
-        run: "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.13113456" "cmake;3.31.6"
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.13113456" "cmake;3.31.6"
       - name: Fetch pinned llama.cpp
         run: bash scripts/bootstrap-llama.sh
       - run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace

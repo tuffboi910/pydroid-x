@@ -48,6 +48,16 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     private var touchStartScrollX = 0
     private var touchAxis = 0
     private var diagnostics: List<CodeDiagnostic> = emptyList()
+    private var renderSource = ""
+    private var lineBreakOffsets = IntArray(0)
+    private fun updateRenderSource(source: String) {
+        renderSource = source
+        lineBreakOffsets = source.indices.asSequence().filter { source[it] == '\n' }.toList().toIntArray()
+    }
+    private fun newlineCountBefore(offset: Int): Int {
+        val index = lineBreakOffsets.binarySearch(offset)
+        return if (index >= 0) index else -index - 1
+    }
     private var showLineNumbers = true
     private var showCurrentLine = true
     private var userPadding = 20
@@ -166,7 +176,9 @@ internal class PythonEditorView(context: Context) : EditText(context) {
                 if (!applyingHighlight && !applyingHistory) {
                     if (shouldRecordHistory) history.record(beforeEdit)
                     shouldRecordHistory = false
-                    onCodeChanged?.invoke(s?.toString().orEmpty())
+                    val source = s?.toString().orEmpty()
+                    updateRenderSource(source)
+                    onCodeChanged?.invoke(source)
                     removeCallbacks(highlightRunnable)
                     postDelayed(highlightRunnable, highlightDelayMs)
                     scheduleCompletion()
@@ -203,6 +215,7 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         applyingHighlight = true
         val cursor = selectionStart.coerceAtLeast(0).coerceAtMost(value.length)
         setText(value)
+        updateRenderSource(value)
         setSelection(cursor)
         applyingHighlight = false
         highlightNow()
@@ -214,6 +227,7 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         diagnostics = emptyList()
         applyingHistory = true
         setText(snapshot.text)
+        updateRenderSource(snapshot.text)
         setSelection(snapshot.cursor.coerceIn(0, snapshot.text.length))
         applyingHistory = false
         onCodeChanged?.invoke(snapshot.text)
@@ -397,7 +411,7 @@ internal class PythonEditorView(context: Context) : EditText(context) {
             val spaceWidth = paint.measureText(" ")
             val first = editorLayout.getLineForVertical((scrollY - totalPaddingTop).coerceAtLeast(0))
             val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop).coerceAtLeast(0))
-            val source = text.toString()
+            val source = renderSource
             for (lineIndex in first..last.coerceAtMost(editorLayout.lineCount - 1)) {
                 val start = editorLayout.getLineStart(lineIndex)
                 val end = editorLayout.getLineEnd(lineIndex).coerceAtMost(source.length)
@@ -451,10 +465,10 @@ internal class PythonEditorView(context: Context) : EditText(context) {
             val first = editorLayout.getLineForVertical((scrollY - totalPaddingTop).coerceAtLeast(0))
             val last = editorLayout.getLineForVertical((scrollY + height - totalPaddingTop).coerceAtLeast(0))
             val right = gutterWidth - (10 * resources.displayMetrics.density)
-            val source = text.toString()
+            val source = renderSource
             val firstVisual = first.coerceAtMost(editorLayout.lineCount - 1)
             val firstOffset = editorLayout.getLineStart(firstVisual)
-            var logicalLine = source.take(firstOffset).count { it == '\n' } + 1
+            var logicalLine = newlineCountBefore(firstOffset) + 1
             for (visualLine in firstVisual..last.coerceAtMost(editorLayout.lineCount - 1)) {
                 val lineStart = editorLayout.getLineStart(visualLine)
                 val startsLogicalLine = lineStart == 0 || source.getOrNull(lineStart - 1) == '\n'
@@ -490,12 +504,13 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     private fun highlightNow() {
         if (!highlightingEnabled) return
         val editable = text ?: return
-        val source = editable.toString()
+        val source = renderSource
         applyingHighlight = true
+        beginBatchEdit()
+        try {
         editable.getSpans(0, editable.length, ForegroundColorSpan::class.java).forEach(editable::removeSpan)
         if (source.length > 250_000) {
             setTextColor(editorTextColor)
-            applyingHighlight = false
             return
         }
         fun color(start: Int, end: Int, value: Int) {
@@ -542,6 +557,9 @@ internal class PythonEditorView(context: Context) : EditText(context) {
                 else -> i++
             }
         }
-        applyingHighlight = false
+        } finally {
+            endBatchEdit()
+            applyingHighlight = false
+        }
     }
 }

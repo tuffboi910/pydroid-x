@@ -12,8 +12,8 @@ android {
         applicationId = "com.pydroidx.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.4.2"
+        versionCode = 9
+        versionName = "0.4.3"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
     buildFeatures { compose = true; buildConfig = true }

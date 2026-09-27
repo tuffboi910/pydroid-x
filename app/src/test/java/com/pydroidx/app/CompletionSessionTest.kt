@@ -35,5 +35,5 @@ class CompletionSessionTest {
         session.offer(0, "raise val # reason", 8, listOf(item))
         assertEquals(EditorSnapshot("raise ValueError() # reason", 17), session.edit(0, "raise val # reason", 8, 8))
     }
-    @Test fun configuredDelayIsTwoSeconds() { assertEquals(2000L, CompletionSession.DELAY_MS) }
+    @Test fun configuredDelayIsOneSecond() { assertEquals(1000L, CompletionSession.DELAY_MS) }
 }

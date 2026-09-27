@@ -32,5 +32,5 @@ internal class CompletionSession {
         return EditorSnapshot(result, next.coerceIn(item.replaceStart, result.length))
     }
 
-    companion object { const val DELAY_MS = 2_000L }
+    companion object { const val DELAY_MS = 1_000L }
 }

@@ -32,6 +32,6 @@ jobs:
       - run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v7
         with:
-          name: PY4U-arm64-ai-controls
+          name: PY4U-arm64-editor-smooth
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

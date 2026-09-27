@@ -47,6 +47,29 @@ class PythonEditorViewTest {
         looper.idleFor(Duration.ofMillis(999)); assertEquals(0, requests)
         looper.idleFor(Duration.ofMillis(1)); assertEquals(1, requests)
     }
+    @Test fun toolbarPairLeavesCaretBetweenCharacters() {
+        editor.setText("ab")
+        editor.setSelection(1)
+        editor.insertPair("(", ")")
+        assertEquals("a()b", editor.text.toString())
+        assertEquals(2, editor.selectionStart)
+        assertEquals(editor.selectionStart, editor.selectionEnd)
+    }
+    @Test fun toolbarPairWrapsSelectedText() {
+        editor.setText("value")
+        editor.setSelection(1, 4)
+        editor.insertPair("{", "}")
+        assertEquals("v{alu}e", editor.text.toString())
+        assertEquals(2, editor.selectionStart)
+        assertEquals(5, editor.selectionEnd)
+    }
+    @Test fun closingToolbarKeySkipsExistingCloser() {
+        editor.setText("()")
+        editor.setSelection(1)
+        editor.insertClosingOrSkip(")")
+        assertEquals("()", editor.text.toString())
+        assertEquals(2, editor.selectionStart)
+    }
     private fun row(): RectF {
         looper.idleFor(Duration.ofMillis(1000))
         editor.draw(Canvas(Bitmap.createBitmap(1080,1200,Bitmap.Config.ARGB_8888)))

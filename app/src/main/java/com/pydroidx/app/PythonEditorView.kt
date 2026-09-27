@@ -210,7 +210,10 @@ internal class PythonEditorView(context: Context) : EditText(context) {
             clearCompletion()
             loadedRevision = revision
         }
-        if (text.toString() == value) return
+        // Compose can call this on every recomposition. The TextWatcher stores the
+        // exact String instance for native edits, so avoid allocating a full copy
+        // and scanning the document on the hot path.
+        if (renderSource === value || renderSource == value) return
         clearCompletion()
         applyingHighlight = true
         val cursor = selectionStart.coerceAtLeast(0).coerceAtMost(value.length)
@@ -246,6 +249,31 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         val start = selectionStart.coerceAtLeast(0)
         val end = selectionEnd.coerceAtLeast(0)
         text.replace(minOf(start, end), maxOf(start, end), value)
+    }
+
+    fun insertPair(open: String, close: String) {
+        if (open.length != 1 || close.length != 1) return
+        val start = minOf(selectionStart, selectionEnd).coerceIn(0, text.length)
+        val end = maxOf(selectionStart, selectionEnd).coerceIn(start, text.length)
+        val selected = text.subSequence(start, end).toString()
+        beginBatchEdit()
+        try {
+            text.replace(start, end, open + selected + close)
+            if (selected.isEmpty()) setSelection(start + 1)
+            else setSelection(start + 1, start + 1 + selected.length)
+        } finally {
+            endBatchEdit()
+        }
+    }
+
+    fun insertClosingOrSkip(close: String) {
+        if (close.length != 1) return
+        val cursor = selectionStart
+        if (cursor == selectionEnd && cursor in 0 until text.length && text[cursor].toString() == close) {
+            setSelection(cursor + 1)
+        } else {
+            insertAtCursor(close)
+        }
     }
 
     fun applyPreferences(font: Float, wrap: Boolean, syntax: Boolean, family: String, spacing: Float,

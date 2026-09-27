@@ -18,7 +18,7 @@ interface InferenceEngine {
      *
      * @throws UnsupportedArchitectureException if model architecture not supported
      */
-    suspend fun loadModel(pathToModel: String)
+    suspend fun loadModel(pathToModel: String, contextSize: Int = 4096, threads: Int = 4)
 
     /**
      * Sends a system prompt to the loaded model

@@ -16,6 +16,8 @@ import kotlinx.coroutines.runBlocking
 /** Imports GGUF into private storage, then streams tokens through llama.cpp on this device. */
 object LocalAiRuntime {
     private var loadedPath: String? = null
+    private var loadedContext = 0
+    private var loadedThreads = 0
 
     fun importModel(context: Context, uri: Uri, onProgress: (String) -> Unit): File {
         val resolver = context.contentResolver
@@ -64,16 +66,18 @@ object LocalAiRuntime {
         } finally { temp.delete() }
     }
 
-    @Synchronized fun chat(context: Context, path: String, prompt: String, code: String?, history: List<AiMessage>, onStatus: (String) -> Unit, onPartial: (String) -> Unit): String = runBlocking {
+    @Synchronized fun chat(context: Context, path: String, prompt: String, code: String?, history: List<AiMessage>, contextSize: Int, threads: Int, responseTokens: Int, onStatus: (String) -> Unit, onPartial: (String) -> Unit): String = runBlocking {
         require(path.endsWith(".gguf", true) && File(path).isFile) { "Choose an imported GGUF model in AI settings" }
         val engine = AiChat.getInferenceEngine(context)
         engine.state.first { it !is InferenceEngine.State.Initializing && it !is InferenceEngine.State.Uninitialized }
         if (engine.state.value is InferenceEngine.State.Error) throw IllegalStateException("On-device runtime could not start")
-        if (loadedPath != path || !engine.state.value.isModelLoaded) {
+        if (loadedPath != path || loadedContext != contextSize || loadedThreads != threads || !engine.state.value.isModelLoaded) {
             if (engine.state.value.isModelLoaded || engine.state.value is InferenceEngine.State.Error) engine.cleanUp()
             onStatus("Loading on-device model…")
-            engine.loadModel(path)
+            engine.loadModel(path, contextSize, threads)
             loadedPath = path
+            loadedContext = contextSize
+            loadedThreads = threads
             engine.setSystemPrompt("You are Astro, a helpful Python coding assistant. Give accurate, concise answers. When asked to change code, include a complete python fenced code block for the proposed file.")
         }
         val message = buildString {
@@ -83,7 +87,7 @@ object LocalAiRuntime {
         }
         onStatus("Generating on device…")
         val answer = StringBuilder()
-        engine.sendUserPrompt(message, 1024).collect { token ->
+        engine.sendUserPrompt(message, responseTokens).collect { token ->
             answer.append(token)
             onPartial(answer.toString())
         }

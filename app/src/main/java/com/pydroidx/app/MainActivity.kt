@@ -5,6 +5,7 @@ import android.net.Uri
 import android.app.Activity
 import android.animation.ValueAnimator
 import android.content.Context
+import android.app.ActivityManager
 import android.content.ClipData
 import android.widget.Toast
 import android.graphics.Color as AndroidColor
@@ -152,6 +153,12 @@ class IdeViewModel : ViewModel() {
     var aiFallbackNotice by mutableStateOf<String?>(null)
     var pendingCode by mutableStateOf<PendingCodeChange?>(null)
     var teachingOffer by mutableStateOf<String?>(null)
+    var showCodeNotice by mutableStateOf(false)
+    var showTeachingNotice by mutableStateOf(false)
+    private var assistantReplyCount = 0
+    var localContextSize by mutableIntStateOf(4096)
+    var localThreads by mutableIntStateOf(4)
+    var localResponseTokens by mutableIntStateOf(1024)
     var aiTestStatus by mutableStateOf<String?>(null)
     var attachedFileName by mutableStateOf<String?>(null)
     var attachedFileText by mutableStateOf<String?>(null)
@@ -267,6 +274,9 @@ class IdeViewModel : ViewModel() {
         cursorStyle = settings.getString("cursor", "Cyan") ?: "Cyan"
         autocomplete = settings.getBoolean("autocomplete", true)
         ghostBrightness = settings.getFloat("ghost_brightness", 0.48f)
+        localContextSize = settings.getInt("local_context",4096).coerceIn(512,8192)
+        localThreads = settings.getInt("local_threads",4).coerceIn(2,8)
+        localResponseTokens = settings.getInt("local_tokens",1024).coerceIn(128,2048)
         aiProvider = settings.getString("ai_provider", "Auto") ?: "Auto"
         ai2Provider = settings.getString("ai2_provider", "Auto") ?: "Auto"
         ai3Provider = settings.getString("ai3_provider", "Auto") ?: "Auto"
@@ -334,6 +344,12 @@ class IdeViewModel : ViewModel() {
     fun providerForSlot(slot: Int) = when(slot) { 1 -> ai2Provider; 2 -> ai3Provider; else -> aiProvider }
     fun endpointForSlot(slot: Int) = when(slot) { 1 -> ai2Endpoint; 2 -> ai3Endpoint; else -> aiEndpoint }
     fun modelForSlot(slot: Int) = when(slot) { 1 -> ai2Model; 2 -> ai3Model; else -> aiModel }
+    fun saveLocalPerformance(contextSize: Int = localContextSize, threads: Int = localThreads, responseTokens: Int = localResponseTokens) {
+        localContextSize = contextSize
+        localThreads = threads
+        localResponseTokens = responseTokens
+        settings.edit().putInt("local_context",contextSize).putInt("local_threads",threads).putInt("local_tokens",responseTokens).apply()
+    }
     fun localModelForSlot(slot: Int): String = settings.getString("local_model_$slot", "").orEmpty()
     fun slotConfigured(slot: Int) = if (providerForSlot(slot) == "On-device") File(localModelForSlot(slot)).isFile else !aiKeys.load(slot).isNullOrBlank()
     fun importLocalModel(uri: Uri, slot: Int) {
@@ -393,6 +409,7 @@ class IdeViewModel : ViewModel() {
 
     fun askAi(testOnly: Boolean = false, preferredSlot: Int? = null) {
         if (aiBusy) return
+        if (!testOnly) { showCodeNotice=false; showTeachingNotice=false }
         var slots = configuredAiSlots()
         if (preferredSlot != null) slots = slots.filter { it.index == preferredSlot }
         if (slots.isEmpty()) {
@@ -437,6 +454,7 @@ class IdeViewModel : ViewModel() {
                         return@runCatching if (slot.provider == "On-device") LocalAiRuntime.chat(
                             appContext, localModelForSlot(slot.index), question,
                             if (!testOnly && shareCode) codeSnapshot else null, historySnapshot,
+                            localContextSize, localThreads, localResponseTokens,
                             onStatus={ status -> viewModelScope.launch { aiFallbackNotice="${slot.label}: $status" } },
                             onPartial={ partial -> viewModelScope.launch { if (!testOnly && aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex] = AiMessage(false, partial) } }
                         ) else AiClient.chat(
@@ -471,14 +489,17 @@ class IdeViewModel : ViewModel() {
                 } else {
                     if (aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex] = AiMessage(false,cleanAnswer)
                     if (succeeded) {
+                        assistantReplyCount++
                         extractPythonFile(answer)?.let { proposed ->
                             if (currentFileName == fileNameSnapshot && code == codeSnapshot) {
                                 pendingCode = PendingCodeChange(proposed, fileNameSnapshot, codeSnapshot)
+                                showCodeNotice = assistantReplyCount % 3 == 0
                             } else {
                                 aiMessages.add(AiMessage(false, "Code changed while Astro was working. Ask again before applying the edit."))
                             }
                         }
                         teachingOffer=extractTeachingOffer(answer)
+                        showTeachingNotice = teachingOffer != null && assistantReplyCount % 3 == 0 && pendingCode == null
                     }
                 }
                 aiBusy=false
@@ -505,16 +526,18 @@ class IdeViewModel : ViewModel() {
         editorRevision++
         save()
         pendingCode = null
+        showCodeNotice=false
         aiMessages.add(AiMessage(false, "Applied to $currentFileName ✓"))
     }
-    fun rejectPendingCode() { pendingCode = null }
+    fun rejectPendingCode() { pendingCode = null; showCodeNotice=false }
     fun acceptTeaching() {
         val topic = teachingOffer ?: return
         teachingOffer = null
+        showTeachingNotice=false
         aiPrompt = "Teach me $topic step by step. Keep it interactive and ask me one small question at a time."
         askAi()
     }
-    fun rejectTeaching() { teachingOffer = null }
+    fun rejectTeaching() { teachingOffer = null; showTeachingNotice=false }
     private val completionWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var completionTask: java.util.concurrent.Future<*>? = null
     fun requestCompletion(source: String, cursor: Int, deliver: (CompletionResult) -> Unit) {
@@ -957,7 +980,7 @@ private fun AchievementNotice(
     }
     Popup(
         alignment=androidx.compose.ui.Alignment.TopEnd,
-        offset=androidx.compose.ui.unit.IntOffset(-18,92),
+        offset=androidx.compose.ui.unit.IntOffset(-12,80),
         properties=PopupProperties(focusable=false)
     ) {
         AnimatedVisibility(
@@ -972,7 +995,7 @@ private fun AchievementNotice(
                 shape=shape,
                 border=BorderStroke(1.dp,accent.copy(alpha=0.72f)),
                 shadowElevation=18.dp,
-                modifier=Modifier.widthIn(min=285.dp,max=350.dp)
+                modifier=Modifier.widthIn(min=210.dp,max=270.dp)
                     .graphicsLayer { translationX=dragX }
                     .pointerInput(title,badge) {
                         detectHorizontalDragGestures(
@@ -990,34 +1013,33 @@ private fun AchievementNotice(
             ) {
                 Column {
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal=12.dp,vertical=10.dp),
+                        Modifier.fillMaxWidth().padding(horizontal=9.dp,vertical=6.dp),
                         verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,
-                        horizontalArrangement=Arrangement.spacedBy(10.dp)
+                        horizontalArrangement=Arrangement.spacedBy(7.dp)
                     ) {
                         Box(
-                            Modifier.size(40.dp).background(accent.copy(alpha=0.13f),androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                            Modifier.size(26.dp).background(accent.copy(alpha=0.13f),androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                                 .border(1.dp,accent.copy(alpha=0.75f),androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
                             contentAlignment=androidx.compose.ui.Alignment.Center
-                        ) { Text("◆",color=Color(0xFF59F2DF),fontSize=20.sp) }
+                        ) { Text("◆",color=Color(0xFF59F2DF),fontSize=14.sp) }
                         Column(Modifier.weight(1f)) {
                             Text(badge,color=accent,fontSize=8.sp,fontWeight=FontWeight.Bold,letterSpacing=1.1.sp)
-                            Text(title,color=Color.White,fontSize=14.sp,fontWeight=FontWeight.Bold,maxLines=1)
-                            Text(subtitle,color=Color(0xFFA9B0B8),fontSize=10.sp,maxLines=2)
-                            Text("Swipe right to ignore",color=Color(0xFF6F7780),fontSize=8.sp)
+                            Text(title,color=Color.White,fontSize=12.sp,fontWeight=FontWeight.Bold,maxLines=1)
+                            Text(subtitle,color=Color(0xFFA9B0B8),fontSize=9.sp,maxLines=1)
                         }
                     }
-                    Box(Modifier.fillMaxWidth().height(2.dp).background(accent.copy(alpha=0.85f)))
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(accent.copy(alpha=0.6f)))
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal=8.dp,vertical=4.dp),
+                        Modifier.fillMaxWidth().padding(horizontal=6.dp,vertical=2.dp),
                         horizontalArrangement=Arrangement.End
                     ) {
-                        TextButton(onClick={closeThen(onSecondary)},contentPadding=PaddingValues(horizontal=10.dp,vertical=4.dp)) {
+                        TextButton(onClick={closeThen(onSecondary)},contentPadding=PaddingValues(horizontal=6.dp,vertical=2.dp)) {
                             Text(secondaryLabel,color=Color(0xFFB9C0C8),fontSize=11.sp)
                         }
                         Button(
                             onClick={closeThen(onPrimary)},
                             colors=ButtonDefaults.buttonColors(containerColor=accent,contentColor=Color.Black),
-                            contentPadding=PaddingValues(horizontal=12.dp,vertical=4.dp)
+                            contentPadding=PaddingValues(horizontal=8.dp,vertical=2.dp)
                         ) { Text(primaryLabel,fontWeight=FontWeight.Bold,fontSize=11.sp) }
                     }
                 }
@@ -1043,6 +1065,7 @@ private fun AchievementNotice(
     val pageIcons = listOf("Folders", "Python", "Console", "Helper", "Settings")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
     var showAiSettings by remember { mutableStateOf(false) }
+    var showCodePreview by remember { mutableStateOf(false) }
     var selectedAiSlot by remember { mutableIntStateOf(0) }
     var keyDraft by remember { mutableStateOf("") }
     var endpointDraft by remember { mutableStateOf(vm.aiEndpoint) }
@@ -1613,19 +1636,19 @@ private fun AchievementNotice(
                         vm.aiFallbackNotice?.let { status ->
                             SwitchingModelNotice(status=status,accent=accent,onFinished={vm.aiFallbackNotice=null})
                         }
-                        vm.pendingCode?.let { change ->
+                        vm.pendingCode?.takeIf { vm.showCodeNotice }?.let { change ->
                             AchievementNotice(
                                 badge="ACTION REQUIRED",
                                 title="Code change ready",
                                 subtitle="Astro wants permission to update ${change.fileName}",
                                 accent=accent,
-                                primaryLabel="Apply",
+                                primaryLabel="Preview",
                                 secondaryLabel="Ignore",
-                                onPrimary={vm.applyPendingCode()},
+                                onPrimary={showCodePreview=true;vm.showCodeNotice=false},
                                 onSecondary={vm.rejectPendingCode()}
                             )
                         }
-                        vm.teachingOffer?.let { topic ->
+                        vm.teachingOffer?.takeIf { vm.showTeachingNotice }?.let { topic ->
                             AchievementNotice(
                                 badge="NEW LESSON UNLOCKED",
                                 title=topic,
@@ -1636,6 +1659,26 @@ private fun AchievementNotice(
                                 onPrimary={vm.acceptTeaching()},
                                 onSecondary={vm.rejectTeaching()}
                             )
+                        }
+                        vm.pendingCode?.let { change ->
+                            Surface(color=accent.copy(alpha=.10f),shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                border=BorderStroke(1.dp,accent.copy(alpha=.4f))) {
+                                Row(Modifier.fillMaxWidth().padding(9.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Code edit ready · ${change.fileName}",color=Color.White,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                                        Text("Review the changed lines before applying",color=Color.LightGray,fontSize=10.sp)
+                                    }
+                                    TextButton(onClick={vm.rejectPendingCode()}) { Text("Dismiss",fontSize=11.sp) }
+                                    Button(onClick={showCodePreview=true},contentPadding=PaddingValues(horizontal=8.dp,vertical=2.dp)) { Text("Preview",fontSize=11.sp) }
+                                }
+                            }
+                        }
+                        vm.teachingOffer?.let { topic ->
+                            Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                Text("Lesson: $topic",color=Color.LightGray,fontSize=11.sp,modifier=Modifier.weight(1f),maxLines=1)
+                                TextButton(onClick={vm.rejectTeaching()}) { Text("Dismiss",fontSize=11.sp) }
+                                TextButton(onClick={vm.acceptTeaching()}) { Text("Teach me",fontSize=11.sp) }
+                            }
                         }
                         if(vm.attachedFileName!=null || vm.shareCode) {
                             Row(
@@ -1851,6 +1894,25 @@ private fun AchievementNotice(
         RunBurst(runBurst,vm.currentFileName,motionAllowed)
         }
     }
+    if(showCodePreview) vm.pendingCode?.let { change ->
+        val preview = remember(change) { codeChangePreview(change.sourceSnapshot, change.code) }
+        AlertDialog(
+            onDismissRequest={showCodePreview=false},containerColor=Color(0xFF171A20),
+            title={Text("Review edit · ${change.fileName}",fontSize=17.sp)},
+            text={Column(Modifier.heightIn(max=450.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                Text(preview.summary,color=accent,fontSize=12.sp)
+                Text("BEFORE",color=Color(0xFFFF8895),fontSize=10.sp,fontWeight=FontWeight.Bold)
+                Text(preview.before,color=Color(0xFFFFC0C7),fontFamily=FontFamily.Monospace,fontSize=12.sp,
+                    modifier=Modifier.fillMaxWidth().background(Color(0xFF292126)).padding(10.dp))
+                Text("AFTER",color=Color(0xFF81DDAF),fontSize=10.sp,fontWeight=FontWeight.Bold)
+                Text(preview.after,color=Color(0xFFB7F5D4),fontFamily=FontFamily.Monospace,fontSize=12.sp,
+                    modifier=Modifier.fillMaxWidth().background(Color(0xFF1E2B25)).padding(10.dp))
+                Text("Only changed lines shown. Your file stays untouched until you tap Apply.",color=Color.Gray,fontSize=10.sp)
+            }},
+            confirmButton={Button(onClick={vm.applyPendingCode();showCodePreview=false}) { Text("Apply edit") }},
+            dismissButton={TextButton(onClick={showCodePreview=false}) { Text("Keep editing") }}
+        )
+    }
     if(showAiSettings) AlertDialog(
         onDismissRequest={showAiSettings=false},
         containerColor=Color(0xFF0A0A0A),
@@ -1881,9 +1943,32 @@ private fun AchievementNotice(
                 if(providerDraft=="On-device") {
                     Text("Runs offline on this phone. Import a quantized .gguf model; large models need plenty of storage and RAM.",color=Color.LightGray,fontSize=12.sp)
                     Button(onClick={modelPicker.launch(arrayOf("*/*"))}) { Text("Choose GGUF file") }
+                    Text("PERFORMANCE",color=MaterialTheme.colorScheme.primary,fontSize=11.sp,fontWeight=FontWeight.Bold)
+                    Text("Context size · more code/history uses more RAM",color=Color.LightGray,fontSize=11.sp)
+                    Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                        listOf(2048,4096,8192).forEach { value ->
+                            FilterChip(selected=vm.localContextSize==value,onClick={vm.saveLocalPerformance(contextSize=value)},label={Text("$value")})
+                        }
+                    }
+                    Text("CPU threads",color=Color.LightGray,fontSize=11.sp)
+                    Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                        listOf(2,4,6,8).forEach { value ->
+                            FilterChip(selected=vm.localThreads==value,onClick={vm.saveLocalPerformance(threads=value)},label={Text("$value")})
+                        }
+                    }
+                    Text("Max reply tokens",color=Color.LightGray,fontSize=11.sp)
+                    Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                        listOf(256,512,1024,2048).forEach { value ->
+                            FilterChip(selected=vm.localResponseTokens==value,onClick={vm.saveLocalPerformance(responseTokens=value)},label={Text("$value")})
+                        }
+                    }
                     val selectedPath = vm.localModelForSlot(selectedAiSlot)
                     if(selectedPath.isNotBlank()) {
-                        Text("Selected: ${File(selectedPath).name}", color=Color.LightGray, fontSize=12.sp)
+                        val modelBytes = File(selectedPath).length()
+                        val memory = ActivityManager.MemoryInfo()
+                        (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memory)
+                        Text("Selected: ${File(selectedPath).name} · ${modelBytes / 1048576} MB", color=Color.LightGray, fontSize=12.sp)
+                        if(modelBytes > memory.totalMem / 2) Text("⚠ This model is over half your phone's RAM. Loading may fail; try a smaller quantized GGUF.",color=Color(0xFFFFBB77),fontSize=11.sp)
                         OutlinedButton(onClick={vm.removeLocalModel(selectedAiSlot)}) { Text("Remove from slot") }
                     }
                     vm.localImportStatus?.let { Text(it,color=Color.LightGray,fontSize=12.sp) }
@@ -1932,6 +2017,23 @@ private fun AchievementNotice(
         dismissButton={TextButton(onClick={showAiSettings=false}){Text("Cancel")}}
     )
     }
+}
+
+private data class CodeChangePreview(val summary: String, val before: String, val after: String)
+
+private fun codeChangePreview(original: String, proposed: String): CodeChangePreview {
+    val oldLines = original.lines()
+    val newLines = proposed.lines()
+    val prefix = oldLines.zip(newLines).takeWhile { (a,b) -> a==b }.size
+    var suffix = 0
+    while (suffix < oldLines.size-prefix && suffix < newLines.size-prefix &&
+        oldLines[oldLines.lastIndex-suffix] == newLines[newLines.lastIndex-suffix]) suffix++
+    val removed = oldLines.subList(prefix,oldLines.size-suffix)
+    val added = newLines.subList(prefix,newLines.size-suffix)
+    fun render(lines: List<String>): String = if (lines.isEmpty()) "(no lines)" else
+        lines.take(80).mapIndexed { index,line -> "${prefix+index+1}: $line" }.joinToString("\n") +
+            if (lines.size>80) "\n… ${lines.size-80} more lines" else ""
+    return CodeChangePreview("Line ${prefix+1} · ${removed.size} removed, ${added.size} added",render(removed),render(added))
 }
 
 @Composable private fun SettingSwitch(label:String,checked:Boolean,onChange:(Boolean)->Unit){

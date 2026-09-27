@@ -994,7 +994,7 @@ private class PythonEditorView(context: Context) : EditText(context) {
                     postDelayed(highlightRunnable, highlightDelayMs)
                     post { updateGhostSuggestion() }
                     removeCallbacks(completionRunnable)
-                    postDelayed(completionRunnable, 140)
+                    postDelayed(completionRunnable, 2_000)
                     removeCallbacks(diagnosticsRunnable)
                     diagnostics = emptyList()
                     completionItems = emptyList()
@@ -1134,6 +1134,15 @@ private class PythonEditorView(context: Context) : EditText(context) {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if(event.actionMasked==MotionEvent.ACTION_DOWN && completionItems.isNotEmpty()){
+            val d=resources.displayMetrics.density; val l=layout; val c=selectionStart.coerceIn(0,text.length)
+            if(l!=null){val line=l.getLineForOffset(c);val px=l.getPrimaryHorizontal(c)+totalPaddingLeft-scrollX;val py=l.getLineBaseline(line)+totalPaddingTop-scrollY
+                val left=(px-8f*d).coerceIn(8f*d,(width-300f*d).coerceAtLeast(8f*d));val row=38f*d;val docs=66f*d;val pw=minOf(330f*d,width-left-8f*d);val ph=row*completionItems.size+docs
+                var top=py+12f*d;if(top+ph>height)top=(py-ph-24f*d).coerceAtLeast(8f*d)
+                if(event.x in left..(left+pw) && event.y in top..(top+row*completionItems.size)){val i=((event.y-top)/row).toInt();val item=completionItems.getOrNull(i)
+                    if(item!=null){text.insert(c,item.suffix);setSelection((c+item.suffix.length-item.cursorBack).coerceIn(0,text.length));ghostSuffix=null;completionItems=emptyList();invalidate();return true}}
+            }
+        }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 touchStartX = event.x
@@ -1286,7 +1295,10 @@ private class PythonEditorView(context: Context) : EditText(context) {
             val typePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(155, 158, 170); textSize = 11f * density }
             completionItems.forEachIndexed { index, item ->
                 val baseline = popupTop + index * rowHeight + 25f * density
-                canvas.drawText("◇", popupLeft + 14f * density, baseline, Paint(labelPaint).apply { color=AndroidColor.rgb(191,91,255) })
+                val cubePaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=AndroidColor.rgb(191,91,255);style=Paint.Style.STROKE;strokeWidth=1.8f*density;strokeJoin=Paint.Join.ROUND}
+                val cx=popupLeft+20f*density; val cy=baseline-5.5f*density; val cw=8f*density; val ch=6f*density; val cd=4.5f*density
+                val cube=android.graphics.Path().apply{moveTo(cx,cy-ch);lineTo(cx+cw,cy-cd);lineTo(cx+cw,cy+ch);lineTo(cx,cy+ch+cd);lineTo(cx-cw,cy+ch);lineTo(cx-cw,cy-cd);close();moveTo(cx-cw,cy-cd);lineTo(cx,cy);lineTo(cx+cw,cy-cd);moveTo(cx,cy);lineTo(cx,cy+ch+cd)}
+                canvas.drawPath(cube,cubePaint)
                 canvas.drawText(item.label.take(30), popupLeft + 38f * density, baseline, labelPaint)
                 val typeWidth = typePaint.measureText(item.type)
                 canvas.drawText(item.type, popupLeft + popupWidth - typeWidth - 14f * density, baseline, typePaint)

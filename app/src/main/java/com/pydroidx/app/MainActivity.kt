@@ -151,6 +151,7 @@ class IdeViewModel : ViewModel() {
     val aiMessages = mutableStateListOf<AiMessage>()
     var aiBusy by mutableStateOf(false)
     var aiFallbackNotice by mutableStateOf<String?>(null)
+    var aiProgress by mutableStateOf<String?>(null)
     var pendingCode by mutableStateOf<PendingCodeChange?>(null)
     var teachingOffer by mutableStateOf<String?>(null)
     var showCodeNotice by mutableStateOf(false)
@@ -410,6 +411,7 @@ class IdeViewModel : ViewModel() {
     fun askAi(testOnly: Boolean = false, preferredSlot: Int? = null) {
         if (aiBusy) return
         if (!testOnly) { showCodeNotice=false; showTeachingNotice=false }
+        aiProgress=null
         var slots = configuredAiSlots()
         if (preferredSlot != null) slots = slots.filter { it.index == preferredSlot }
         if (slots.isEmpty()) {
@@ -449,13 +451,15 @@ class IdeViewModel : ViewModel() {
                 slots.forEachIndexed { index, slot ->
                     try {
                         if (index > 0) viewModelScope.launch {
-                            aiFallbackNotice = "${slots[index-1].label} AI unavailable • switching to ${slot.label} AI"
+                            val message = "${slots[index-1].label} AI unavailable • switching to ${slot.label} AI"
+                            aiProgress = message
+                            if ((assistantReplyCount+1) % 3 == 0) aiFallbackNotice = message
                         }
                         return@runCatching if (slot.provider == "On-device") LocalAiRuntime.chat(
                             appContext, localModelForSlot(slot.index), question,
                             if (!testOnly && shareCode) codeSnapshot else null, historySnapshot,
                             localContextSize, localThreads, localResponseTokens,
-                            onStatus={ status -> viewModelScope.launch { aiFallbackNotice="${slot.label}: $status" } },
+                            onStatus={ status -> viewModelScope.launch { aiProgress="${slot.label}: $status" } },
                             onPartial={ partial -> viewModelScope.launch { if (!testOnly && aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex] = AiMessage(false, partial) } }
                         ) else AiClient.chat(
                             providerSetting=slot.provider,
@@ -466,7 +470,7 @@ class IdeViewModel : ViewModel() {
                             code=if (!testOnly && shareCode) codeSnapshot else null,
                             history=historySnapshot,
                             revealDelayMs=if (typingAnimation) (animationDuration / 6.7f).toLong().coerceIn(4L, 120L) else 0L,
-                            onStatus={ status -> viewModelScope.launch { aiFallbackNotice="${slot.label}: $status" } }
+                            onStatus={ status -> viewModelScope.launch { aiProgress="${slot.label}: $status" } }
                         ) { partial ->
                             viewModelScope.launch {
                                 if (!testOnly && aiMessages.isNotEmpty()) {
@@ -503,6 +507,7 @@ class IdeViewModel : ViewModel() {
                     }
                 }
                 aiBusy=false
+                aiProgress=null
             }
         }
     }
@@ -944,15 +949,15 @@ private fun SwitchingModelNotice(status: String, accent: Color, onFinished: () -
     ) {
         val shape=androidx.compose.foundation.shape.RoundedCornerShape(9.dp)
         Row(
-            Modifier.fillMaxWidth().background(Color(0xF20A0D10),shape)
-                .border(1.dp,accent.copy(alpha=0.7f),shape).padding(horizontal=13.dp,vertical=10.dp),
+            Modifier.widthIn(max=270.dp).background(Color(0xF20A0D10),shape)
+                .border(1.dp,accent.copy(alpha=0.7f),shape).padding(horizontal=9.dp,vertical=6.dp),
             verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,
             horizontalArrangement=Arrangement.spacedBy(10.dp)
         ) {
-            CircularProgressIndicator(Modifier.size(18.dp),color=accent,strokeWidth=2.dp)
+            CircularProgressIndicator(Modifier.size(14.dp),color=accent,strokeWidth=2.dp)
             Column {
                 Text("AI FALLBACK",color=accent,fontSize=9.sp,fontWeight=FontWeight.Bold,letterSpacing=1.sp)
-                Text(status,color=Color.White,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                Text(status,color=Color.White,fontSize=10.sp,fontWeight=FontWeight.SemiBold)
             }
         }
     }
@@ -1631,7 +1636,7 @@ private fun AchievementNotice(
                                     }
                                 }
                             }
-                            if(vm.aiBusy && vm.aiMessages.isNotEmpty()) Text("Astro is writing…",color=Color(0xFF8D929A),fontSize=11.sp)
+                            if(vm.aiBusy && vm.aiMessages.isNotEmpty()) Text(vm.aiProgress ?: "Astro is writing…",color=Color(0xFF8D929A),fontSize=11.sp)
                         }
                         vm.aiFallbackNotice?.let { status ->
                             SwitchingModelNotice(status=status,accent=accent,onFinished={vm.aiFallbackNotice=null})

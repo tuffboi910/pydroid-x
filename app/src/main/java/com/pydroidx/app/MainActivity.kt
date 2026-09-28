@@ -473,6 +473,21 @@ class IdeViewModel : ViewModel() {
         val codeSnapshot = code
         val question = if (testOnly) typedQuestion else buildString {
             append(typedQuestion.ifBlank { "Review the attached file" })
+            if (shareCode) {
+                append("\n\nIDE context — current file: ").append(fileNameSnapshot)
+                append("\nProject files: ")
+                append(projectDir.listFiles()?.asSequence()?.filter { it.isFile && it.extension.equals("py",true) }
+                    ?.map { it.name }?.take(40)?.joinToString(", ").orEmpty())
+                if (codeDiagnostics.isNotEmpty()) {
+                    append("\nProblems: ")
+                    codeDiagnostics.take(8).forEach { issue ->
+                        append("\nLine ").append(issueLineNumber(codeSnapshot,issue.start))
+                            .append(": ").append(issue.message.take(150))
+                    }
+                }
+                val consoleContext = outputBuffer.visibleTail(1600)
+                if (consoleContext.isNotBlank()) append("\nRecent Console output:\n").append(consoleContext)
+            }
             if (!attachmentTextSnapshot.isNullOrBlank()) {
                 append("\n\nAttached file: ").append(attachmentNameSnapshot ?: "attachment")
                 append("\n\u0060\u0060\u0060\n").append(attachmentTextSnapshot).append("\n\u0060\u0060\u0060")
@@ -1591,11 +1606,21 @@ private fun AchievementNotice(
                                     verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                                 ){
                                     val matchingPairs = mapOf("(" to ")", "[" to "]", "{" to "}", "\"" to "\"", "'" to "'")
-                                    listOf("⌘","Tab","(",")","[","]","{","}","\"","'",":","=","#").forEach{key->
+                                    listOf("⌘","Astro","Tab","(",")","[","]","{","}","\"","'",":","=","#").forEach{key->
                                         OutlinedButton(
                                             onClick={
                                                 when {
                                                     key=="⌘" -> showPalette=true
+                                                    key=="Astro" -> {
+                                                        val view=editorView
+                                                        val start=minOf(view?.selectionStart ?: 0,view?.selectionEnd ?: 0).coerceAtLeast(0)
+                                                        val end=maxOf(view?.selectionStart ?: 0,view?.selectionEnd ?: 0).coerceAtMost(view?.text?.length ?: 0)
+                                                        val selection=if(view!=null && end>start) view.text.subSequence(start,end).toString().take(8000) else ""
+                                                        vm.aiPrompt=if(selection.isNotBlank())
+                                                            "Question about this selection in ${vm.currentFileName}:\n```python\n$selection\n```\n"
+                                                            else "Question about ${vm.currentFileName}: "
+                                                        scope.launch{pager.animateScrollToPage(3)}
+                                                    }
                                                     key=="Tab"&&editorView?.acceptGhostSuggestion()==true -> Unit
                                                     key=="Tab"&&editorView?.indentSelection()==true -> Unit
                                                     key=="Tab" -> editorView?.insertAtCursor(" ".repeat(vm.tabWidth))
@@ -1606,7 +1631,7 @@ private fun AchievementNotice(
                                                 }
                                                 
                                             },
-                                            modifier=Modifier.width(if(key=="Tab")46.dp else 36.dp).fillMaxHeight(),
+                                            modifier=Modifier.width(if(key=="Astro")56.dp else if(key=="Tab")46.dp else 36.dp).fillMaxHeight(),
                                             shape=androidx.compose.foundation.shape.RoundedCornerShape(11.dp),
                                             border=BorderStroke(1.dp,Color.White.copy(alpha=.14f)),
                                             colors=ButtonDefaults.outlinedButtonColors(

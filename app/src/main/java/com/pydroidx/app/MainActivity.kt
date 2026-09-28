@@ -100,6 +100,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.chaquo.python.Python
 import java.io.File
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -119,6 +120,38 @@ data class RuntimeIssue(
 )
 data class SavedCode(val name: String, val modified: Long)
 data class PendingCodeChange(val code: String, val fileName: String, val sourceSnapshot: String)
+
+private fun issueLineNumber(source: String, offset: Int): Int =
+    source.take(offset.coerceIn(0, source.length)).count { it == '\n' } + 1
+
+private fun issueLineText(source: String, offset: Int): String {
+    val safeOffset = offset.coerceIn(0, source.length)
+    val start = (source.lastIndexOf('\n', (safeOffset - 1).coerceAtLeast(0)) + 1).coerceAtMost(safeOffset)
+    val end = source.indexOf('\n', safeOffset).let { if (it < 0) source.length else it }
+    return source.substring(start, end)
+}
+
+private fun issueWhy(message: String): String = when {
+    message.startsWith("Undefined name:", ignoreCase = true) ->
+        "Python could not find this name in the current scope, imports, or built-ins."
+    "indent" in message.lowercase() ->
+        "Python uses indentation to decide which statements belong inside a block."
+    "unterminated" in message.lowercase() || "never closed" in message.lowercase() ->
+        "A string or bracket was opened but Python reached the end before it was closed."
+    else -> "Python's parser could not match this part of the file to valid Python syntax."
+}
+
+private fun issueFix(message: String): String = when {
+    message.startsWith("Undefined name:", ignoreCase = true) ->
+        "Check the spelling. If it is correct, define the name or import it before this line."
+    "indent" in message.lowercase() ->
+        "Align this line with its block and indent the block body consistently."
+    "unterminated" in message.lowercase() || "never closed" in message.lowercase() ->
+        "Add the missing closing quote or bracket, then check the surrounding line."
+    "expected ':'" in message.lowercase() ->
+        "Add a colon after the if, for, while, def, or class header."
+    else -> "Read the parser message, then check the highlighted token and the line before it."
+}
 
 private val FONT_VAULT = """
 Fira Code|firacode,JetBrains Mono|jetbrainsmono,Source Code Pro|sourcecodepro,IBM Plex Mono|ibmplexmono,Cascadia Code|cascadiacode,Victor Mono|victormono,Space Mono|spacemono,Inconsolata|inconsolata,Roboto Mono|robotomono,Noto Sans Mono|notosansmono,
@@ -181,6 +214,7 @@ class IdeViewModel : ViewModel() {
     var ai3Provider by mutableStateOf("Auto")
     var shareCode by mutableStateOf(false)
     var editorFontSize by mutableFloatStateOf(16f)
+    var tabWidth by mutableIntStateOf(4)
     var terminalFontSize by mutableFloatStateOf(13f)
     var uiScale by mutableFloatStateOf(1f)
     var wordWrap by mutableStateOf(true)
@@ -239,9 +273,9 @@ class IdeViewModel : ViewModel() {
     private var namingJob: Job? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val outputBuffer = ConsoleOutputBuffer()
-    @Volatile private var outputFlushScheduled = false
+    private val outputFlushScheduled = AtomicBoolean(false)
     private val outputFlushRunnable = Runnable {
-        outputFlushScheduled = false
+        outputFlushScheduled.set(false)
         output = outputBuffer.snapshot()
     }
     lateinit var projectDir: File
@@ -263,6 +297,7 @@ class IdeViewModel : ViewModel() {
             edit.apply()
         }
         editorFontSize = settings.getFloat("editor_font", 16f)
+        tabWidth = settings.getInt("tab_width", 4).coerceIn(1, 8)
         terminalFontSize = settings.getFloat("terminal_font", 13f)
         uiScale = settings.getFloat("ui_scale", 1f)
         wordWrap = settings.getBoolean("word_wrap", true)
@@ -740,7 +775,7 @@ class IdeViewModel : ViewModel() {
     fun saveAppearance() {
         if (!::settings.isInitialized) return
         settings.edit().putFloat("editor_font",editorFontSize).putFloat("terminal_font",terminalFontSize)
-            .putFloat("ui_scale",uiScale).putBoolean("word_wrap",wordWrap)
+            .putInt("tab_width",tabWidth).putFloat("ui_scale",uiScale).putBoolean("word_wrap",wordWrap)
             .putBoolean("syntax",syntaxHighlighting).putBoolean("autosave",autoSave).apply()
         settings.edit().putString("font",fontName).putFloat("line_spacing",lineSpacing)
             .putFloat("editor_padding",editorPadding).putBoolean("typing_animation",typingAnimation)
@@ -801,13 +836,10 @@ class IdeViewModel : ViewModel() {
         }
     }
     private fun appendOutput(value: String) {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { appendOutput(value) }
-            return
-        }
+        // Python may write one tiny fragment at a time. Buffer on its worker thread
+        // and schedule just one UI update for the next output frame.
         outputBuffer.append(value)
-        if (!outputFlushScheduled) {
-            outputFlushScheduled = true
+        if (outputFlushScheduled.compareAndSet(false, true)) {
             mainHandler.postDelayed(outputFlushRunnable, 32)
         }
     }
@@ -815,7 +847,7 @@ class IdeViewModel : ViewModel() {
     fun clearOutput() {
         outputBuffer.clear()
         mainHandler.removeCallbacks(outputFlushRunnable)
-        outputFlushScheduled = false
+        outputFlushScheduled.set(false)
         output = ""
         runtimeIssue = null
     }
@@ -1079,6 +1111,8 @@ private fun AchievementNotice(
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
     var showAiSettings by remember { mutableStateOf(false) }
     var showCodePreview by remember { mutableStateOf(false) }
+    var showProblems by remember { mutableStateOf(false) }
+    var selectedProblem by remember { mutableStateOf<CodeDiagnostic?>(null) }
     var selectedAiSlot by remember { mutableIntStateOf(0) }
     var keyDraft by remember { mutableStateOf("") }
     var endpointDraft by remember { mutableStateOf(vm.aiEndpoint) }
@@ -1125,6 +1159,9 @@ private fun AchievementNotice(
     }
     LaunchedEffect(vm.aiMessages.size) {
         aiScroll.animateScrollTo(aiScroll.maxValue)
+    }
+    LaunchedEffect(pager.currentPage) {
+        editorView?.flushCodeChange()
     }
     LaunchedEffect(vm.waitingInput, pager.currentPage) {
         if (vm.waitingInput && pager.currentPage == 2) {
@@ -1198,7 +1235,7 @@ private fun AchievementNotice(
                         }
                         if(pager.currentPage==1) {
                             Button(
-                                onClick={if(vm.running) vm.stop() else {
+                                onClick={editorView?.flushCodeChange();if(vm.running) vm.stop() else {
                                     runOrigin=headerRunOrigin;runBurst++; vm.run(); scope.launch{pager.animateScrollToPage(2)}
                                 }},
                                 colors=ButtonDefaults.buttonColors(
@@ -1340,14 +1377,25 @@ private fun AchievementNotice(
                                 .padding(start=12.dp,end=6.dp),
                             verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                         ){
-                            Image(
+                                Image(
                                 painter=painterResource(com.pydroidx.app.R.drawable.ic_python_editor),
                                 contentDescription="Python file",
                                 modifier=Modifier.size(24.dp)
                             )
-                            Spacer(Modifier.width(9.dp))
-                            Text(vm.currentFileName,color=Color.White,fontSize=14.sp,fontWeight=FontWeight.SemiBold,
-                                maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.weight(1f,fill=false).widthIn(max=112.dp))
+                                Spacer(Modifier.width(9.dp))
+                                Text(vm.currentFileName,color=Color.White,fontSize=14.sp,fontWeight=FontWeight.SemiBold,
+                                    maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.weight(1f,fill=false).widthIn(max=112.dp))
+                                if (vm.codeDiagnostics.isNotEmpty()) {
+                                    TextButton(
+                                        onClick={showProblems=true},
+                                        contentPadding=PaddingValues(horizontal=4.dp),
+                                        modifier=Modifier.height(34.dp)
+                                    ) {
+                                        IdeGlyph("Problems",Color(0xFFFF7B86),Modifier.size(17.dp))
+                                        Spacer(Modifier.width(3.dp))
+                                        Text(vm.codeDiagnostics.size.toString(),color=Color(0xFFFF9AA3),fontSize=10.sp)
+                                    }
+                                }
                             Spacer(Modifier.width(7.dp))
                             Box(Modifier.size(6.dp).background(Color(0xFF8AB4F8),androidx.compose.foundation.shape.CircleShape))
                             Spacer(Modifier.width(8.dp))
@@ -1363,7 +1411,7 @@ private fun AchievementNotice(
                                 contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
                             ){IdeGlyph("Close",Color(0xFF8C8C94))}
                             TextButton(
-                                onClick={vm.makeNewCode()},
+                                onClick={editorView?.flushCodeChange();vm.makeNewCode()},
                                 contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
                             ){IdeGlyph("New file",Color(0xFFBFC0C7))}
                         }
@@ -1372,17 +1420,19 @@ private fun AchievementNotice(
                             factory={context->PythonEditorView(context).also{view->
                                 editorView=view
                                 view.onCodeChanged=vm::updateCode
+                                view.onDiagnosticTap={selectedProblem=it}
                                 view.requestSmartCompletion=vm::requestCompletion
                                 view.requestCodeDiagnostics=vm::requestDiagnostics
                                 view.setCodeIfDifferent(vm.code,revision)
                             }},
                             update={view->
+                                view.onDiagnosticTap={selectedProblem=it}
                                 view.setBackgroundColor(bg.toArgb())
                                 view.setCodeIfDifferent(vm.code,revision)
                                 view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting,vm.fontName,
                                     vm.lineSpacing,vm.editorPadding,vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness,
                                     vm.lineNumbers,vm.highlightCurrentLine,vm.customFontPath,
-                                    listOf(vm.editorTextHex,vm.commentHex,vm.stringHex,vm.numberHex,vm.keywordHex,vm.functionHex,vm.variableHex))
+                                    listOf(vm.editorTextHex,vm.commentHex,vm.stringHex,vm.numberHex,vm.keywordHex,vm.functionHex,vm.variableHex),vm.tabWidth)
                             },
                             modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
                         )
@@ -1401,11 +1451,14 @@ private fun AchievementNotice(
                                     verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                                 ){
                                     val matchingPairs = mapOf("(" to ")", "[" to "]", "{" to "}", "\"" to "\"", "'" to "'")
-                                    listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach{key->
+                                    listOf("Tab","(",")","[","]","{","}","\"","'",":","=","#").forEach{key->
                                         OutlinedButton(
                                             onClick={
                                                 when {
                                                     key=="Tab"&&editorView?.acceptGhostSuggestion()==true -> Unit
+                                                    key=="Tab"&&editorView?.indentSelection()==true -> Unit
+                                                    key=="Tab" -> editorView?.insertAtCursor(" ".repeat(vm.tabWidth))
+                                                    key=="#"&&editorView?.toggleCommentSelection()==true -> Unit
                                                     key in matchingPairs -> editorView?.insertPair(key, matchingPairs.getValue(key))
                                                     key in setOf(")", "]", "}") -> editorView?.insertClosingOrSkip(key)
                                                     else -> editorView?.insertAtCursor(if(key=="Tab")"    " else key)
@@ -1455,7 +1508,7 @@ private fun AchievementNotice(
                             }
                             Spacer(Modifier.width(6.dp))
                             Button(
-                                onClick={if(vm.running) vm.stop() else {runOrigin=consoleRunOrigin;runBurst++;vm.run()}},
+                                onClick={editorView?.flushCodeChange();if(vm.running) vm.stop() else {runOrigin=consoleRunOrigin;runBurst++;vm.run()}},
                                 colors=ButtonDefaults.buttonColors(containerColor=Color.White,contentColor=Color.Black),
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
                                 contentPadding=PaddingValues(horizontal=18.dp,vertical=10.dp),
@@ -1881,9 +1934,15 @@ private fun AchievementNotice(
                         Text("Editor padding  ${vm.editorPadding.toInt()} px",color=text)
                         Slider(vm.editorPadding,{vm.editorPadding=it;vm.saveAppearance()},valueRange=0f..48f,steps=11)
                         }
-                        if(settingsSection=="Editor" || searchMatches("editor","font size","line spacing","highlight delay","autosave","ghost text","cursor","word wrap","syntax","autocomplete","line numbers","saving")){
+                        if(settingsSection=="Editor" || searchMatches("editor","font size","line spacing","highlight delay","autosave","ghost text","cursor","word wrap","syntax","autocomplete","line numbers","saving","tab width","indentation")){
                         Text("Editor font  ${vm.editorFontSize.toInt()} sp",color=text)
                         Slider(vm.editorFontSize,{vm.editorFontSize=it;vm.saveAppearance()},valueRange=12f..28f,steps=15)
+                        Text("Tab width  ${vm.tabWidth} spaces",color=text)
+                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                            listOf(2, 4, 8).forEach { width ->
+                                FilterChip(selected=vm.tabWidth==width,onClick={vm.tabWidth=width;vm.saveAppearance()},label={Text("$width spaces")})
+                            }
+                        }
                         Text("Line spacing  ${"%.2f".format(vm.lineSpacing)}×",color=text)
                         Slider(vm.lineSpacing,{vm.lineSpacing=it;vm.saveAppearance()},valueRange=0.9f..1.8f)
                         Text("Highlight delay  ${vm.highlightDelay.toInt()} ms",color=text)
@@ -1931,6 +1990,48 @@ private fun AchievementNotice(
         }
         RunBurst(runBurst,vm.currentFileName,motionAllowed,runOrigin)
         }
+    }
+    if(showProblems) AlertDialog(
+        onDismissRequest={showProblems=false},containerColor=Color(0xFF171A20),
+        title={Text("Problems · ${vm.currentFileName}")},
+        text={Column(Modifier.heightIn(max=450.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            if (vm.codeDiagnostics.isEmpty()) Text("No problems in this file.",color=Color.LightGray)
+            vm.codeDiagnostics.forEach { issue ->
+                TextButton(onClick={showProblems=false;selectedProblem=issue},modifier=Modifier.fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text("Line ${issueLineNumber(vm.code,issue.start)} · ${issue.message}",color=if(issue.fatal) Color(0xFFFF9AA3) else Color(0xFFFFC88A),fontSize=13.sp)
+                        Text(issueLineText(vm.code,issue.start).trim().take(120),color=Color.LightGray,fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=1)
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showProblems=false}) { Text("Close") }}
+    )
+    selectedProblem?.let { issue ->
+        val line = issueLineNumber(vm.code,issue.start)
+        AlertDialog(
+            onDismissRequest={selectedProblem=null},containerColor=Color(0xFF171A20),
+            title={Text("Problem · line $line")},
+            text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                Text("What happened",color=accent,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                Text(issue.message,color=Color.White,fontSize=13.sp)
+                Text("Where",color=accent,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                Text("${vm.currentFileName}:$line  ${issueLineText(vm.code,issue.start).trim().take(120)}",color=Color.LightGray,fontFamily=FontFamily.Monospace,fontSize=12.sp)
+                Text("Why Python dislikes it",color=accent,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                Text(issueWhy(issue.message),color=Color.LightGray,fontSize=13.sp)
+                Text("Possible fix",color=accent,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                Text(issueFix(issue.message),color=Color.LightGray,fontSize=13.sp)
+            }},
+            confirmButton={TextButton(onClick={
+                selectedProblem=null
+                editorView?.let { view ->
+                    val offset = issue.start.coerceIn(0,view.text?.length ?: 0)
+                    view.setSelection(offset)
+                    view.requestFocus()
+                }
+            }) { Text("Go to code") }},
+            dismissButton={TextButton(onClick={selectedProblem=null}) { Text("Close") }}
+        )
     }
     if(showCodePreview) vm.pendingCode?.let { change ->
         val preview = remember(change) { codeChangePreview(change.sourceSnapshot, change.code) }

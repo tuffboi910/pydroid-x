@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.RectF
 import android.os.Looper
 import android.view.MotionEvent
+import android.view.KeyEvent
 import android.view.View
 import org.junit.Assert.*
 import org.junit.Before
@@ -62,6 +63,81 @@ class PythonEditorViewTest {
         assertEquals("v{alu}e", editor.text.toString())
         assertEquals(2, editor.selectionStart)
         assertEquals(5, editor.selectionEnd)
+    }
+    @Test fun codeMirrorBatchesRapidTypingAndCanFlushImmediately() {
+        val updates = mutableListOf<String>()
+        editor.onCodeChanged = updates::add
+        editor.text.append("r")
+        looper.idleFor(Duration.ofMillis(80))
+        editor.text.append("i")
+        looper.idleFor(Duration.ofMillis(119))
+        assertTrue(updates.isEmpty())
+        looper.idleFor(Duration.ofMillis(1))
+        assertEquals(listOf("vari"), updates)
+
+        editor.text.append("able")
+        editor.flushCodeChange()
+        assertEquals("variable", updates.last())
+        looper.idleFor(Duration.ofMillis(200))
+        assertEquals(2, updates.size)
+    }
+
+    @Test fun externalFileSwitchCancelsPendingOldTextSync() {
+        val updates = mutableListOf<String>()
+        editor.onCodeChanged = updates::add
+        editor.text.append(" old")
+        editor.setCodeIfDifferent("new file", revision = 1)
+        looper.idleFor(Duration.ofMillis(200))
+        assertEquals("new file", editor.text.toString())
+        assertTrue(updates.isEmpty())
+    }
+
+    @Test fun undoGroupsRapidCharacterTyping() {
+        editor.setCodeIfDifferent("", revision = 2)
+        editor.text.append("a")
+        editor.text.append("b")
+        editor.undoCode()
+        assertEquals("", editor.text.toString())
+    }
+
+    @Test fun typedOpeningPairPlacesCaretBetweenAndBackspaceRemovesEmptyPair() {
+        editor.setCodeIfDifferent("", revision = 3)
+        editor.text.insert(0, "(")
+        assertEquals("()", editor.text.toString())
+        assertEquals(1, editor.selectionStart)
+        editor.onKeyDown(KeyEvent.KEYCODE_DEL, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
+        assertEquals("", editor.text.toString())
+    }
+
+    @Test fun typingExistingCloserSkipsDuplicate() {
+        editor.setCodeIfDifferent(")", revision = 4)
+        editor.setSelection(0)
+        editor.text.insert(0, ")")
+        assertEquals(")", editor.text.toString())
+        assertEquals(1, editor.selectionStart)
+    }
+
+    @Test fun enterAfterColonAddsConfiguredIndent() {
+        editor.setCodeIfDifferent("if ready:", revision = 5)
+        editor.setSelection(editor.text.length)
+        editor.text.insert(editor.selectionStart, "\n")
+        assertEquals("if ready:\n    ", editor.text.toString())
+        assertEquals(editor.text.length, editor.selectionStart)
+    }
+
+    @Test fun indentAndCommentSelectionPreserveCodeAndUndoAsSingleAction() {
+        editor.setCodeIfDifferent("one\ntwo", revision = 6)
+        editor.setSelection(0, editor.text.length)
+        assertTrue(editor.indentSelection())
+        assertEquals("    one\n    two", editor.text.toString())
+        editor.undoCode()
+        assertEquals("one\ntwo", editor.text.toString())
+
+        editor.setSelection(0, editor.text.length)
+        assertTrue(editor.toggleCommentSelection())
+        assertEquals("# one\n# two", editor.text.toString())
+        assertTrue(editor.toggleCommentSelection())
+        assertEquals("one\ntwo", editor.text.toString())
     }
     @Test fun closingToolbarKeySkipsExistingCloser() {
         editor.setText("()")

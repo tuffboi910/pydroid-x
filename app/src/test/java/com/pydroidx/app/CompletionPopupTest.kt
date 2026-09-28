@@ -2,6 +2,7 @@ package com.pydroidx.app
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.RectF
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -17,12 +18,12 @@ class CompletionPopupTest {
         val entries = listOf("pass", "pow()", "print()").map {
             CompletionItem(it, it, 0, 1, 0, "function", "", "Short description")
         }
-        val hitArea = CompletionPopup.draw(canvas, 400, 700, 120f, 220f, 244f, 1f, entries, 0)
-        assertNotNull(hitArea)
-        val (bounds, rowHeight) = hitArea!!
+        val bounds = RectF()
+        val rowHeight = CompletionPopup.draw(canvas, 400, 700, 120f, 220f, 244f, 1f, entries, 0, bounds)
+        assertNotNull(rowHeight)
         assertTrue(bounds.width() <= 190f)
         assertTrue(bounds.height() <= 66f)
-        assertEquals(22f, rowHeight, 0.1f)
+        assertEquals(22f, rowHeight!!, 0.1f)
         assertTrue(bounds.contains(bounds.centerX(), bounds.top + rowHeight * 2.5f))
     }
 }

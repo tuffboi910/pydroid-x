@@ -45,6 +45,8 @@ The older `b119229` checkout is untouched. This checklist tracks reconstructed w
 - The editor, diagnostics, Console output coalescing, and atomic save checkpoint is backed up on `py4u/masterpiece-upgrade` and reviewed in draft PR #5.
 - GitHub Actions run 202 passed the Python suite, Android unit tests, and debug APK build. Physical-device behavior and frame timing remain unverified.
 - The next checkpoint adds in-file Find, Replace, Replace All, Go to Line, and keyboard Find/Replace shortcuts. Its Android CI run is pending.
+- GitHub Actions runs 203, 204, and 205 passed their Python suites, Android unit tests, and debug APK builds. The next history checkpoint is pending CI.
+- Saves now serialize automatic renames, and Android `ON_STOP` flushes pending editor edits before saving. History retains at most 12 versions per file, with a one-minute cadence; large files over 1 MB skip automatic snapshots.
 
 ## Current files changed
 

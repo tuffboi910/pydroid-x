@@ -47,4 +47,22 @@ class ProjectFileWriterTest {
         assertEquals("print('saved')", renamed.readText())
         assertTrue(!original.exists())
     }
+
+    @Test fun replacingFileKeepsRecoverablePreviousVersion() {
+        val file = File(Files.createTempDirectory("py4u-history-").toFile(), "main.py")
+        file.writeText("print('before')\n")
+        val finished = CountDownLatch(1)
+        ProjectFileWriter.enqueue(file, "print('after')\n") { finished.countDown() }
+        assertTrue(finished.await(5, TimeUnit.SECONDS))
+        assertEquals("print('after')\n", file.readText())
+        assertEquals("print('before')\n", ProjectFileHistory.versions(file).first().readText())
+    }
+
+    @Test fun deliberateRestoreCanProtectCurrentUnsavedCode() {
+        val file = File(Files.createTempDirectory("py4u-restore-").toFile(), "main.py")
+        val finished = CountDownLatch(1)
+        ProjectFileWriter.checkpoint(file, "unsaved 🐍") { finished.countDown() }
+        assertTrue(finished.await(5, TimeUnit.SECONDS))
+        assertEquals("unsaved 🐍", ProjectFileHistory.versions(file).first().readText())
+    }
 }

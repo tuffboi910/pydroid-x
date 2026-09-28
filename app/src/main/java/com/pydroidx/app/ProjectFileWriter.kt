@@ -15,10 +15,16 @@ internal object ProjectFileWriter {
     fun enqueue(file: File, content: String, complete: (Result<Unit>) -> Unit) {
         executor.execute {
             val result = runCatching {
+                val bytes = content.toByteArray(StandardCharsets.UTF_8)
+                if (file.isFile && file.length() <= 1_000_000L) {
+                    val oldBytes = file.readBytes()
+                    if (oldBytes.contentEquals(bytes)) return@runCatching
+                    ProjectFileHistory.checkpoint(file, oldBytes)
+                }
                 val atomic = AtomicFile(file)
                 val stream = atomic.startWrite()
                 try {
-                    stream.write(content.toByteArray(StandardCharsets.UTF_8))
+                    stream.write(bytes)
                     atomic.finishWrite(stream)
                 } catch (error: Throwable) {
                     atomic.failWrite(stream)
@@ -35,6 +41,14 @@ internal object ProjectFileWriter {
                 if (target.exists() || !source.renameTo(target)) {
                     throw IOException("Could not rename ${source.name} to ${target.name}")
                 }
+            })
+        }
+    }
+
+    fun checkpoint(file: File, content: String, complete: (Result<Unit>) -> Unit) {
+        executor.execute {
+            complete(runCatching {
+                ProjectFileHistory.recoveryPoint(file, content.toByteArray(StandardCharsets.UTF_8))
             })
         }
     }

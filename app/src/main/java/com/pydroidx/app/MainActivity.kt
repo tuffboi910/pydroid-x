@@ -109,6 +109,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.json.JSONArray
 import kotlin.math.absoluteValue
@@ -570,13 +571,23 @@ class IdeViewModel : ViewModel() {
             aiMessages.add(AiMessage(false, "That edit is stale because the file changed. Ask Astro again before applying it."))
             return
         }
-        val replacement = change.code
-        code = replacement + if (replacement.endsWith("\n")) "" else "\n"
-        editorRevision++
-        save()
-        pendingCode = null
-        showCodeNotice=false
-        aiMessages.add(AiMessage(false, "Applied to $currentFileName ✓"))
+        val target = File(projectDir, currentFileName)
+        ProjectFileWriter.checkpoint(target, change.sourceSnapshot) { result ->
+            mainHandler.post {
+                if (result.isFailure) {
+                    aiMessages.add(AiMessage(false, "Couldn’t protect the current file: ${result.exceptionOrNull()?.message}"))
+                } else if (pendingCode == change && projectDir == target.parentFile &&
+                    currentFileName == change.fileName && code == change.sourceSnapshot) {
+                    val replacement = change.code
+                    code = replacement + if (replacement.endsWith("\n")) "" else "\n"
+                    editorRevision++
+                    save()
+                    pendingCode = null
+                    showCodeNotice=false
+                    aiMessages.add(AiMessage(false, "Applied to $currentFileName ✓"))
+                }
+            }
+        }
     }
     fun rejectPendingCode() { pendingCode = null; showCodeNotice=false }
     fun acceptTeaching() {
@@ -832,6 +843,33 @@ class IdeViewModel : ViewModel() {
     fun save() {
         autosaveJob?.cancel()
         if (::projectDir.isInitialized) persistCode(projectDir, currentFileName, code)
+    }
+    fun historyVersions(): List<File> = if (::projectDir.isInitialized)
+        ProjectFileHistory.versions(File(projectDir, currentFileName)) else emptyList()
+
+    fun restoreHistory(version: File) {
+        if (!::projectDir.isInitialized) return
+        val target = File(projectDir, currentFileName)
+        if (version !in ProjectFileHistory.versions(target)) return
+        val currentSnapshot = code
+        viewModelScope.launch {
+            val recovered = withContext(Dispatchers.IO) { runCatching { version.readText() } }
+            recovered.onSuccess { snapshot ->
+                if (projectDir == target.parentFile && currentFileName == target.name && code == currentSnapshot) {
+                    ProjectFileWriter.checkpoint(target, currentSnapshot) { result ->
+                        mainHandler.post {
+                            if (result.isFailure) saveError = "Couldn’t protect current code: ${result.exceptionOrNull()?.message}"
+                            else if (projectDir == target.parentFile && currentFileName == target.name && code == currentSnapshot) {
+                                code = snapshot
+                                codeDiagnostics = emptyList()
+                                editorRevision++
+                                save()
+                            }
+                        }
+                    }
+                }
+            }.onFailure { saveError = "Couldn’t restore ${version.name}: ${it.message}" }
+        }
     }
     private fun persistCode(directory: File, fileName: String, snapshot: String) {
         ProjectFileWriter.enqueue(File(directory, fileName), snapshot) { result ->
@@ -1136,6 +1174,14 @@ private fun AchievementNotice(
     var replacement by remember { mutableStateOf("") }
     var showGoToLine by remember { mutableStateOf(false) }
     var lineDraft by remember { mutableStateOf("") }
+    var showHistory by remember { mutableStateOf(false) }
+    var chosenVersion by remember { mutableStateOf<File?>(null) }
+    var historyPreview by remember { mutableStateOf("") }
+    LaunchedEffect(chosenVersion) {
+        historyPreview = chosenVersion?.let { version ->
+            withContext(Dispatchers.IO) { runCatching { version.readText().take(3000) }.getOrDefault("Couldn’t read snapshot") }
+        }.orEmpty()
+    }
     var showAiSettings by remember { mutableStateOf(false) }
     var showCodePreview by remember { mutableStateOf(false) }
     var showProblems by remember { mutableStateOf(false) }
@@ -1466,6 +1512,7 @@ private fun AchievementNotice(
                             Row(Modifier.fillMaxWidth().padding(horizontal=8.dp)) {
                                 TextButton(onClick={showReplace=!showReplace}) { Text("Replace") }
                                 TextButton(onClick={showGoToLine=true}) { Text("Go to line") }
+                                TextButton(onClick={showHistory=true;chosenVersion=null}) { Text("History") }
                             }
                             if (showReplace) Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),
                                 verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
@@ -2061,6 +2108,29 @@ private fun AchievementNotice(
         RunBurst(runBurst,vm.currentFileName,motionAllowed,runOrigin)
         }
     }
+    if(showHistory) AlertDialog(
+        onDismissRequest={showHistory=false},containerColor=Color(0xFF171A20),
+        title={Text("History · ${vm.currentFileName}")},
+        text={Column(Modifier.heightIn(max=450.dp).verticalScroll(rememberScrollState())) {
+            val versions = remember(vm.currentFileName, showHistory) { vm.historyVersions() }
+            if (versions.isEmpty()) Text("No earlier versions yet.",color=Color.LightGray)
+            versions.forEach { version ->
+                TextButton(onClick={chosenVersion=version}) {
+                    Text(java.text.DateFormat.getDateTimeInstance().format(java.util.Date(version.nameWithoutExtension.toLongOrNull() ?: 0L)),
+                        color=if(chosenVersion==version) accent else Color.White)
+                }
+            }
+            if (chosenVersion != null) {
+                Text("Preview (first 3,000 characters)",color=accent,fontSize=11.sp)
+                Text(historyPreview,color=Color.LightGray,fontFamily=FontFamily.Monospace,fontSize=11.sp)
+            }
+        }},
+        confirmButton={TextButton(enabled=chosenVersion!=null,onClick={
+            chosenVersion?.let(vm::restoreHistory)
+            showHistory=false
+        }) { Text("Restore") }},
+        dismissButton={TextButton(onClick={showHistory=false}) { Text("Cancel") }}
+    )
     if(showGoToLine) AlertDialog(
         onDismissRequest={showGoToLine=false},containerColor=Color(0xFF171A20),
         title={Text("Go to line")},

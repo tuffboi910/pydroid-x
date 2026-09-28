@@ -124,7 +124,7 @@ data class RuntimeIssue(
     val hint: String, val details: String, val fileName: String,
     val replaceFrom: String = "", val replaceTo: String = ""
 )
-data class SavedCode(val name: String, val modified: Long)
+data class SavedCode(val name: String, val modified: Long, val fileName: String)
 data class PendingCodeChange(val code: String, val fileName: String, val sourceSnapshot: String)
 
 private fun issueLineNumber(source: String, offset: Int): Int =
@@ -178,6 +178,7 @@ class IdeViewModel : ViewModel() {
     @Volatile var code = "print(\"Hello world!\")\n"
     var currentFileName by mutableStateOf("main.py")
     val savedCodes = mutableStateListOf<SavedCode>()
+    val deletedFiles = mutableStateListOf<TrashedProjectFile>()
     val projectNames = mutableStateListOf<String>()
     var currentProjectName by mutableStateOf("default")
     var editorRevision by mutableIntStateOf(0)
@@ -675,7 +676,9 @@ class IdeViewModel : ViewModel() {
         val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }
             ?.sortedByDescending { it.lastModified() }.orEmpty()
         savedCodes.clear()
-        savedCodes.addAll(files.map { SavedCode(it.nameWithoutExtension.replace('_',' '),it.lastModified()) })
+        savedCodes.addAll(files.map { SavedCode(it.nameWithoutExtension.replace('_',' '),it.lastModified(),it.name) })
+        deletedFiles.clear()
+        deletedFiles.addAll(ProjectFileTrash.list(projectDir))
     }
 
     fun makeNewProject(template: String = "Blank") {
@@ -784,6 +787,12 @@ class IdeViewModel : ViewModel() {
         editorRevision++
     }
 
+    private fun projectPythonFile(fileName: String): File? {
+        if (!::projectDir.isInitialized || fileName.contains('/') || fileName.contains('\\')) return null
+        val file=File(projectDir,fileName)
+        return file.takeIf { it.isFile && it.parentFile==projectDir && it.extension.equals("py",true) }
+    }
+
     fun openSaved(displayName: String) {
         if (running || !::projectDir.isInitialized) return
         val file=projectDir.listFiles()?.firstOrNull {
@@ -794,8 +803,7 @@ class IdeViewModel : ViewModel() {
 
     fun openProjectFile(fileName: String) {
         if (running || !::projectDir.isInitialized) return
-        val file=File(projectDir,fileName)
-        if (!file.isFile || file.parentFile != projectDir || !file.extension.equals("py",true)) return
+        val file=projectPythonFile(fileName) ?: return
         save()
         currentFileName=file.name
         code=readProjectText(file)
@@ -805,6 +813,108 @@ class IdeViewModel : ViewModel() {
         settings.edit().putString("current_file",currentFileName).apply()
         editorRevision++
         refreshSaved()
+    }
+
+    fun renameProjectFile(fileName: String, requestedName: String) {
+        if (running) return
+        val source=projectPythonFile(fileName) ?: return
+        val target=File(projectDir,ProjectFileTrash.safePythonFileName(requestedName))
+        if (target==source) return
+        if (target.exists()) {
+            saveError="${target.name} already exists"
+            return
+        }
+        val wasCurrent=source.name==currentFileName
+        if (wasCurrent) save()
+        namingJob?.cancel()
+        ProjectFileWriter.rename(source,target) { result ->
+            mainHandler.post {
+                result.onSuccess {
+                    if (wasCurrent) {
+                        currentFileName=target.name
+                        settings.edit().putString("current_file",currentFileName).apply()
+                        editorRevision++
+                    }
+                    saveError=null
+                    refreshSaved()
+                }.onFailure { saveError=it.message ?: "Couldn’t rename ${source.name}" }
+            }
+        }
+    }
+
+    fun duplicateProjectFile(fileName: String) {
+        if (running) return
+        val source=projectPythonFile(fileName) ?: return
+        if (source.name==currentFileName) save()
+        val target=ProjectFileTrash.duplicateTarget(projectDir,source)
+        ProjectFileWriter.duplicate(source,target) { result ->
+            mainHandler.post {
+                result.onSuccess { saveError=null;refreshSaved() }
+                    .onFailure { saveError=it.message ?: "Couldn’t duplicate ${source.name}" }
+            }
+        }
+    }
+
+    fun deleteProjectFile(fileName: String) {
+        if (running) return
+        val source=projectPythonFile(fileName) ?: return
+        val wasCurrent=source.name==currentFileName
+        if (wasCurrent) save()
+        namingJob?.cancel()
+        ProjectFileWriter.trash(source) { result ->
+            result.onFailure { error ->
+                mainHandler.post { saveError=error.message ?: "Couldn’t delete ${source.name}" }
+            }.onSuccess {
+                if (!wasCurrent) {
+                    mainHandler.post { saveError=null;refreshSaved() }
+                    return@onSuccess
+                }
+                val replacement=projectDir.listFiles()?.filter {
+                    it.isFile && it.extension.equals("py",true)
+                }?.maxByOrNull { it.lastModified() }
+                if (replacement != null) {
+                    val loaded=runCatching { readProjectText(replacement) }
+                    mainHandler.post {
+                        loaded.onSuccess { text ->
+                            currentFileName=replacement.name
+                            code=text
+                            codeDiagnostics=emptyList()
+                            pendingCode=null
+                            settings.edit().putString("current_file",currentFileName).apply()
+                            editorRevision++
+                            saveError=null
+                            refreshSaved()
+                        }.onFailure { saveError=it.message ?: "Couldn’t open another file";refreshSaved() }
+                    }
+                } else {
+                    val fallback=File(projectDir,"main.py")
+                    ProjectFileWriter.enqueue(fallback,"") { created ->
+                        mainHandler.post {
+                            created.onSuccess {
+                                currentFileName=fallback.name
+                                code=""
+                                codeDiagnostics=emptyList()
+                                pendingCode=null
+                                settings.edit().putString("current_file",currentFileName).apply()
+                                editorRevision++
+                                saveError=null
+                            }.onFailure { saveError=it.message ?: "Couldn’t create main.py" }
+                            refreshSaved()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun restoreDeletedFile(trashName: String) {
+        if (running || !::projectDir.isInitialized) return
+        ProjectFileWriter.restore(projectDir,trashName) { result ->
+            mainHandler.post {
+                result.onSuccess { saveError=null;refreshSaved() }
+                    .onFailure { saveError=it.message ?: "Couldn’t restore deleted file" }
+            }
+        }
     }
 
     fun searchProject(query: String) {
@@ -1268,6 +1378,10 @@ private fun AchievementNotice(
     var showConsoleSearch by remember { mutableStateOf(false) }
     var consoleSearchQuery by remember { mutableStateOf("") }
     var consoleSearchSnapshot by remember { mutableStateOf("") }
+    var fileActionTarget by remember { mutableStateOf<SavedCode?>(null) }
+    var renameTarget by remember { mutableStateOf<SavedCode?>(null) }
+    var renameDraft by remember { mutableStateOf("") }
+    var showTrash by remember { mutableStateOf(false) }
     var showProjectTemplates by remember { mutableStateOf(false) }
     var quickOpenQuery by remember { mutableStateOf("") }
     var chosenVersion by remember { mutableStateOf<File?>(null) }
@@ -1510,6 +1624,12 @@ private fun AchievementNotice(
                                 onClick={showProjectTemplates=true},
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
                             ){Text("＋ Project")}
+                            if(vm.deletedFiles.isNotEmpty()) {
+                                OutlinedButton(
+                                    onClick={showTrash=true},
+                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
+                                ){Text("Trash ${vm.deletedFiles.size}")}
+                            }
                         }
                         HorizontalDivider(color=Color.White.copy(alpha=0.12f))
                         if(vm.savedCodes.isEmpty()) {
@@ -1523,8 +1643,8 @@ private fun AchievementNotice(
                             ) {
                                 vm.savedCodes.forEach { saved ->
                                     Surface(
-                                        onClick={vm.openSaved(saved.name);scope.launch{pager.animateScrollToPage(1)}},
-                                        color=if(vm.currentFileName.substringBeforeLast('.').replace('_',' ')==saved.name) Color.White.copy(alpha=0.15f) else Color.White.copy(alpha=0.045f),
+                                        onClick={vm.openProjectFile(saved.fileName);scope.launch{pager.animateScrollToPage(1)}},
+                                        color=if(vm.currentFileName==saved.fileName) Color.White.copy(alpha=0.15f) else Color.White.copy(alpha=0.045f),
                                         shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                                         modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.10f),androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
                                     ) {
@@ -1535,7 +1655,10 @@ private fun AchievementNotice(
                                                 Text(saved.name,color=Color.White,fontSize=15.sp,fontWeight=FontWeight.SemiBold)
                                                 Text(".py  •  auto-saved",color=Color.Gray,fontSize=10.sp)
                                             }
-                                            Text("›",color=Color.Gray,fontSize=24.sp)
+                                            TextButton(
+                                                onClick={fileActionTarget=saved},
+                                                contentPadding=PaddingValues(horizontal=7.dp,vertical=2.dp)
+                                            ) { Text("⋮",color=Color.LightGray,fontSize=20.sp) }
                                         }
                                     }
                                 }
@@ -2234,6 +2357,67 @@ private fun AchievementNotice(
         RunBurst(runBurst,vm.currentFileName,motionAllowed,runOrigin)
         }
     }
+    fileActionTarget?.let { saved ->
+        AlertDialog(
+            onDismissRequest={fileActionTarget=null},containerColor=Color(0xFF171A20),
+            title={Text(saved.fileName)},
+            text={Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                TextButton(onClick={
+                    vm.duplicateProjectFile(saved.fileName)
+                    fileActionTarget=null
+                },modifier=Modifier.fillMaxWidth()) { Text("Duplicate") }
+                TextButton(onClick={
+                    renameTarget=saved
+                    renameDraft=saved.name
+                    fileActionTarget=null
+                },modifier=Modifier.fillMaxWidth()) { Text("Rename") }
+                TextButton(onClick={
+                    vm.deleteProjectFile(saved.fileName)
+                    fileActionTarget=null
+                },modifier=Modifier.fillMaxWidth()) { Text("Move to Trash",color=Color(0xFFFF9AA3)) }
+            }},
+            confirmButton={TextButton(onClick={fileActionTarget=null}) { Text("Close") }}
+        )
+    }
+    renameTarget?.let { saved ->
+        AlertDialog(
+            onDismissRequest={renameTarget=null},containerColor=Color(0xFF171A20),
+            title={Text("Rename ${saved.fileName}")},
+            text={OutlinedTextField(
+                value=renameDraft,
+                onValueChange={renameDraft=it.take(60)},
+                label={Text("File name")},
+                singleLine=true
+            )},
+            confirmButton={TextButton(
+                enabled=renameDraft.isNotBlank(),
+                onClick={
+                    vm.renameProjectFile(saved.fileName,renameDraft)
+                    renameTarget=null
+                }
+            ) { Text("Rename") }},
+            dismissButton={TextButton(onClick={renameTarget=null}) { Text("Cancel") }}
+        )
+    }
+    if(showTrash) AlertDialog(
+        onDismissRequest={showTrash=false},containerColor=Color(0xFF171A20),
+        title={Text("Recently deleted")},
+        text={Column(Modifier.heightIn(max=430.dp).verticalScroll(rememberScrollState())) {
+            if(vm.deletedFiles.isEmpty()) Text("Trash is empty.",color=Color.LightGray)
+            vm.deletedFiles.forEach { deleted ->
+                TextButton(onClick={
+                    vm.restoreDeletedFile(deleted.trashName)
+                    showTrash=false
+                },modifier=Modifier.fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(deleted.originalName,color=Color.White)
+                        Text("Tap to restore",color=Color.Gray,fontSize=10.sp)
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showTrash=false}) { Text("Close") }}
+    )
     if(showProjectTemplates) AlertDialog(
         onDismissRequest={showProjectTemplates=false},containerColor=Color(0xFF171A20),
         title={Text("New project")},
@@ -2380,7 +2564,7 @@ private fun AchievementNotice(
                 vm.savedCodes.filter { it.name.contains(quickOpenQuery,true) }.forEach { saved ->
                     TextButton(enabled=!vm.running,onClick={
                         editorView?.flushCodeChange()
-                        vm.openSaved(saved.name)
+                        vm.openProjectFile(saved.fileName)
                         showQuickOpen=false
                         scope.launch{pager.animateScrollToPage(1)}
                     },modifier=Modifier.fillMaxWidth()) { Text(saved.name + ".py") }

@@ -51,6 +51,35 @@ internal object ProjectFileWriter {
         }
     }
 
+    fun duplicate(source: File, target: File, complete: (Result<Unit>) -> Unit) {
+        executor.execute {
+            complete(runCatching {
+                if (!source.isFile) throw IOException("Source file no longer exists")
+                if (target.exists() || target.parentFile != source.parentFile) {
+                    throw IOException("Could not create ${target.name}")
+                }
+                val bytes=AtomicFile(source).openRead().use { it.readBytes() }
+                val atomic=AtomicFile(target)
+                val stream=atomic.startWrite()
+                try {
+                    stream.write(bytes)
+                    atomic.finishWrite(stream)
+                } catch (error: Throwable) {
+                    atomic.failWrite(stream)
+                    throw error
+                }
+            })
+        }
+    }
+
+    fun trash(source: File, complete: (Result<File>) -> Unit) {
+        executor.execute { complete(runCatching { ProjectFileTrash.move(source) }) }
+    }
+
+    fun restore(projectDir: File, trashName: String, complete: (Result<File>) -> Unit) {
+        executor.execute { complete(runCatching { ProjectFileTrash.restore(projectDir,trashName) }) }
+    }
+
     fun checkpoint(file: File, content: String, complete: (Result<Unit>) -> Unit) {
         executor.execute {
             complete(runCatching {

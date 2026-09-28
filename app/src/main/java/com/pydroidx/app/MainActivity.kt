@@ -1258,6 +1258,9 @@ private fun AchievementNotice(
     var showQuickOpen by remember { mutableStateOf(false) }
     var showProjectSearch by remember { mutableStateOf(false) }
     var projectSearchQuery by remember { mutableStateOf("") }
+    var showConsoleSearch by remember { mutableStateOf(false) }
+    var consoleSearchQuery by remember { mutableStateOf("") }
+    var consoleSearchSnapshot by remember { mutableStateOf("") }
     var showProjectTemplates by remember { mutableStateOf(false) }
     var quickOpenQuery by remember { mutableStateOf("") }
     var chosenVersion by remember { mutableStateOf<File?>(null) }
@@ -1749,6 +1752,11 @@ private fun AchievementNotice(
                             TextButton(onClick={consoleAutoScroll=!consoleAutoScroll}) {
                                 Text(if(consoleAutoScroll) "Auto on" else "Auto off",fontSize=11.sp)
                             }
+                            TextButton(onClick={
+                                consoleSearchSnapshot=vm.fullOutput()
+                                consoleSearchQuery=""
+                                showConsoleSearch=true
+                            }) { Text("Search",fontSize=11.sp) }
                             TextButton(onClick={
                                 val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                 clipboard.setPrimaryClip(ClipData.newPlainText("PY4U Console",vm.fullOutput()))
@@ -2266,6 +2274,47 @@ private fun AchievementNotice(
             }
         }},
         confirmButton={TextButton(onClick={showPalette=false}) { Text("Close") }}
+    )
+    if(showConsoleSearch) AlertDialog(
+        onDismissRequest={showConsoleSearch=false},containerColor=Color(0xFF171A20),
+        title={Text("Search Console")},
+        text={Column(Modifier.heightIn(max=480.dp)) {
+            OutlinedTextField(
+                value=consoleSearchQuery,
+                onValueChange={consoleSearchQuery=it},
+                label={Text("Find output")},
+                singleLine=true,
+                modifier=Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            val hits = remember(consoleSearchSnapshot,consoleSearchQuery) {
+                ConsoleSearch.search(consoleSearchSnapshot,consoleSearchQuery)
+            }
+            when {
+                consoleSearchQuery.isBlank() -> Text("Search the retained Console output.",color=Color.LightGray)
+                hits.isEmpty() -> Text("No matches.",color=Color.LightGray)
+                else -> {
+                    Text("${hits.size} match${if(hits.size==1) "" else "es"}",color=Color.Gray,fontSize=11.sp)
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        hits.forEach { hit ->
+                            TextButton(onClick={
+                                val totalLines=(consoleSearchSnapshot.count { it=='\n' }+1).coerceAtLeast(1)
+                                val target=if(totalLines<=1) 0 else
+                                    ((consoleScroll.maxValue.toLong()*(hit.line-1))/(totalLines-1)).toInt()
+                                showConsoleSearch=false
+                                scope.launch { consoleScroll.animateScrollTo(target.coerceIn(0,consoleScroll.maxValue)) }
+                            },modifier=Modifier.fillMaxWidth()) {
+                                Column(Modifier.fillMaxWidth()) {
+                                    Text("Line ${hit.line} · column ${hit.column}",color=accent,fontSize=11.sp,fontWeight=FontWeight.SemiBold)
+                                    Text(hit.lineText.trim().take(180),color=Color.LightGray,fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=2)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showConsoleSearch=false}) { Text("Close") }}
     )
     if(showProjectSearch) AlertDialog(
         onDismissRequest={showProjectSearch=false},containerColor=Color(0xFF171A20),

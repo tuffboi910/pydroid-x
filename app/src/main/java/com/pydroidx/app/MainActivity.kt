@@ -907,6 +907,13 @@ class IdeViewModel : ViewModel() {
     fun historyVersions(): List<File> = if (::projectDir.isInitialized)
         ProjectFileHistory.versions(File(projectDir, currentFileName)) else emptyList()
 
+    fun historyPreview(version: File): String {
+        if (!::projectDir.isInitialized) return "Couldn’t read snapshot"
+        val target=File(projectDir,currentFileName)
+        if (version !in ProjectFileHistory.versions(target)) return "Couldn’t read snapshot"
+        return runCatching { readProjectText(version).take(3000) }.getOrDefault("Couldn’t read snapshot")
+    }
+
     fun restoreHistory(version: File) {
         if (!::projectDir.isInitialized) return
         val target = File(projectDir, currentFileName)
@@ -1267,7 +1274,7 @@ private fun AchievementNotice(
     var historyPreview by remember { mutableStateOf("") }
     LaunchedEffect(chosenVersion) {
         historyPreview = chosenVersion?.let { version ->
-            withContext(Dispatchers.IO) { runCatching { readProjectText(version).take(3000) }.getOrDefault("Couldn’t read snapshot") }
+            withContext(Dispatchers.IO) { vm.historyPreview(version) }
         }.orEmpty()
     }
     var showAiSettings by remember { mutableStateOf(false) }

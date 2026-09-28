@@ -379,7 +379,7 @@ class _Stream(io.TextIOBase):
         return None
 
 
-def _purge_project_modules(project_dir):
+def _purge_project_modules(project_dir, clear_bytecode=True):
     root = os.path.realpath(project_dir)
     prefix = root + os.sep
     for name, module in list(sys.modules.items()):
@@ -392,10 +392,11 @@ def _purge_project_modules(project_dir):
             continue
         if real_path == root or real_path.startswith(prefix):
             sys.modules.pop(name, None)
-    for current_root, directories, _ in os.walk(root):
-        if "__pycache__" in directories:
-            shutil.rmtree(os.path.join(current_root, "__pycache__"), ignore_errors=True)
-            directories.remove("__pycache__")
+    if clear_bytecode:
+        for current_root, directories, _ in os.walk(root):
+            if "__pycache__" in directories:
+                shutil.rmtree(os.path.join(current_root, "__pycache__"), ignore_errors=True)
+                directories.remove("__pycache__")
     importlib.invalidate_caches()
 
 
@@ -455,9 +456,12 @@ def run_code(source, filename, project_dir, bridge):
     except BaseException as exc:
         raw = traceback.format_exc()
         extracted = traceback.extract_tb(exc.__traceback__)
-        frame = next((item for item in reversed(extracted) if item.filename == filename), extracted[-1] if extracted else None)
-        line = frame.lineno if frame else 1
-        code_line = (frame.line or "").strip() if frame else ""
+        project_root = os.path.realpath(project_dir)
+        frame = next((item for item in reversed(extracted)
+                      if os.path.realpath(item.filename).startswith(project_root + os.sep)), None)
+        source_file = (exc.filename or filename) if isinstance(exc, SyntaxError) else (frame.filename if frame else filename)
+        line = (exc.lineno or 1) if isinstance(exc, SyntaxError) else (frame.lineno if frame else 1)
+        code_line = (exc.text or "").strip() if isinstance(exc, SyntaxError) else ((frame.line or "").strip() if frame else "")
         title = type(exc).__name__
         replace_from = ""
         replace_to = ""
@@ -492,11 +496,13 @@ def run_code(source, filename, project_dir, bridge):
         else:
             explanation = str(exc) or "Python stopped because of an unexpected error."
             hint = "Open Details for the technical traceback, or ask Astro for help."
-        bridge.reportError(title, explanation, line, code_line, hint, raw, replace_from, replace_to)
+        bridge.reportError(title, explanation, line, code_line, hint, raw,
+                           source_file, replace_from, replace_to)
         err.write("\n%s on line %s: %s\n" % (title, line, explanation))
         bridge.exited(1)
     finally:
         sys.settrace(old_trace)
+        _purge_project_modules(project_dir, clear_bytecode=False)
         builtins.input = old_input
         sys.dont_write_bytecode = old_dont_write_bytecode
         os.chdir(old_cwd)

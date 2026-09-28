@@ -36,6 +36,6 @@ class ConsoleOutputBufferTest {
         assertEquals("0123456789abcdefghijklmnopqrstuvwxyz", buffer.snapshot())
         buffer.clear()
         buffer.append("🐍x")
-        assertEquals("[Earlier output retained for Copy]\n🐍x", buffer.visibleTail(2))
+        assertEquals("🐍x", buffer.visibleTail(2))
     }
 }

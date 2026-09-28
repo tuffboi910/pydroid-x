@@ -120,7 +120,8 @@ data class AiSlotConfig(val index: Int, val label: String, val provider: String,
 data class CodeDiagnostic(val start: Int, val end: Int, val message: String, val fatal: Boolean = false)
 data class RuntimeIssue(
     val title: String, val explanation: String, val line: Int, val codeLine: String,
-    val hint: String, val details: String, val replaceFrom: String = "", val replaceTo: String = ""
+    val hint: String, val details: String, val fileName: String,
+    val replaceFrom: String = "", val replaceTo: String = ""
 )
 data class SavedCode(val name: String, val modified: Long)
 data class PendingCodeChange(val code: String, val fileName: String, val sourceSnapshot: String)
@@ -903,7 +904,7 @@ class IdeViewModel : ViewModel() {
 
     fun applyRuntimeFix() {
         val issue = runtimeIssue ?: return
-        if (issue.replaceFrom.isNotBlank() && issue.replaceTo.isNotBlank()) {
+        if (File(issue.fileName).name == currentFileName && issue.replaceFrom.isNotBlank() && issue.replaceTo.isNotBlank()) {
             val lines = code.lines().toMutableList()
             val index = issue.line - 1
             if (index in lines.indices && lines[index].contains(issue.replaceFrom)) {
@@ -921,6 +922,22 @@ class IdeViewModel : ViewModel() {
     fun prepareRuntimeQuestion() {
         val issue = runtimeIssue ?: return
         aiPrompt = "Explain and fix this Python error in simple words:\n${issue.title} on line ${issue.line}\n${issue.explanation}\nCode: ${issue.codeLine}\nHint: ${issue.hint}"
+    }
+    fun openRuntimeSource(issue: RuntimeIssue): Boolean {
+        if (running || !::projectDir.isInitialized) return false
+        val candidate = File(issue.fileName).let { if (it.isAbsolute) it else File(projectDir, issue.fileName) }
+        val file = runCatching { candidate.canonicalFile }.getOrNull() ?: return false
+        if (file.parentFile != projectDir.canonicalFile || !file.isFile || !file.name.endsWith(".py", true)) return false
+        if (file.name != currentFileName) {
+            save()
+            currentFileName = file.name
+            code = file.readText()
+            codeDiagnostics = emptyList()
+            settings.edit().putString("current_file", currentFileName).apply()
+            editorRevision++
+            refreshSaved()
+        }
+        return true
     }
 
     fun run() {
@@ -984,8 +1001,8 @@ class IdeViewModel : ViewModel() {
     }
     inner class Bridge {
         fun write(text: String, error: Boolean) { appendOutput(text) }
-        fun reportError(title: String, explanation: String, line: Int, codeLine: String, hint: String, details: String, replaceFrom: String, replaceTo: String) {
-            mainHandler.post { runtimeIssue = RuntimeIssue(title, explanation, line, codeLine, hint, details, replaceFrom, replaceTo) }
+        fun reportError(title: String, explanation: String, line: Int, codeLine: String, hint: String, details: String, fileName: String, replaceFrom: String, replaceTo: String) {
+            mainHandler.post { runtimeIssue = RuntimeIssue(title, explanation, line, codeLine, hint, details, fileName, replaceFrom, replaceTo) }
         }
         fun shouldStop(): Boolean = stopRequested
         fun readLine(): String? {
@@ -1694,7 +1711,15 @@ private fun AchievementNotice(
                                                 .fillMaxWidth().animateContentSize()) {
                                             Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                                                 Text("⚠ ${issue.title}",color=Color(0xFFFF8798),fontWeight=FontWeight.Bold,fontSize=14.sp)
-                                                Text("Line ${issue.line}: ${issue.explanation}",color=Color.White,fontSize=13.sp,lineHeight=18.sp)
+                                                Text("${File(issue.fileName).name}:${issue.line} · ${issue.explanation}",
+                                                    color=Color.White,fontSize=13.sp,lineHeight=18.sp,
+                                                    modifier=Modifier.clickable {
+                                                        if (vm.openRuntimeSource(issue)) scope.launch {
+                                                            pager.animateScrollToPage(1)
+                                                            editorView?.goToLine(issue.line)
+                                                        }
+                                                    })
+                                                Text("Tap the file and line to open it",color=Color(0xFF9B9BA4),fontSize=10.sp)
                                                 if(issue.codeLine.isNotBlank()) Text(issue.codeLine,color=Color(0xFFB8C7FF),fontFamily=FontFamily.Monospace,fontSize=12.sp)
                                                 AnimatedVisibility(showDetails) {
                                                     Text(issue.details,color=Color(0xFF9B9BA4),fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=6)

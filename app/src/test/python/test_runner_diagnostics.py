@@ -17,6 +17,7 @@ class FakeBridge:
     def __init__(self):
         self.output = []
         self.exit_code = None
+        self.error = None
 
     def write(self, value, error):
         self.output.append(value)
@@ -29,6 +30,9 @@ class FakeBridge:
 
     def exited(self, code):
         self.exit_code = code
+
+    def reportError(self, *details):
+        self.error = details
 
 
 class DiagnosticTests(unittest.TestCase):
@@ -146,6 +150,24 @@ class Example:
         self.assertFalse(name["fatal"])
 
 class RunnerExecutionTests(unittest.TestCase):
+    def test_runtime_error_reports_source_file_and_line(self):
+        with tempfile.TemporaryDirectory() as project:
+            helper = pathlib.Path(project) / "helper.py"
+            helper.write_text("raise ValueError('bad')\n", encoding="utf-8")
+            bridge = FakeBridge()
+            runner.run_code("import helper\n", "main.py", project, bridge)
+            self.assertEqual(1, bridge.exit_code)
+            self.assertEqual(1, bridge.error[2])
+            self.assertEqual(str(helper), bridge.error[6])
+
+    def test_syntax_error_uses_python_source_line(self):
+        with tempfile.TemporaryDirectory() as project:
+            bridge = FakeBridge()
+            runner.run_code("print('ok')\nif True print('bad')\n", "main.py", project, bridge)
+            self.assertEqual(1, bridge.exit_code)
+            self.assertEqual(2, bridge.error[2])
+            self.assertEqual("main.py", bridge.error[6])
+
     def test_system_exit_uses_requested_exit_code_without_traceback(self):
         with tempfile.TemporaryDirectory() as project:
             bridge = FakeBridge()

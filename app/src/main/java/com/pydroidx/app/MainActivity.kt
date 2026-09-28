@@ -1230,7 +1230,11 @@ private fun AchievementNotice(
     var historyPreview by remember { mutableStateOf("") }
     LaunchedEffect(chosenVersion) {
         historyPreview = chosenVersion?.let { version ->
-            withContext(Dispatchers.IO) { runCatching { readProjectText(version).take(3000) }.getOrDefault("Couldn’t read snapshot") }
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    AtomicFile(version).openRead().bufferedReader(Charsets.UTF_8).use { it.readText().take(3000) }
+                }.getOrDefault("Couldn’t read snapshot")
+            }
         }.orEmpty()
     }
     var showAiSettings by remember { mutableStateOf(false) }

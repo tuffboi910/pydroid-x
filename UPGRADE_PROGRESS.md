@@ -15,7 +15,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 
 - Host Python analyzer/runtime suite: 22 tests pass with declared Jedi 0.19.2 installed.
 - Android CI runs 202–206 and 208–211 passed unit tests and debug APK packaging. Run 207 exposed a mistaken Unicode-tail test assertion; the assertion was corrected and run 208 passed.
-- Run 212 (Astro context) passed. Run 213 (project starters) was still in progress at this document update. The latest atomic-read recovery change awaits Android CI.
+- Runs 212 (Astro context) and 213 (project starters) passed. Run 214 caught a Kotlin scope error in the new history preview read; the correction is included in the next checkpoint. Run 215 carried the same error. The corrected build awaits CI.
 - Git diff checks and clean local status were verified at each checkpoint. No physical Android device or emulator was attached to this Work environment.
 
 ## Incomplete or unverified

@@ -186,6 +186,9 @@ class IdeViewModel : ViewModel() {
     var running by mutableStateOf(false)
     var codeDiagnostics by mutableStateOf<List<CodeDiagnostic>>(emptyList())
     var runtimeIssue by mutableStateOf<RuntimeIssue?>(null)
+    var projectSearchResults by mutableStateOf<List<ProjectSearchHit>>(emptyList())
+    var projectSearchBusy by mutableStateOf(false)
+    private var projectSearchToken = 0
     var waitingInput by mutableStateOf(false)
     var input by mutableStateOf("")
     val inputHistory = ConsoleInputHistory()
@@ -783,10 +786,17 @@ class IdeViewModel : ViewModel() {
 
     fun openSaved(displayName: String) {
         if (running || !::projectDir.isInitialized) return
-        save()
         val file=projectDir.listFiles()?.firstOrNull {
             it.isFile && it.extension.equals("py",true) && it.nameWithoutExtension.replace('_',' ')==displayName
         } ?: return
+        openProjectFile(file.name)
+    }
+
+    fun openProjectFile(fileName: String) {
+        if (running || !::projectDir.isInitialized) return
+        val file=File(projectDir,fileName)
+        if (!file.isFile || file.parentFile != projectDir || !file.extension.equals("py",true)) return
+        save()
         currentFileName=file.name
         code=readProjectText(file)
         codeDiagnostics=emptyList()
@@ -795,6 +805,28 @@ class IdeViewModel : ViewModel() {
         settings.edit().putString("current_file",currentFileName).apply()
         editorRevision++
         refreshSaved()
+    }
+
+    fun searchProject(query: String) {
+        if (!::projectDir.isInitialized) return
+        val token=++projectSearchToken
+        val directory=projectDir
+        val needle=query.trim()
+        if (needle.isEmpty()) {
+            projectSearchBusy=false
+            projectSearchResults=emptyList()
+            return
+        }
+        projectSearchBusy=true
+        thread(name="PY4U-ProjectSearch") {
+            val results=runCatching { ProjectSearch.search(directory,needle) }.getOrDefault(emptyList())
+            viewModelScope.launch {
+                if (token==projectSearchToken && ::projectDir.isInitialized && projectDir==directory) {
+                    projectSearchResults=results
+                    projectSearchBusy=false
+                }
+            }
+        }
     }
 
     fun updateCode(value: String) {
@@ -1224,6 +1256,8 @@ private fun AchievementNotice(
     var showPalette by remember { mutableStateOf(false) }
     var paletteQuery by remember { mutableStateOf("") }
     var showQuickOpen by remember { mutableStateOf(false) }
+    var showProjectSearch by remember { mutableStateOf(false) }
+    var projectSearchQuery by remember { mutableStateOf("") }
     var showProjectTemplates by remember { mutableStateOf(false) }
     var quickOpenQuery by remember { mutableStateOf("") }
     var chosenVersion by remember { mutableStateOf<File?>(null) }
@@ -2203,7 +2237,7 @@ private fun AchievementNotice(
             OutlinedTextField(paletteQuery,{paletteQuery=it},label={Text("Search commands")},
                 singleLine=true,modifier=Modifier.fillMaxWidth())
             val commands = listOf(if(vm.running) "Stop program" else "Run Python file",
-                "Save file","Find in file","Replace in file","Go to line","Open file",
+                "Save file","Find in file","Find in project","Replace in file","Go to line","Open file",
                 "Open Settings","Ask Astro")
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 commands.filter { it.contains(paletteQuery,true) }.forEach { command ->
@@ -2214,6 +2248,13 @@ private fun AchievementNotice(
                             "Run Python file" -> {editorView?.flushCodeChange();vm.run();scope.launch{pager.animateScrollToPage(2)}}
                             "Save file" -> {editorView?.flushCodeChange();vm.save()}
                             "Find in file" -> {showFind=true;scope.launch{pager.animateScrollToPage(1)}}
+                            "Find in project" -> {
+                                editorView?.flushCodeChange()
+                                vm.save()
+                                projectSearchQuery=""
+                                vm.searchProject("")
+                                showProjectSearch=true
+                            }
                             "Replace in file" -> {showFind=true;showReplace=true;scope.launch{pager.animateScrollToPage(1)}}
                             "Go to line" -> showGoToLine=true
                             "Open file" -> showQuickOpen=true
@@ -2225,6 +2266,52 @@ private fun AchievementNotice(
             }
         }},
         confirmButton={TextButton(onClick={showPalette=false}) { Text("Close") }}
+    )
+    if(showProjectSearch) AlertDialog(
+        onDismissRequest={showProjectSearch=false},containerColor=Color(0xFF171A20),
+        title={Text("Find in project")},
+        text={Column(Modifier.heightIn(max=480.dp)) {
+            OutlinedTextField(
+                value=projectSearchQuery,
+                onValueChange={
+                    projectSearchQuery=it
+                    vm.searchProject(it)
+                },
+                label={Text("Search Python files")},
+                singleLine=true,
+                modifier=Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            when {
+                projectSearchQuery.isBlank() -> Text("Type to search every Python file in this project.",color=Color.LightGray)
+                vm.projectSearchBusy -> Text("Searching…",color=Color.LightGray)
+                vm.projectSearchResults.isEmpty() -> Text("No matches.",color=Color.LightGray)
+                else -> Column(Modifier.verticalScroll(rememberScrollState())) {
+                    vm.projectSearchResults.forEach { hit ->
+                        TextButton(
+                            enabled=!vm.running,
+                            onClick={
+                                editorView?.flushCodeChange()
+                                vm.openProjectFile(hit.fileName)
+                                showProjectSearch=false
+                                scope.launch {
+                                    pager.animateScrollToPage(1)
+                                    delay(90)
+                                    editorView?.goToLine(hit.line)
+                                }
+                            },
+                            modifier=Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text("${hit.fileName}:${hit.line}",color=accent,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                                Text(hit.lineText.trim().take(160),color=Color.LightGray,fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=2)
+                            }
+                        }
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showProjectSearch=false}) { Text("Close") }}
     )
     if(showQuickOpen) AlertDialog(
         onDismissRequest={showQuickOpen=false},containerColor=Color(0xFF171A20),

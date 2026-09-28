@@ -702,6 +702,10 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (event?.isCtrlPressed == true && keyCode == KeyEvent.KEYCODE_Z) {
+            if (event.isShiftPressed) redoCode() else undoCode()
+            return true
+        }
         if (event?.isCtrlPressed == true && keyCode == KeyEvent.KEYCODE_S) {
             flushCodeChange()
             onSaveRequested?.invoke()

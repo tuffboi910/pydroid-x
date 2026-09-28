@@ -142,6 +142,18 @@ class PythonEditorViewTest {
         assertEquals(1, runs)
     }
 
+    @Test fun hardwareUndoAndRedoUseEditorHistory() {
+        editor.setCodeIfDifferent("", revision = 11)
+        editor.text.append("abc")
+        editor.onKeyDown(KeyEvent.KEYCODE_Z,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_Z, 0, KeyEvent.META_CTRL_ON))
+        assertEquals("", editor.text.toString())
+        editor.onKeyDown(KeyEvent.KEYCODE_Z,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_Z, 0,
+                KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON))
+        assertEquals("abc", editor.text.toString())
+    }
+
     @Test fun typingExistingCloserSkipsDuplicate() {
         editor.setCodeIfDifferent(")", revision = 4)
         editor.setSelection(0)

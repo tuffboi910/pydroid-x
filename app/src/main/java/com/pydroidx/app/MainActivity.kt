@@ -1581,6 +1581,8 @@ private fun AchievementNotice(
     var showConsoleSearch by remember { mutableStateOf(false) }
     var consoleSearchQuery by remember { mutableStateOf("") }
     var consoleSearchSnapshot by remember { mutableStateOf("") }
+    var showPackageInstall by remember { mutableStateOf(false) }
+    var packageDraft by remember { mutableStateOf("") }
     var fileActionTarget by remember { mutableStateOf<SavedCode?>(null) }
     var renameTarget by remember { mutableStateOf<SavedCode?>(null) }
     var renameDraft by remember { mutableStateOf("") }
@@ -2138,6 +2140,10 @@ private fun AchievementNotice(
                                 consoleSearchQuery=""
                                 showConsoleSearch=true
                             }) { Text("Search",fontSize=11.sp) }
+                            TextButton(
+                                enabled=!vm.running,
+                                onClick={packageDraft="";showPackageInstall=true}
+                            ) { Text("Packages",fontSize=11.sp) }
                             TextButton(onClick={
                                 val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                 clipboard.setPrimaryClip(ClipData.newPlainText("PY4U Console",vm.fullOutput()))
@@ -2725,7 +2731,7 @@ private fun AchievementNotice(
                 singleLine=true,modifier=Modifier.fillMaxWidth())
             val commands = listOf(if(vm.running) "Stop program" else "Run Python file",
                 "Save file","Find in file","Find in project","Project Problems","Replace in file","Go to line","Open file",
-                "Open Settings","Ask Astro")
+                "Install package","List packages","Open Settings","Ask Astro")
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 commands.filter { it.contains(paletteQuery,true) }.forEach { command ->
                     TextButton(onClick={
@@ -2751,6 +2757,13 @@ private fun AchievementNotice(
                             "Replace in file" -> {showFind=true;showReplace=true;scope.launch{pager.animateScrollToPage(1)}}
                             "Go to line" -> showGoToLine=true
                             "Open file" -> showQuickOpen=true
+                            "Install package" -> { packageDraft="";showPackageInstall=true }
+                            "List packages" -> {
+                                vm.consoleMode="Terminal"
+                                vm.input="packages"
+                                vm.submitConsoleEntry()
+                                scope.launch{pager.animateScrollToPage(2)}
+                            }
                             "Open Settings" -> scope.launch{pager.animateScrollToPage(4)}
                             "Ask Astro" -> scope.launch{pager.animateScrollToPage(3)}
                         }
@@ -2759,6 +2772,33 @@ private fun AchievementNotice(
             }
         }},
         confirmButton={TextButton(onClick={showPalette=false}) { Text("Close") }}
+    )
+    if(showPackageInstall) AlertDialog(
+        onDismissRequest={showPackageInstall=false},containerColor=Color(0xFF171A20),
+        title={Text("Install Python package")},
+        text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("Project-scoped pure-Python wheels only. Native extensions are rejected safely.",color=Color.LightGray,fontSize=12.sp)
+            OutlinedTextField(
+                value=packageDraft,
+                onValueChange={packageDraft=it.take(90)},
+                label={Text("Package or package==version")},
+                singleLine=true,
+                modifier=Modifier.fillMaxWidth()
+            )
+            Text("Examples: pyfiglet  ·  humanize==4.10.0",color=Color.Gray,fontSize=10.sp)
+        }},
+        confirmButton={Button(
+            enabled=packageDraft.isNotBlank()&&!vm.running,
+            onClick={
+                val spec=packageDraft.trim()
+                vm.consoleMode="Terminal"
+                vm.input="pip install $spec"
+                vm.submitConsoleEntry()
+                showPackageInstall=false
+                scope.launch{pager.animateScrollToPage(2)}
+            }
+        ) { Text("Install") }},
+        dismissButton={TextButton(onClick={showPackageInstall=false}) { Text("Cancel") }}
     )
     if(showConsoleSearch) AlertDialog(
         onDismissRequest={showConsoleSearch=false},containerColor=Color(0xFF171A20),

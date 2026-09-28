@@ -11,6 +11,11 @@ import traceback
 import difflib
 import shlex
 import importlib.metadata
+import re
+import urllib.request
+import urllib.parse
+import zipfile
+import tempfile
 
 
 class _Scope:
@@ -379,7 +384,7 @@ class _Stream(io.TextIOBase):
         return None
 
 
-def _purge_project_modules(project_dir):
+def _purge_project_modules(project_dir, clear_bytecode=True):
     root = os.path.realpath(project_dir)
     prefix = root + os.sep
     for name, module in list(sys.modules.items()):
@@ -392,10 +397,11 @@ def _purge_project_modules(project_dir):
             continue
         if real_path == root or real_path.startswith(prefix):
             sys.modules.pop(name, None)
-    for current_root, directories, _ in os.walk(root):
-        if "__pycache__" in directories:
-            shutil.rmtree(os.path.join(current_root, "__pycache__"), ignore_errors=True)
-            directories.remove("__pycache__")
+    if clear_bytecode:
+        for current_root, directories, _ in os.walk(root):
+            if "__pycache__" in directories:
+                shutil.rmtree(os.path.join(current_root, "__pycache__"), ignore_errors=True)
+                directories.remove("__pycache__")
     importlib.invalidate_caches()
 
 
@@ -431,6 +437,9 @@ def run_code(source, filename, project_dir, bridge):
         os.makedirs(project_dir, exist_ok=True)
         os.chdir(project_dir)
         _purge_project_modules(project_dir)
+        packages_dir = _project_packages_dir(project_dir)
+        if os.path.isdir(packages_dir) and packages_dir not in sys.path:
+            sys.path.insert(0, packages_dir)
         if project_dir not in sys.path:
             sys.path.insert(0, project_dir)
         builtins.input = android_input
@@ -455,9 +464,12 @@ def run_code(source, filename, project_dir, bridge):
     except BaseException as exc:
         raw = traceback.format_exc()
         extracted = traceback.extract_tb(exc.__traceback__)
-        frame = next((item for item in reversed(extracted) if item.filename == filename), extracted[-1] if extracted else None)
-        line = frame.lineno if frame else 1
-        code_line = (frame.line or "").strip() if frame else ""
+        project_root = os.path.realpath(project_dir)
+        frame = next((item for item in reversed(extracted)
+                      if os.path.realpath(item.filename).startswith(project_root + os.sep)), None)
+        source_file = (exc.filename or filename) if isinstance(exc, SyntaxError) else (frame.filename if frame else filename)
+        line = (exc.lineno or 1) if isinstance(exc, SyntaxError) else (frame.lineno if frame else 1)
+        code_line = (exc.text or "").strip() if isinstance(exc, SyntaxError) else ((frame.line or "").strip() if frame else "")
         title = type(exc).__name__
         replace_from = ""
         replace_to = ""
@@ -492,15 +504,112 @@ def run_code(source, filename, project_dir, bridge):
         else:
             explanation = str(exc) or "Python stopped because of an unexpected error."
             hint = "Open Details for the technical traceback, or ask Astro for help."
-        bridge.reportError(title, explanation, line, code_line, hint, raw, replace_from, replace_to)
+        bridge.reportError(title, explanation, line, code_line, hint, raw,
+                           source_file, replace_from, replace_to)
         err.write("\n%s on line %s: %s\n" % (title, line, explanation))
         bridge.exited(1)
     finally:
         sys.settrace(old_trace)
+        _purge_project_modules(project_dir, clear_bytecode=False)
         builtins.input = old_input
         sys.dont_write_bytecode = old_dont_write_bytecode
         os.chdir(old_cwd)
         sys.path[:] = old_sys_path
+
+
+_PACKAGE_SPEC = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:==[A-Za-z0-9][A-Za-z0-9._+!-]*)?$")
+_WHEEL_LIMIT = 25 * 1024 * 1024
+
+
+def _project_packages_dir(project_dir):
+    return os.path.join(os.path.realpath(project_dir), ".py4u_packages")
+
+
+def _parse_package_spec(spec):
+    value = (spec or "").strip()
+    if not _PACKAGE_SPEC.fullmatch(value):
+        raise ValueError("Use a package name like requests or package==1.2.3")
+    if "==" in value:
+        return tuple(value.split("==", 1))
+    return value, None
+
+
+def _safe_wheel_entries(archive):
+    entries = []
+    for info in archive.infolist():
+        name = info.filename.replace("\\", "/")
+        normalized = os.path.normpath(name).replace("\\", "/")
+        if (not name or name.startswith("/") or normalized == ".." or
+                normalized.startswith("../") or "/../" in "/" + normalized + "/"):
+            raise ValueError("Package wheel contains an unsafe path")
+        lower = normalized.lower()
+        if lower.endswith((".so", ".pyd", ".dll", ".dylib")):
+            raise ValueError("This package contains native code. PY4U runtime install currently supports pure-Python wheels only.")
+        entries.append(info)
+    return entries
+
+
+def _select_universal_wheel(payload):
+    urls = payload.get("urls") or []
+    candidates = []
+    for item in urls:
+        filename = str(item.get("filename") or "")
+        if filename.endswith("-py3-none-any.whl") or filename.endswith("-py2.py3-none-any.whl"):
+            candidates.append(item)
+    if not candidates:
+        raise ValueError("No universal pure-Python wheel is available for this release")
+    candidates.sort(key=lambda item: int(item.get("size") or 0))
+    return candidates[0]
+
+
+def install_pure_python_package(spec, project_dir, write=lambda value: None):
+    name, version = _parse_package_spec(spec)
+    quoted = urllib.parse.quote(name, safe="")
+    endpoint = "https://pypi.org/pypi/%s/%s/json" % (quoted, urllib.parse.quote(version, safe="")) if version         else "https://pypi.org/pypi/%s/json" % quoted
+    write("Resolving %s…\n" % spec)
+    request = urllib.request.Request(endpoint, headers={"User-Agent": "PY4U/0.4"})
+    with urllib.request.urlopen(request, timeout=20) as response:
+        payload = json.loads(response.read(_WHEEL_LIMIT).decode("utf-8"))
+    wheel = _select_universal_wheel(payload)
+    size = int(wheel.get("size") or 0)
+    if size > _WHEEL_LIMIT:
+        raise ValueError("Package wheel is larger than the 25 MB runtime-install limit")
+    url = str(wheel.get("url") or "")
+    if not url.startswith("https://"):
+        raise ValueError("Package index returned an invalid download URL")
+
+    packages_dir = _project_packages_dir(project_dir)
+    os.makedirs(packages_dir, exist_ok=True)
+    write("Downloading %s…\n" % wheel.get("filename", name))
+    with urllib.request.urlopen(
+        urllib.request.Request(url, headers={"User-Agent": "PY4U/0.4"}), timeout=30
+    ) as response:
+        data = response.read(_WHEEL_LIMIT + 1)
+    if len(data) > _WHEEL_LIMIT:
+        raise ValueError("Package download exceeded the 25 MB runtime-install limit")
+
+    with tempfile.TemporaryDirectory(prefix="py4u-wheel-", dir=os.path.realpath(project_dir)) as temp:
+        wheel_path = os.path.join(temp, "package.whl")
+        with open(wheel_path, "wb") as handle:
+            handle.write(data)
+        with zipfile.ZipFile(wheel_path) as archive:
+            entries = _safe_wheel_entries(archive)
+            stage = os.path.join(temp, "stage")
+            os.makedirs(stage)
+            for info in entries:
+                archive.extract(info, stage)
+        for item in os.listdir(stage):
+            source = os.path.join(stage, item)
+            target = os.path.join(packages_dir, item)
+            if os.path.isdir(source):
+                shutil.copytree(source, target, dirs_exist_ok=True)
+            else:
+                shutil.copy2(source, target)
+
+    installed_version = str((payload.get("info") or {}).get("version") or version or "")
+    write("Installed %s%s\n" % (name, (" " + installed_version) if installed_version else ""))
+    write("Note: dependencies are not auto-installed yet. Install any missing pure-Python dependencies the same way.\n")
+    return name, installed_version
 
 
 def version():
@@ -525,7 +634,7 @@ def run_terminal_command(command, project_dir, bridge):
             return path
 
         if name == "help":
-            out.write("Commands: help, pwd, ls, cat FILE, python FILE.py, packages, mkdir DIR, touch FILE, clear\n")
+            out.write("Commands: help, pwd, ls, cat FILE, python FILE.py, packages, pip list, pip install PACKAGE, mkdir DIR, touch FILE, clear\n")
         elif name == "pwd":
             out.write(root + "\n")
         elif name in ("ls", "dir"):
@@ -543,7 +652,12 @@ def run_terminal_command(command, project_dir, bridge):
             if not args: raise ValueError("Usage: touch FILE")
             open(project_path(args[0]), "a", encoding="utf-8").close()
         elif name == "packages" or (name == "pip" and (not args or args[0] == "list")):
-            rows = sorted((d.metadata.get("Name", d.name), d.version) for d in importlib.metadata.distributions())
+            rows = {(d.metadata.get("Name", d.name), d.version) for d in importlib.metadata.distributions()}
+            local_dir = _project_packages_dir(root)
+            if os.path.isdir(local_dir):
+                rows.update((d.metadata.get("Name", d.name), d.version)
+                            for d in importlib.metadata.distributions(path=[local_dir]))
+            rows = sorted(rows, key=lambda row: str(row[0]).lower())
             out.write("Installed packages:\n" + "\n".join("%s %s" % row for row in rows) + "\n")
         elif name in ("python", "py"):
             if not args:
@@ -554,7 +668,9 @@ def run_terminal_command(command, project_dir, bridge):
                     run_code(handle.read(), filename, root, bridge)
                 return
         elif name == "pip" and args and args[0] == "install":
-            raise ValueError("Only Android-compatible packages can be installed; the full installer is not ready yet")
+            if len(args) != 2:
+                raise ValueError("Usage: pip install PACKAGE or PACKAGE==VERSION")
+            install_pure_python_package(args[1], root, out.write)
         else:
             raise ValueError("Unknown command: %s. Type help." % name)
         bridge.exited(0)

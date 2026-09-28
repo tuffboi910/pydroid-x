@@ -18,6 +18,7 @@ import android.text.TextWatcher
 import android.text.style.ForegroundColorSpan
 import android.os.Handler
 import android.os.Looper
+import android.util.AtomicFile
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -95,16 +96,21 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.chaquo.python.Python
 import java.io.File
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.json.JSONArray
 import kotlin.math.absoluteValue
@@ -115,10 +121,44 @@ data class AiSlotConfig(val index: Int, val label: String, val provider: String,
 data class CodeDiagnostic(val start: Int, val end: Int, val message: String, val fatal: Boolean = false)
 data class RuntimeIssue(
     val title: String, val explanation: String, val line: Int, val codeLine: String,
-    val hint: String, val details: String, val replaceFrom: String = "", val replaceTo: String = ""
+    val hint: String, val details: String, val fileName: String,
+    val replaceFrom: String = "", val replaceTo: String = ""
 )
-data class SavedCode(val name: String, val modified: Long)
+data class SavedCode(val name: String, val modified: Long, val fileName: String)
+data class ProjectProblem(val fileName: String, val line: Int, val message: String, val fatal: Boolean, val lineText: String)
 data class PendingCodeChange(val code: String, val fileName: String, val sourceSnapshot: String)
+
+private fun issueLineNumber(source: String, offset: Int): Int =
+    source.take(offset.coerceIn(0, source.length)).count { it == '\n' } + 1
+
+private fun issueLineText(source: String, offset: Int): String {
+    val safeOffset = offset.coerceIn(0, source.length)
+    val start = (source.lastIndexOf('\n', (safeOffset - 1).coerceAtLeast(0)) + 1).coerceAtMost(safeOffset)
+    val end = source.indexOf('\n', safeOffset).let { if (it < 0) source.length else it }
+    return source.substring(start, end)
+}
+
+private fun issueWhy(message: String): String = when {
+    message.startsWith("Undefined name:", ignoreCase = true) ->
+        "Python could not find this name in the current scope, imports, or built-ins."
+    "indent" in message.lowercase() ->
+        "Python uses indentation to decide which statements belong inside a block."
+    "unterminated" in message.lowercase() || "never closed" in message.lowercase() ->
+        "A string or bracket was opened but Python reached the end before it was closed."
+    else -> "Python's parser could not match this part of the file to valid Python syntax."
+}
+
+private fun issueFix(message: String): String = when {
+    message.startsWith("Undefined name:", ignoreCase = true) ->
+        "Check the spelling. If it is correct, define the name or import it before this line."
+    "indent" in message.lowercase() ->
+        "Align this line with its block and indent the block body consistently."
+    "unterminated" in message.lowercase() || "never closed" in message.lowercase() ->
+        "Add the missing closing quote or bracket, then check the surrounding line."
+    "expected ':'" in message.lowercase() ->
+        "Add a colon after the if, for, while, def, or class header."
+    else -> "Read the parser message, then check the highlighted token and the line before it."
+}
 
 private val FONT_VAULT = """
 Fira Code|firacode,JetBrains Mono|jetbrainsmono,Source Code Pro|sourcecodepro,IBM Plex Mono|ibmplexmono,Cascadia Code|cascadiacode,Victor Mono|victormono,Space Mono|spacemono,Inconsolata|inconsolata,Roboto Mono|robotomono,Noto Sans Mono|notosansmono,
@@ -139,6 +179,8 @@ class IdeViewModel : ViewModel() {
     @Volatile var code = "print(\"Hello world!\")\n"
     var currentFileName by mutableStateOf("main.py")
     val savedCodes = mutableStateListOf<SavedCode>()
+    val deletedFiles = mutableStateListOf<TrashedProjectFile>()
+    val openFileTabs = mutableStateListOf<String>()
     val projectNames = mutableStateListOf<String>()
     var currentProjectName by mutableStateOf("default")
     var editorRevision by mutableIntStateOf(0)
@@ -147,10 +189,18 @@ class IdeViewModel : ViewModel() {
     var running by mutableStateOf(false)
     var codeDiagnostics by mutableStateOf<List<CodeDiagnostic>>(emptyList())
     var runtimeIssue by mutableStateOf<RuntimeIssue?>(null)
+    var projectProblems by mutableStateOf<List<ProjectProblem>>(emptyList())
+    var projectProblemsBusy by mutableStateOf(false)
+    var projectProblemsError by mutableStateOf<String?>(null)
+    private var projectProblemsToken = 0
+    var projectSearchResults by mutableStateOf<List<ProjectSearchHit>>(emptyList())
+    var projectSearchBusy by mutableStateOf(false)
+    private var projectSearchToken = 0
     var waitingInput by mutableStateOf(false)
     var input by mutableStateOf("")
     val inputHistory = ConsoleInputHistory()
     var runtimeVersion by mutableStateOf("Loading Python…")
+    var saveError by mutableStateOf<String?>(null)
     var consoleMode by mutableStateOf("Python")
     var aiPrompt by mutableStateOf("")
     val aiMessages = mutableStateListOf<AiMessage>()
@@ -181,6 +231,7 @@ class IdeViewModel : ViewModel() {
     var ai3Provider by mutableStateOf("Auto")
     var shareCode by mutableStateOf(false)
     var editorFontSize by mutableFloatStateOf(16f)
+    var tabWidth by mutableIntStateOf(4)
     var terminalFontSize by mutableFloatStateOf(13f)
     var uiScale by mutableFloatStateOf(1f)
     var wordWrap by mutableStateOf(true)
@@ -237,17 +288,22 @@ class IdeViewModel : ViewModel() {
     @Volatile private var stopRequested = false
     private var autosaveJob: Job? = null
     private var namingJob: Job? = null
+    private val editorFileStates = mutableMapOf<String, EditorFileState>()
+    private val editorStateJobs = mutableMapOf<String, Job>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val outputBuffer = ConsoleOutputBuffer()
-    @Volatile private var outputFlushScheduled = false
+    private val outputFlushScheduled = AtomicBoolean(false)
     private val outputFlushRunnable = Runnable {
-        outputFlushScheduled = false
-        output = outputBuffer.snapshot()
+        outputFlushScheduled.set(false)
+        output = outputBuffer.visibleTail()
     }
     lateinit var projectDir: File
     private lateinit var projectsRoot: File
     private lateinit var aiKeys: SecureAiKeyStore
     private lateinit var settings: android.content.SharedPreferences
+
+    private fun readProjectText(file: File): String = AtomicFile(file).openRead()
+        .bufferedReader(Charsets.UTF_8).use { it.readText() }
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
@@ -263,6 +319,7 @@ class IdeViewModel : ViewModel() {
             edit.apply()
         }
         editorFontSize = settings.getFloat("editor_font", 16f)
+        tabWidth = settings.getInt("tab_width", 4).coerceIn(1, 8)
         terminalFontSize = settings.getFloat("terminal_font", 13f)
         uiScale = settings.getFloat("ui_scale", 1f)
         wordWrap = settings.getBoolean("word_wrap", true)
@@ -330,9 +387,9 @@ class IdeViewModel : ViewModel() {
         currentFileName = settings.getString("current_file","main.py") ?: "main.py"
         var current = File(projectDir,currentFileName)
         if (!current.exists()) current = existing.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
-        if (!current.exists()) current.writeText(code)
+        if (!current.exists() && !File(current.path + ".bak").exists()) current.writeText(code)
         currentFileName = current.name
-        code = current.readText()
+        code = readProjectText(current)
         if (code == legacyStarter) {
             code = "print(\"Hello world!\")\n"
             current.writeText(code)
@@ -340,6 +397,7 @@ class IdeViewModel : ViewModel() {
         settings.edit().putString("current_file",currentFileName).putString("current_project",currentProjectName).apply()
         refreshProjects()
         refreshSaved()
+        restoreOpenTabs()
         editorRevision++
         thread {
             val version = runCatching { Python.getInstance().getModule("runner").callAttr("version").toString() }
@@ -432,6 +490,21 @@ class IdeViewModel : ViewModel() {
         val codeSnapshot = code
         val question = if (testOnly) typedQuestion else buildString {
             append(typedQuestion.ifBlank { "Review the attached file" })
+            if (shareCode) {
+                append("\n\nIDE context — current file: ").append(fileNameSnapshot)
+                append("\nProject files: ")
+                append(projectDir.listFiles()?.asSequence()?.filter { it.isFile && it.extension.equals("py",true) }
+                    ?.map { it.name }?.take(40)?.joinToString(", ").orEmpty())
+                if (codeDiagnostics.isNotEmpty()) {
+                    append("\nProblems: ")
+                    codeDiagnostics.take(8).forEach { issue ->
+                        append("\nLine ").append(issueLineNumber(codeSnapshot,issue.start))
+                            .append(": ").append(issue.message.take(150))
+                    }
+                }
+                val consoleContext = outputBuffer.visibleTail(1600)
+                if (consoleContext.isNotBlank()) append("\nRecent Console output:\n").append(consoleContext)
+            }
             if (!attachmentTextSnapshot.isNullOrBlank()) {
                 append("\n\nAttached file: ").append(attachmentNameSnapshot ?: "attachment")
                 append("\n\u0060\u0060\u0060\n").append(attachmentTextSnapshot).append("\n\u0060\u0060\u0060")
@@ -524,20 +597,32 @@ class IdeViewModel : ViewModel() {
     private fun extractTeachingOffer(answer: String): String? =
         Regex("\\[TEACH:([^]]+)]", RegexOption.IGNORE_CASE).find(answer)?.groupValues?.get(1)?.trim()
 
-    fun applyPendingCode() {
+    fun applyPendingCode(selectedHunks: Set<Int>? = null) {
         val change = pendingCode ?: return
         if (currentFileName != change.fileName || code != change.sourceSnapshot) {
             pendingCode = null
             aiMessages.add(AiMessage(false, "That edit is stale because the file changed. Ask Astro again before applying it."))
             return
         }
-        val replacement = change.code
-        code = replacement + if (replacement.endsWith("\n")) "" else "\n"
-        editorRevision++
-        save()
-        pendingCode = null
-        showCodeNotice=false
-        aiMessages.add(AiMessage(false, "Applied to $currentFileName ✓"))
+        val target = File(projectDir, currentFileName)
+        ProjectFileWriter.checkpoint(target, change.sourceSnapshot) { result ->
+            mainHandler.post {
+                if (result.isFailure) {
+                    aiMessages.add(AiMessage(false, "Couldn’t protect the current file: ${result.exceptionOrNull()?.message}"))
+                } else if (pendingCode == change && projectDir == target.parentFile &&
+                    currentFileName == change.fileName && code == change.sourceSnapshot) {
+                    val replacement = if (selectedHunks == null) change.code else
+                        CodeEditHunks.applySelected(change.sourceSnapshot, change.code, selectedHunks)
+                    code = replacement + if (replacement.endsWith("\n")) "" else "\n"
+                    editorRevision++
+                    save()
+                    pendingCode = null
+                    showCodeNotice=false
+                    aiMessages.add(AiMessage(false, if(selectedHunks==null) "Applied to $currentFileName ✓"
+                        else "Applied ${selectedHunks.size} selected change${if(selectedHunks.size==1) "" else "s"} to $currentFileName ✓"))
+                }
+            }
+        }
     }
     fun rejectPendingCode() { pendingCode = null; showCodeNotice=false }
     fun acceptTeaching() {
@@ -602,16 +687,75 @@ class IdeViewModel : ViewModel() {
         val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }
             ?.sortedByDescending { it.lastModified() }.orEmpty()
         savedCodes.clear()
-        savedCodes.addAll(files.map { SavedCode(it.nameWithoutExtension.replace('_',' '),it.lastModified()) })
+        savedCodes.addAll(files.map { SavedCode(it.nameWithoutExtension.replace('_',' '),it.lastModified(),it.name) })
+        deletedFiles.clear()
+        deletedFiles.addAll(ProjectFileTrash.list(projectDir))
     }
 
-    fun makeNewProject() {
+    private fun openTabsKey(project: String = currentProjectName): String = "open_tabs::$project"
+
+    private fun persistOpenTabs() {
+        if (!::settings.isInitialized) return
+        settings.edit().putString(openTabsKey(),OpenFileTabsCodec.encode(openFileTabs)).apply()
+    }
+
+    private fun restoreOpenTabs() {
+        if (!::settings.isInitialized || !::projectDir.isInitialized) return
+        val existing=projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }
+            ?.map { it.name }?.toSet().orEmpty()
+        val restored=OpenFileTabsCodec.decode(settings.getString(openTabsKey(),null))
+            .filter { it in existing }.takeLast(12).toMutableList()
+        if(currentFileName in existing) {
+            restored.remove(currentFileName)
+            restored.add(currentFileName)
+        }
+        openFileTabs.clear()
+        openFileTabs.addAll(restored)
+        persistOpenTabs()
+    }
+
+    private fun touchOpenTab(fileName: String) {
+        if (fileName !in openFileTabs) openFileTabs.add(fileName)
+        while(openFileTabs.size>12) {
+            val removable=openFileTabs.indexOfFirst { it!=currentFileName }
+            if(removable<0) break
+            openFileTabs.removeAt(removable)
+        }
+        persistOpenTabs()
+    }
+
+    fun closeFileTab(fileName: String) {
+        if (running || fileName !in openFileTabs) return
+        if(fileName!=currentFileName) {
+            openFileTabs.remove(fileName)
+            persistOpenTabs()
+            return
+        }
+        if(openFileTabs.size<=1) return
+        save()
+        val oldIndex=openFileTabs.indexOf(fileName)
+        openFileTabs.remove(fileName)
+        val next=openFileTabs.getOrNull(oldIndex.coerceAtMost(openFileTabs.lastIndex))
+            ?: openFileTabs.lastOrNull()
+        persistOpenTabs()
+        if(next!=null) openProjectFile(next)
+    }
+
+    fun makeNewProject(template: String = "Blank") {
         if (running || !::projectsRoot.isInitialized) return
         save()
         autosaveJob?.cancel()
         namingJob?.cancel()
         val name = ProjectWorkspace.nextName(projectNames, "Project")
-        File(projectsRoot,name).mkdirs()
+        val directory = File(projectsRoot,name)
+        if (!directory.isDirectory && !directory.mkdirs()) {
+            saveError = "Couldn’t create project $name"
+            return
+        }
+        if (runCatching { File(directory,"main.py").writeText(ProjectWorkspace.templateSource(template)) }.isFailure) {
+            saveError = "Couldn’t create starter file in $name"
+            return
+        }
         switchProject(name)
     }
 
@@ -624,13 +768,20 @@ class IdeViewModel : ViewModel() {
         save()
         autosaveJob?.cancel()
         namingJob?.cancel()
+        projectProblemsToken++
+        projectProblemsBusy=false
+        projectProblems=emptyList()
+        projectProblemsError=null
+        projectSearchToken++
+        projectSearchBusy=false
+        projectSearchResults=emptyList()
         projectDir = targetDir
         currentProjectName = safeName
         val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
         var current = files.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
-        if (!current.exists()) current.writeText("print(\"Hello world!\")\n")
+        if (!current.exists() && !File(current.path + ".bak").exists()) current.writeText("print(\"Hello world!\")\n")
         currentFileName = current.name
-        code = current.readText()
+        code = readProjectText(current)
         codeDiagnostics = emptyList()
         pendingCode = null
         shareCode = false
@@ -638,6 +789,7 @@ class IdeViewModel : ViewModel() {
         settings.edit().putString("current_project",currentProjectName).putString("current_file",currentFileName).apply()
         refreshProjects()
         refreshSaved()
+        restoreOpenTabs()
         editorRevision++
     }
 
@@ -672,10 +824,17 @@ class IdeViewModel : ViewModel() {
         if (code != snapshot) return
         val old = File(projectDir,currentFileName)
         val target = uniqueFile(localPurposeName(snapshot))
-        if (old.exists() && old.renameTo(target)) {
-            currentFileName = target.name
-            settings.edit().putString("current_file",currentFileName).apply()
-            refreshSaved()
+        autosaveJob?.cancel()
+        // The writer commits the latest contents before moving the file. Future
+        // autosaves use the new name, so a delayed write cannot recreate untitled.py.
+        persistCode(projectDir, old.name, snapshot)
+        currentFileName = target.name
+        settings.edit().putString("current_file",currentFileName).apply()
+        ProjectFileWriter.rename(old, target) { result ->
+            mainHandler.post {
+                if (result.isFailure) saveError = result.exceptionOrNull()?.message
+                if (::projectDir.isInitialized && projectDir == target.parentFile) refreshSaved()
+            }
         }
     }
 
@@ -693,23 +852,285 @@ class IdeViewModel : ViewModel() {
         shareCode=false
         settings.edit().putString("current_file",currentFileName).apply()
         refreshSaved()
+        touchOpenTab(currentFileName)
         editorRevision++
+    }
+
+    private fun projectPythonFile(fileName: String): File? {
+        if (!::projectDir.isInitialized || fileName.contains('/') || fileName.contains('\\')) return null
+        val file=File(projectDir,fileName)
+        return file.takeIf { it.isFile && it.parentFile==projectDir && it.extension.equals("py",true) }
+    }
+
+    private fun editorStateKey(project: String = currentProjectName, file: String = currentFileName): String =
+        "editor_state::$project::$file"
+
+    fun editorFileState(): EditorFileState {
+        if (!::settings.isInitialized) return EditorFileState()
+        val key=editorStateKey()
+        return editorFileStates[key]
+            ?: EditorFileStateCodec.decode(settings.getString(key,null))
+                ?.also { editorFileStates[key]=it }
+            ?: EditorFileState()
+    }
+
+    fun rememberEditorFileState(state: EditorFileState) {
+        if (!::settings.isInitialized) return
+        val key=editorStateKey()
+        editorFileStates[key]=state
+        editorStateJobs.remove(key)?.cancel()
+        editorStateJobs[key]=viewModelScope.launch {
+            delay(350)
+            settings.edit().putString(key,EditorFileStateCodec.encode(state)).apply()
+            editorStateJobs.remove(key)
+        }
+    }
+
+    private fun migrateEditorFileState(oldName: String, newName: String, project: String = currentProjectName) {
+        if (!::settings.isInitialized || oldName==newName) return
+        val oldKey=editorStateKey(project=project,file=oldName)
+        val newKey=editorStateKey(project=project,file=newName)
+        val state=editorFileStates.remove(oldKey) ?: EditorFileStateCodec.decode(settings.getString(oldKey,null))
+        editorStateJobs.remove(oldKey)?.cancel()
+        editorStateJobs.remove(newKey)?.cancel()
+        val edit=settings.edit().remove(oldKey)
+        if(state!=null) {
+            editorFileStates[newKey]=state
+            edit.putString(newKey,EditorFileStateCodec.encode(state))
+        }
+        edit.apply()
     }
 
     fun openSaved(displayName: String) {
         if (running || !::projectDir.isInitialized) return
-        save()
         val file=projectDir.listFiles()?.firstOrNull {
             it.isFile && it.extension.equals("py",true) && it.nameWithoutExtension.replace('_',' ')==displayName
         } ?: return
+        openProjectFile(file.name)
+    }
+
+    fun openProjectFile(fileName: String) {
+        if (running || !::projectDir.isInitialized) return
+        val file=projectPythonFile(fileName) ?: return
+        save()
         currentFileName=file.name
-        code=file.readText()
+        code=readProjectText(file)
         codeDiagnostics=emptyList()
         pendingCode=null
         shareCode=false
         settings.edit().putString("current_file",currentFileName).apply()
+        touchOpenTab(currentFileName)
         editorRevision++
         refreshSaved()
+    }
+
+    fun renameProjectFile(fileName: String, requestedName: String) {
+        if (running) return
+        val source=projectPythonFile(fileName) ?: return
+        val directory=projectDir
+        val project=currentProjectName
+        val target=File(directory,ProjectFileTrash.safePythonFileName(requestedName))
+        if (target==source) return
+        if (target.exists()) {
+            saveError="${target.name} already exists"
+            return
+        }
+        val wasCurrent=source.name==currentFileName
+        if (wasCurrent) save()
+        namingJob?.cancel()
+        ProjectFileWriter.rename(source,target) { result ->
+            mainHandler.post {
+                if (!::projectDir.isInitialized || projectDir!=directory || currentProjectName!=project) return@post
+                result.onSuccess {
+                    migrateEditorFileState(source.name,target.name,project)
+                    val tabIndex=openFileTabs.indexOf(source.name)
+                    if(tabIndex>=0) {
+                        openFileTabs[tabIndex]=target.name
+                        persistOpenTabs()
+                    }
+                    if (wasCurrent) {
+                        currentFileName=target.name
+                        settings.edit().putString("current_file",currentFileName).apply()
+                        editorRevision++
+                    }
+                    saveError=null
+                    refreshSaved()
+                }.onFailure { saveError=it.message ?: "Couldn’t rename ${source.name}" }
+            }
+        }
+    }
+
+    fun duplicateProjectFile(fileName: String) {
+        if (running) return
+        val source=projectPythonFile(fileName) ?: return
+        val directory=projectDir
+        if (source.name==currentFileName) save()
+        val target=ProjectFileTrash.duplicateTarget(directory,source)
+        ProjectFileWriter.duplicate(source,target) { result ->
+            mainHandler.post {
+                if (!::projectDir.isInitialized || projectDir!=directory) return@post
+                result.onSuccess { saveError=null;refreshSaved() }
+                    .onFailure { saveError=it.message ?: "Couldn’t duplicate ${source.name}" }
+            }
+        }
+    }
+
+    fun deleteProjectFile(fileName: String) {
+        if (running) return
+        val source=projectPythonFile(fileName) ?: return
+        val directory=projectDir
+        val project=currentProjectName
+        val preferredTabs=openFileTabs.filter { it!=source.name }
+        val wasCurrent=source.name==currentFileName
+        if (wasCurrent) save()
+        namingJob?.cancel()
+        ProjectFileWriter.trash(source) { result ->
+            result.onFailure { error ->
+                mainHandler.post {
+                    if (::projectDir.isInitialized && projectDir==directory && currentProjectName==project)
+                        saveError=error.message ?: "Couldn’t delete ${source.name}"
+                }
+            }.onSuccess {
+                if (!wasCurrent) {
+                    mainHandler.post {
+                        if (!::projectDir.isInitialized || projectDir!=directory || currentProjectName!=project) return@post
+                        openFileTabs.remove(source.name)
+                        persistOpenTabs()
+                        saveError=null
+                        refreshSaved()
+                    }
+                    return@onSuccess
+                }
+                val preferredTab=preferredTabs.firstOrNull { tabName -> File(directory,tabName).isFile }
+                val replacement=preferredTab?.let { File(directory,it) } ?: directory.listFiles()?.filter {
+                    it.isFile && it.extension.equals("py",true)
+                }?.maxByOrNull { it.lastModified() }
+                if (replacement != null) {
+                    val loaded=runCatching { readProjectText(replacement) }
+                    mainHandler.post {
+                        if (!::projectDir.isInitialized || projectDir!=directory || currentProjectName!=project) return@post
+                        openFileTabs.remove(source.name)
+                        persistOpenTabs()
+                        loaded.onSuccess { text ->
+                            currentFileName=replacement.name
+                            touchOpenTab(currentFileName)
+                            code=text
+                            codeDiagnostics=emptyList()
+                            pendingCode=null
+                            settings.edit().putString("current_file",currentFileName).apply()
+                            editorRevision++
+                            saveError=null
+                            refreshSaved()
+                        }.onFailure { saveError=it.message ?: "Couldn’t open another file";refreshSaved() }
+                    }
+                } else {
+                    val fallback=File(directory,"main.py")
+                    ProjectFileWriter.enqueue(fallback,"") { created ->
+                        mainHandler.post {
+                            if (!::projectDir.isInitialized || projectDir!=directory || currentProjectName!=project) return@post
+                            openFileTabs.remove(source.name)
+                            persistOpenTabs()
+                            created.onSuccess {
+                                currentFileName=fallback.name
+                                touchOpenTab(currentFileName)
+                                code=""
+                                codeDiagnostics=emptyList()
+                                pendingCode=null
+                                settings.edit().putString("current_file",currentFileName).apply()
+                                editorRevision++
+                                saveError=null
+                            }.onFailure { saveError=it.message ?: "Couldn’t create main.py" }
+                            refreshSaved()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun restoreDeletedFile(trashName: String) {
+        if (running || !::projectDir.isInitialized) return
+        val directory=projectDir
+        ProjectFileWriter.restore(directory,trashName) { result ->
+            mainHandler.post {
+                if (!::projectDir.isInitialized || projectDir!=directory) return@post
+                result.onSuccess { saveError=null;refreshSaved() }
+                    .onFailure { saveError=it.message ?: "Couldn’t restore deleted file" }
+            }
+        }
+    }
+
+    fun scanProjectProblems() {
+        if (running || !::projectDir.isInitialized) return
+        val directory=projectDir
+        val project=currentProjectName
+        val token=++projectProblemsToken
+        projectProblemsBusy=true
+        projectProblemsError=null
+        thread(name="PY4U-ProjectProblems") {
+            val scan=runCatching {
+                val runner=Python.getInstance().getModule("runner")
+                val results=ArrayList<ProjectProblem>()
+                val files=directory.listFiles()?.asSequence()
+                    ?.filter { it.isFile && it.extension.equals("py",true) && it.length()<=1_000_000L }
+                    ?.sortedBy { it.name.lowercase() }
+                    ?.take(100)
+                    ?.toList()
+                    .orEmpty()
+                for(file in files) {
+                    if(results.size>=250) break
+                    val source=readProjectText(file)
+                    val values=JSONArray(runner.callAttr("diagnose",source).toString())
+                    for(index in 0 until values.length()) {
+                        if(results.size>=250) break
+                        val issue=values.getJSONObject(index)
+                        val start=issue.getInt("start").coerceIn(0,source.length)
+                        results += ProjectProblem(
+                            fileName=file.name,
+                            line=issueLineNumber(source,start),
+                            message=issue.optString("message","Python problem"),
+                            fatal=issue.optBoolean("fatal",false),
+                            lineText=issueLineText(source,start).trim().take(180)
+                        )
+                    }
+                }
+                results
+            }
+            mainHandler.post {
+                if(token!=projectProblemsToken || !::projectDir.isInitialized ||
+                    projectDir!=directory || currentProjectName!=project) return@post
+                projectProblemsBusy=false
+                scan.onSuccess {
+                    projectProblems=it
+                    projectProblemsError=null
+                }.onFailure {
+                    projectProblems=emptyList()
+                    projectProblemsError=it.message ?: "Couldn’t scan project"
+                }
+            }
+        }
+    }
+
+    fun searchProject(query: String) {
+        if (!::projectDir.isInitialized) return
+        val token=++projectSearchToken
+        val directory=projectDir
+        val needle=query.trim()
+        if (needle.isEmpty()) {
+            projectSearchBusy=false
+            projectSearchResults=emptyList()
+            return
+        }
+        projectSearchBusy=true
+        thread(name="PY4U-ProjectSearch") {
+            val results=runCatching { ProjectSearch.search(directory,needle) }.getOrDefault(emptyList())
+            viewModelScope.launch {
+                if (token==projectSearchToken && ::projectDir.isInitialized && projectDir==directory) {
+                    projectSearchResults=results
+                    projectSearchBusy=false
+                }
+            }
+        }
     }
 
     fun updateCode(value: String) {
@@ -729,18 +1150,13 @@ class IdeViewModel : ViewModel() {
             val snapshot = code
             val fileName = currentFileName
             val directory = projectDir
-            launch(Dispatchers.IO) {
-                if (::projectDir.isInitialized) {
-                    File(directory,fileName).writeText(snapshot)
-                    mainHandler.post { refreshSaved() }
-                }
-            }
+            persistCode(directory, fileName, snapshot)
         }
     }
     fun saveAppearance() {
         if (!::settings.isInitialized) return
         settings.edit().putFloat("editor_font",editorFontSize).putFloat("terminal_font",terminalFontSize)
-            .putFloat("ui_scale",uiScale).putBoolean("word_wrap",wordWrap)
+            .putInt("tab_width",tabWidth).putFloat("ui_scale",uiScale).putBoolean("word_wrap",wordWrap)
             .putBoolean("syntax",syntaxHighlighting).putBoolean("autosave",autoSave).apply()
         settings.edit().putString("font",fontName).putFloat("line_spacing",lineSpacing)
             .putFloat("editor_padding",editorPadding).putBoolean("typing_animation",typingAnimation)
@@ -790,24 +1206,59 @@ class IdeViewModel : ViewModel() {
     }
     fun save() {
         autosaveJob?.cancel()
-        val snapshot = code
-        val fileName = currentFileName
-        val directory = projectDir
-        viewModelScope.launch(Dispatchers.IO) {
-            if (::projectDir.isInitialized) {
-                File(directory,fileName).writeText(snapshot)
-                mainHandler.post { refreshSaved() }
+        if (::projectDir.isInitialized) persistCode(projectDir, currentFileName, code)
+    }
+    fun historyVersions(): List<File> = if (::projectDir.isInitialized)
+        ProjectFileHistory.versions(File(projectDir, currentFileName)) else emptyList()
+
+    fun historyPreview(version: File): String {
+        if (!::projectDir.isInitialized) return "Couldn’t read snapshot"
+        val target=File(projectDir,currentFileName)
+        if (version !in ProjectFileHistory.versions(target)) return "Couldn’t read snapshot"
+        return runCatching { readProjectText(version).take(3000) }.getOrDefault("Couldn’t read snapshot")
+    }
+
+    fun restoreHistory(version: File) {
+        if (!::projectDir.isInitialized) return
+        val target = File(projectDir, currentFileName)
+        if (version !in ProjectFileHistory.versions(target)) return
+        val currentSnapshot = code
+        viewModelScope.launch {
+            val recovered = withContext(Dispatchers.IO) { runCatching { readProjectText(version) } }
+            recovered.onSuccess { snapshot ->
+                if (projectDir == target.parentFile && currentFileName == target.name && code == currentSnapshot) {
+                    ProjectFileWriter.checkpoint(target, currentSnapshot) { result ->
+                        mainHandler.post {
+                            if (result.isFailure) saveError = "Couldn’t protect current code: ${result.exceptionOrNull()?.message}"
+                            else if (projectDir == target.parentFile && currentFileName == target.name && code == currentSnapshot) {
+                                code = snapshot
+                                codeDiagnostics = emptyList()
+                                editorRevision++
+                                save()
+                            }
+                        }
+                    }
+                }
+            }.onFailure { saveError = "Couldn’t restore ${version.name}: ${it.message}" }
+        }
+    }
+    private fun persistCode(directory: File, fileName: String, snapshot: String) {
+        ProjectFileWriter.enqueue(File(directory, fileName), snapshot) { result ->
+            mainHandler.post {
+                if (result.isFailure) {
+                    saveError = "Couldn’t save $fileName: ${result.exceptionOrNull()?.message ?: "storage error"}"
+                } else if (::projectDir.isInitialized && projectDir == directory) {
+                    saveError = null
+                    refreshSaved()
+                }
             }
         }
     }
     private fun appendOutput(value: String) {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { appendOutput(value) }
-            return
-        }
+        // Python may write one tiny fragment at a time. Buffer on its worker thread
+        // and schedule just one UI update for the next output frame.
         outputBuffer.append(value)
-        if (!outputFlushScheduled) {
-            outputFlushScheduled = true
+        if (outputFlushScheduled.compareAndSet(false, true)) {
             mainHandler.postDelayed(outputFlushRunnable, 32)
         }
     }
@@ -815,14 +1266,15 @@ class IdeViewModel : ViewModel() {
     fun clearOutput() {
         outputBuffer.clear()
         mainHandler.removeCallbacks(outputFlushRunnable)
-        outputFlushScheduled = false
+        outputFlushScheduled.set(false)
         output = ""
         runtimeIssue = null
     }
+    fun fullOutput(): String = outputBuffer.snapshot()
 
     fun applyRuntimeFix() {
         val issue = runtimeIssue ?: return
-        if (issue.replaceFrom.isNotBlank() && issue.replaceTo.isNotBlank()) {
+        if (File(issue.fileName).name == currentFileName && issue.replaceFrom.isNotBlank() && issue.replaceTo.isNotBlank()) {
             val lines = code.lines().toMutableList()
             val index = issue.line - 1
             if (index in lines.indices && lines[index].contains(issue.replaceFrom)) {
@@ -840,6 +1292,22 @@ class IdeViewModel : ViewModel() {
     fun prepareRuntimeQuestion() {
         val issue = runtimeIssue ?: return
         aiPrompt = "Explain and fix this Python error in simple words:\n${issue.title} on line ${issue.line}\n${issue.explanation}\nCode: ${issue.codeLine}\nHint: ${issue.hint}"
+    }
+    fun openRuntimeSource(issue: RuntimeIssue): Boolean {
+        if (running || !::projectDir.isInitialized) return false
+        val candidate = File(issue.fileName).let { if (it.isAbsolute) it else File(projectDir, issue.fileName) }
+        val file = runCatching { candidate.canonicalFile }.getOrNull() ?: return false
+        if (file.parentFile != projectDir.canonicalFile || !file.isFile || !file.name.endsWith(".py", true)) return false
+        if (file.name != currentFileName) {
+            save()
+            currentFileName = file.name
+            code = readProjectText(file)
+            codeDiagnostics = emptyList()
+            settings.edit().putString("current_file", currentFileName).apply()
+            editorRevision++
+            refreshSaved()
+        }
+        return true
     }
 
     fun run() {
@@ -903,8 +1371,8 @@ class IdeViewModel : ViewModel() {
     }
     inner class Bridge {
         fun write(text: String, error: Boolean) { appendOutput(text) }
-        fun reportError(title: String, explanation: String, line: Int, codeLine: String, hint: String, details: String, replaceFrom: String, replaceTo: String) {
-            mainHandler.post { runtimeIssue = RuntimeIssue(title, explanation, line, codeLine, hint, details, replaceFrom, replaceTo) }
+        fun reportError(title: String, explanation: String, line: Int, codeLine: String, hint: String, details: String, fileName: String, replaceFrom: String, replaceTo: String) {
+            mainHandler.post { runtimeIssue = RuntimeIssue(title, explanation, line, codeLine, hint, details, fileName, replaceFrom, replaceTo) }
         }
         fun shouldStop(): Boolean = stopRequested
         fun readLine(): String? {
@@ -927,6 +1395,14 @@ class IdeViewModel : ViewModel() {
     override fun onCleared() {
         completionTask?.cancel(true)
         completionWorker.shutdownNow()
+        editorStateJobs.values.forEach { it.cancel() }
+        if (::settings.isInitialized && editorFileStates.isNotEmpty()) {
+            val edit=settings.edit()
+            editorFileStates.forEach { (key,state) ->
+                edit.putString(key,EditorFileStateCodec.encode(state))
+            }
+            edit.apply()
+        }
         stopRequested = true
         stdin.offer(stopInputSignal)
         super.onCleared()
@@ -1072,13 +1548,58 @@ private fun AchievementNotice(
     val context = LocalContext.current
     val aiScroll = rememberScrollState()
     val consoleScroll = rememberScrollState()
+    var consoleAutoScroll by remember { mutableStateOf(true) }
     val consoleInputFocus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val pages = listOf("FOLDERS", "PYTHON", "CONSOLE", "HELPER", "SETTINGS")
     val pageIcons = listOf("Folders", "Python", "Console", "Helper", "Settings")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, editorView) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && vm.autoSave) {
+                editorView?.flushCodeChange()
+                vm.save()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    var showFind by remember { mutableStateOf(false) }
+    var showReplace by remember { mutableStateOf(false) }
+    var findQuery by remember { mutableStateOf("") }
+    var replacement by remember { mutableStateOf("") }
+    var showGoToLine by remember { mutableStateOf(false) }
+    var lineDraft by remember { mutableStateOf("") }
+    var showHistory by remember { mutableStateOf(false) }
+    var showPalette by remember { mutableStateOf(false) }
+    var paletteQuery by remember { mutableStateOf("") }
+    var showQuickOpen by remember { mutableStateOf(false) }
+    var showProjectSearch by remember { mutableStateOf(false) }
+    var projectSearchQuery by remember { mutableStateOf("") }
+    var showProjectProblems by remember { mutableStateOf(false) }
+    var showConsoleSearch by remember { mutableStateOf(false) }
+    var consoleSearchQuery by remember { mutableStateOf("") }
+    var consoleSearchSnapshot by remember { mutableStateOf("") }
+    var showPackageInstall by remember { mutableStateOf(false) }
+    var packageDraft by remember { mutableStateOf("") }
+    var fileActionTarget by remember { mutableStateOf<SavedCode?>(null) }
+    var renameTarget by remember { mutableStateOf<SavedCode?>(null) }
+    var renameDraft by remember { mutableStateOf("") }
+    var showTrash by remember { mutableStateOf(false) }
+    var showProjectTemplates by remember { mutableStateOf(false) }
+    var quickOpenQuery by remember { mutableStateOf("") }
+    var chosenVersion by remember { mutableStateOf<File?>(null) }
+    var historyPreview by remember { mutableStateOf("") }
+    LaunchedEffect(chosenVersion) {
+        historyPreview = chosenVersion?.let { version ->
+            withContext(Dispatchers.IO) { vm.historyPreview(version) }
+        }.orEmpty()
+    }
     var showAiSettings by remember { mutableStateOf(false) }
     var showCodePreview by remember { mutableStateOf(false) }
+    var showProblems by remember { mutableStateOf(false) }
+    var selectedProblem by remember { mutableStateOf<CodeDiagnostic?>(null) }
     var selectedAiSlot by remember { mutableIntStateOf(0) }
     var keyDraft by remember { mutableStateOf("") }
     var endpointDraft by remember { mutableStateOf(vm.aiEndpoint) }
@@ -1126,6 +1647,9 @@ private fun AchievementNotice(
     LaunchedEffect(vm.aiMessages.size) {
         aiScroll.animateScrollTo(aiScroll.maxValue)
     }
+    LaunchedEffect(pager.currentPage) {
+        editorView?.flushCodeChange()
+    }
     LaunchedEffect(vm.waitingInput, pager.currentPage) {
         if (vm.waitingInput && pager.currentPage == 2) {
             delay(120)
@@ -1155,6 +1679,12 @@ private fun AchievementNotice(
         val keyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
         Box(Modifier.fillMaxSize().background(bg)) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+            vm.saveError?.let { error ->
+                Text(error + " · Tap to retry", color=Color.White, fontSize=12.sp,
+                    modifier=Modifier.fillMaxWidth().background(Color(0xFF8B2835))
+                        .clickable { editorView?.flushCodeChange(); vm.save() }
+                        .padding(horizontal=12.dp, vertical=8.dp))
+            }
             if(vm.showHeader) {
                 BoxWithConstraints(
                     Modifier.fillMaxWidth().padding(horizontal=8.dp, vertical=6.dp)
@@ -1198,7 +1728,7 @@ private fun AchievementNotice(
                         }
                         if(pager.currentPage==1) {
                             Button(
-                                onClick={if(vm.running) vm.stop() else {
+                                onClick={editorView?.flushCodeChange();if(vm.running) vm.stop() else {
                                     runOrigin=headerRunOrigin;runBurst++; vm.run(); scope.launch{pager.animateScrollToPage(2)}
                                 }},
                                 colors=ButtonDefaults.buttonColors(
@@ -1296,9 +1826,15 @@ private fun AchievementNotice(
                                 )
                             }
                             OutlinedButton(
-                                onClick={vm.makeNewProject()},
+                                onClick={showProjectTemplates=true},
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
                             ){Text("＋ Project")}
+                            if(vm.deletedFiles.isNotEmpty()) {
+                                OutlinedButton(
+                                    onClick={showTrash=true},
+                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
+                                ){Text("Trash ${vm.deletedFiles.size}")}
+                            }
                         }
                         HorizontalDivider(color=Color.White.copy(alpha=0.12f))
                         if(vm.savedCodes.isEmpty()) {
@@ -1312,8 +1848,8 @@ private fun AchievementNotice(
                             ) {
                                 vm.savedCodes.forEach { saved ->
                                     Surface(
-                                        onClick={vm.openSaved(saved.name);scope.launch{pager.animateScrollToPage(1)}},
-                                        color=if(vm.currentFileName.substringBeforeLast('.').replace('_',' ')==saved.name) Color.White.copy(alpha=0.15f) else Color.White.copy(alpha=0.045f),
+                                        onClick={vm.openProjectFile(saved.fileName);scope.launch{pager.animateScrollToPage(1)}},
+                                        color=if(vm.currentFileName==saved.fileName) Color.White.copy(alpha=0.15f) else Color.White.copy(alpha=0.045f),
                                         shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                                         modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.10f),androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
                                     ) {
@@ -1324,7 +1860,10 @@ private fun AchievementNotice(
                                                 Text(saved.name,color=Color.White,fontSize=15.sp,fontWeight=FontWeight.SemiBold)
                                                 Text(".py  •  auto-saved",color=Color.Gray,fontSize=10.sp)
                                             }
-                                            Text("›",color=Color.Gray,fontSize=24.sp)
+                                            TextButton(
+                                                onClick={fileActionTarget=saved},
+                                                contentPadding=PaddingValues(horizontal=7.dp,vertical=2.dp)
+                                            ) { Text("⋮",color=Color.LightGray,fontSize=20.sp) }
                                         }
                                     }
                                 }
@@ -1340,17 +1879,31 @@ private fun AchievementNotice(
                                 .padding(start=12.dp,end=6.dp),
                             verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                         ){
-                            Image(
+                                Image(
                                 painter=painterResource(com.pydroidx.app.R.drawable.ic_python_editor),
                                 contentDescription="Python file",
                                 modifier=Modifier.size(24.dp)
                             )
-                            Spacer(Modifier.width(9.dp))
-                            Text(vm.currentFileName,color=Color.White,fontSize=14.sp,fontWeight=FontWeight.SemiBold,
-                                maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.weight(1f,fill=false).widthIn(max=112.dp))
+                                Spacer(Modifier.width(9.dp))
+                                Text(vm.currentFileName,color=Color.White,fontSize=14.sp,fontWeight=FontWeight.SemiBold,
+                                    maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.weight(1f,fill=false).widthIn(max=112.dp))
+                                if (vm.codeDiagnostics.isNotEmpty()) {
+                                    TextButton(
+                                        onClick={showProblems=true},
+                                        contentPadding=PaddingValues(horizontal=4.dp),
+                                        modifier=Modifier.height(34.dp)
+                                    ) {
+                                        IdeGlyph("Problems",Color(0xFFFF7B86),Modifier.size(17.dp))
+                                        Spacer(Modifier.width(3.dp))
+                                        Text(vm.codeDiagnostics.size.toString(),color=Color(0xFFFF9AA3),fontSize=10.sp)
+                                    }
+                                }
                             Spacer(Modifier.width(7.dp))
                             Box(Modifier.size(6.dp).background(Color(0xFF8AB4F8),androidx.compose.foundation.shape.CircleShape))
                             Spacer(Modifier.width(8.dp))
+                            TextButton(onClick={showFind=true},modifier=Modifier.width(42.dp)) {
+                                Text("Find",fontSize=11.sp)
+                            }
                             IconButton(onClick={editorView?.undoCode()},modifier=Modifier.size(34.dp)) {
                                 IdeGlyph("Undo",Color(0xFFD8D9E0))
                             }
@@ -1362,27 +1915,112 @@ private fun AchievementNotice(
                                 onClick={scope.launch{pager.animateScrollToPage(0)}},
                                 contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
                             ){IdeGlyph("Close",Color(0xFF8C8C94))}
-                            TextButton(
-                                onClick={vm.makeNewCode()},
-                                contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
-                            ){IdeGlyph("New file",Color(0xFFBFC0C7))}
                         }
+                        }
+                        if(vm.openFileTabs.isNotEmpty()) {
+                            Row(
+                                Modifier.fillMaxWidth().heightIn(min=34.dp,max=40.dp)
+                                    .horizontalScroll(rememberScrollState())
+                                    .background(safeColor(vm.tabBarHex,0xFF181F29))
+                                    .padding(horizontal=6.dp,vertical=3.dp),
+                                horizontalArrangement=Arrangement.spacedBy(5.dp),
+                                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                            ) {
+                                vm.openFileTabs.forEach { fileName ->
+                                    val active=fileName==vm.currentFileName
+                                    Surface(
+                                        color=if(active) Color.White.copy(alpha=.14f) else Color.White.copy(alpha=.045f),
+                                        shape=androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                                        border=BorderStroke(1.dp,Color.White.copy(alpha=if(active).18f else .08f))
+                                    ) {
+                                        Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                            Text(
+                                                fileName,
+                                                color=if(active) Color.White else Color(0xFFB0B2BA),
+                                                fontSize=11.sp,
+                                                maxLines=1,
+                                                overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                modifier=Modifier.widthIn(max=130.dp)
+                                                    .clickable(enabled=!vm.running) {
+                                                        editorView?.flushCodeChange()
+                                                        vm.openProjectFile(fileName)
+                                                    }
+                                                    .padding(start=9.dp,end=5.dp,top=6.dp,bottom=6.dp)
+                                            )
+                                            if(vm.openFileTabs.size>1) {
+                                                Text(
+                                                    "×",
+                                                    color=Color(0xFF8C8C94),
+                                                    fontSize=16.sp,
+                                                    modifier=Modifier.clickable(enabled=!vm.running) { vm.closeFileTab(fileName) }
+                                                        .padding(horizontal=7.dp,vertical=4.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (showFind) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),
+                                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                OutlinedTextField(findQuery,{findQuery=it},label={Text("Find in file")},
+                                    singleLine=true,modifier=Modifier.weight(1f))
+                                TextButton(onClick={
+                                    if (editorView?.findNext(findQuery) != true && findQuery.isNotEmpty())
+                                        Toast.makeText(context,"No matches",Toast.LENGTH_SHORT).show()
+                                }) { Text("Next") }
+                                TextButton(onClick={showFind=false;showReplace=false}) { Text("×") }
+                            }
+                            Row(Modifier.fillMaxWidth().padding(horizontal=8.dp)) {
+                                TextButton(onClick={showReplace=!showReplace}) { Text("Replace") }
+                                TextButton(onClick={showGoToLine=true}) { Text("Go to line") }
+                                TextButton(onClick={showHistory=true;chosenVersion=null}) { Text("History") }
+                            }
+                            if (showReplace) Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),
+                                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                OutlinedTextField(replacement,{replacement=it},label={Text("Replace with")},
+                                    singleLine=true,modifier=Modifier.weight(1f))
+                                TextButton(onClick={editorView?.replaceSelection(findQuery,replacement)}) {
+                                    Text("One")
+                                }
+                                TextButton(onClick={
+                                    val count=editorView?.replaceAllMatches(findQuery,replacement) ?: 0
+                                    Toast.makeText(context,"Replaced $count",Toast.LENGTH_SHORT).show()
+                                }) { Text("All") }
+                            }
                         }
                         AndroidView(
                             factory={context->PythonEditorView(context).also{view->
                                 editorView=view
+                                view.onFindRequested={ replace -> showFind=true;showReplace=replace }
+                                view.onSaveRequested=vm::save
+                                view.onRunRequested={if (!vm.running) { vm.run();scope.launch{pager.animateScrollToPage(2)} }}
+                                view.onPaletteRequested={showPalette=true}
+                                view.onQuickOpenRequested={showQuickOpen=true}
                                 view.onCodeChanged=vm::updateCode
+                                view.onFileStateChanged=vm::rememberEditorFileState
+                                view.onDiagnosticTap={selectedProblem=it}
                                 view.requestSmartCompletion=vm::requestCompletion
                                 view.requestCodeDiagnostics=vm::requestDiagnostics
                                 view.setCodeIfDifferent(vm.code,revision)
+                                view.restoreFileStateOnce(vm.editorFileState(),revision)
                             }},
                             update={view->
+                                view.onFindRequested={ replace -> showFind=true;showReplace=replace }
+                                view.onSaveRequested=vm::save
+                                view.onRunRequested={if (!vm.running) { vm.run();scope.launch{pager.animateScrollToPage(2)} }}
+                                view.onPaletteRequested={showPalette=true}
+                                view.onQuickOpenRequested={showQuickOpen=true}
+                                view.onFileStateChanged=vm::rememberEditorFileState
+                                view.onDiagnosticTap={selectedProblem=it}
                                 view.setBackgroundColor(bg.toArgb())
                                 view.setCodeIfDifferent(vm.code,revision)
+                                view.restoreFileStateOnce(vm.editorFileState(),revision)
                                 view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting,vm.fontName,
                                     vm.lineSpacing,vm.editorPadding,vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness,
                                     vm.lineNumbers,vm.highlightCurrentLine,vm.customFontPath,
-                                    listOf(vm.editorTextHex,vm.commentHex,vm.stringHex,vm.numberHex,vm.keywordHex,vm.functionHex,vm.variableHex))
+                                    listOf(vm.editorTextHex,vm.commentHex,vm.stringHex,vm.numberHex,vm.keywordHex,vm.functionHex,vm.variableHex),vm.tabWidth)
                             },
                             modifier=Modifier.weight(1f).fillMaxWidth().background(bg)
                         )
@@ -1401,18 +2039,32 @@ private fun AchievementNotice(
                                     verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                                 ){
                                     val matchingPairs = mapOf("(" to ")", "[" to "]", "{" to "}", "\"" to "\"", "'" to "'")
-                                    listOf("Tab","(",")","[","]","{","}","\"","'",":","=").forEach{key->
+                                    listOf("⌘","Astro","Tab","(",")","[","]","{","}","\"","'",":","=","#").forEach{key->
                                         OutlinedButton(
                                             onClick={
                                                 when {
+                                                    key=="⌘" -> showPalette=true
+                                                    key=="Astro" -> {
+                                                        val view=editorView
+                                                        val start=minOf(view?.selectionStart ?: 0,view?.selectionEnd ?: 0).coerceAtLeast(0)
+                                                        val end=maxOf(view?.selectionStart ?: 0,view?.selectionEnd ?: 0).coerceAtMost(view?.text?.length ?: 0)
+                                                        val selection=if(view!=null && end>start) view.text.subSequence(start,end).toString().take(8000) else ""
+                                                        vm.aiPrompt=if(selection.isNotBlank())
+                                                            "Question about this selection in ${vm.currentFileName}:\n```python\n$selection\n```\n"
+                                                            else "Question about ${vm.currentFileName}: "
+                                                        scope.launch{pager.animateScrollToPage(3)}
+                                                    }
                                                     key=="Tab"&&editorView?.acceptGhostSuggestion()==true -> Unit
+                                                    key=="Tab"&&editorView?.indentSelection()==true -> Unit
+                                                    key=="Tab" -> editorView?.insertAtCursor(" ".repeat(vm.tabWidth))
+                                                    key=="#"&&editorView?.toggleCommentSelection()==true -> Unit
                                                     key in matchingPairs -> editorView?.insertPair(key, matchingPairs.getValue(key))
                                                     key in setOf(")", "]", "}") -> editorView?.insertClosingOrSkip(key)
                                                     else -> editorView?.insertAtCursor(if(key=="Tab")"    " else key)
                                                 }
                                                 
                                             },
-                                            modifier=Modifier.width(if(key=="Tab")46.dp else 36.dp).fillMaxHeight(),
+                                            modifier=Modifier.width(if(key=="Astro")56.dp else if(key=="Tab")46.dp else 36.dp).fillMaxHeight(),
                                             shape=androidx.compose.foundation.shape.RoundedCornerShape(11.dp),
                                             border=BorderStroke(1.dp,Color.White.copy(alpha=.14f)),
                                             colors=ButtonDefaults.outlinedButtonColors(
@@ -1455,7 +2107,7 @@ private fun AchievementNotice(
                             }
                             Spacer(Modifier.width(6.dp))
                             Button(
-                                onClick={if(vm.running) vm.stop() else {runOrigin=consoleRunOrigin;runBurst++;vm.run()}},
+                                onClick={editorView?.flushCodeChange();if(vm.running) vm.stop() else {runOrigin=consoleRunOrigin;runBurst++;vm.run()}},
                                 colors=ButtonDefaults.buttonColors(containerColor=Color.White,contentColor=Color.Black),
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
                                 contentPadding=PaddingValues(horizontal=18.dp,vertical=10.dp),
@@ -1480,6 +2132,22 @@ private fun AchievementNotice(
                                     shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
                                     modifier=Modifier.graphicsLayer { scaleX=modeScale;scaleY=modeScale }){Text(mode)}
                             }
+                            TextButton(onClick={consoleAutoScroll=!consoleAutoScroll}) {
+                                Text(if(consoleAutoScroll) "Auto on" else "Auto off",fontSize=11.sp)
+                            }
+                            TextButton(onClick={
+                                consoleSearchSnapshot=vm.fullOutput()
+                                consoleSearchQuery=""
+                                showConsoleSearch=true
+                            }) { Text("Search",fontSize=11.sp) }
+                            TextButton(
+                                enabled=!vm.running,
+                                onClick={packageDraft="";showPackageInstall=true}
+                            ) { Text("Packages",fontSize=11.sp) }
+                            TextButton(onClick={
+                                val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("PY4U Console",vm.fullOutput()))
+                            }) { Text("Copy",fontSize=11.sp) }
                         }
                         Spacer(Modifier.height(14.dp))
                         Surface(
@@ -1503,10 +2171,12 @@ private fun AchievementNotice(
                                 }
                                 Spacer(Modifier.height(12.dp))
                                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                                    Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
+                                    Text(
+                                        ansiConsoleAnnotated(vm.output.ifEmpty{"Ready"},safeColor(vm.consoleTextHex,0xFFE8E8EC)),
                                         fontFamily=FontFamily.Monospace,fontSize=vm.terminalFontSize.sp,
                                         lineHeight=(vm.terminalFontSize+6).sp,
-                                        modifier=Modifier.fillMaxSize().verticalScroll(consoleScroll).padding(bottom=if(vm.runtimeIssue!=null)180.dp else 8.dp))
+                                        modifier=Modifier.fillMaxSize().verticalScroll(consoleScroll).padding(bottom=if(vm.runtimeIssue!=null)180.dp else 8.dp)
+                                    )
                                     vm.runtimeIssue?.let { issue ->
                                         var showDetails by remember(issue.details) { mutableStateOf(false) }
                                         Surface(color=Color(0xFF151316),shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
@@ -1515,7 +2185,15 @@ private fun AchievementNotice(
                                                 .fillMaxWidth().animateContentSize()) {
                                             Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                                                 Text("⚠ ${issue.title}",color=Color(0xFFFF8798),fontWeight=FontWeight.Bold,fontSize=14.sp)
-                                                Text("Line ${issue.line}: ${issue.explanation}",color=Color.White,fontSize=13.sp,lineHeight=18.sp)
+                                                Text("${File(issue.fileName).name}:${issue.line} · ${issue.explanation}",
+                                                    color=Color.White,fontSize=13.sp,lineHeight=18.sp,
+                                                    modifier=Modifier.clickable {
+                                                        if (vm.openRuntimeSource(issue)) scope.launch {
+                                                            pager.animateScrollToPage(1)
+                                                            editorView?.goToLine(issue.line)
+                                                        }
+                                                    })
+                                                Text("Tap the file and line to open it",color=Color(0xFF9B9BA4),fontSize=10.sp)
                                                 if(issue.codeLine.isNotBlank()) Text(issue.codeLine,color=Color(0xFFB8C7FF),fontFamily=FontFamily.Monospace,fontSize=12.sp)
                                                 AnimatedVisibility(showDetails) {
                                                     Text(issue.details,color=Color(0xFF9B9BA4),fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=6)
@@ -1537,7 +2215,7 @@ private fun AchievementNotice(
                                         }
                                     }
                                 }
-                                ConsoleKeyToolbar(consoleInputValue,{consoleInputValue=it;vm.input=it.text},vm.inputHistory,consoleInputFocus,vm.input,vm.output.length,consoleScroll,safeColor(vm.toolbarHex,0xFF050505))
+                                ConsoleKeyToolbar(consoleInputValue,{consoleInputValue=it;vm.input=it.text},vm.inputHistory,consoleInputFocus,vm.input,vm.output.length,consoleScroll,safeColor(vm.toolbarHex,0xFF050505),consoleAutoScroll)
                                 Surface(
                                     color=safeColor(vm.consoleBackgroundHex,0xFF050505),
                                     shape=androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
@@ -1718,6 +2396,41 @@ private fun AchievementNotice(
                                 TextButton(onClick={vm.acceptTeaching()}) { Text("Teach me",fontSize=11.sp) }
                             }
                         }
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement=Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf("Explain","Fix","Refactor","Optimize","Tests").forEach { action ->
+                                AssistChip(
+                                    onClick={
+                                        val view=editorView
+                                        val start=minOf(view?.selectionStart ?: 0,view?.selectionEnd ?: 0).coerceAtLeast(0)
+                                        val end=maxOf(view?.selectionStart ?: 0,view?.selectionEnd ?: 0)
+                                            .coerceAtMost(view?.text?.length ?: 0)
+                                        val selection=if(view!=null && end>start)
+                                            view.text.subSequence(start,end).toString().take(8000) else ""
+                                        val target=if(selection.isNotBlank())
+                                            "the selected code in ${vm.currentFileName}"
+                                            else "the current file ${vm.currentFileName}"
+                                        val instruction=when(action) {
+                                            "Explain" -> "Explain $target clearly. Focus on what it does and why."
+                                            "Fix" -> "Inspect $target for the most important real bug or error and fix it. Preserve unrelated behavior."
+                                            "Refactor" -> "Refactor $target for clarity and maintainability without changing behavior."
+                                            "Optimize" -> "Optimize $target only where there is a justified performance improvement. Preserve behavior."
+                                            else -> "Generate focused tests for $target, prioritizing edge cases and regressions."
+                                        }
+                                        vm.shareCode=true
+                                        vm.aiPrompt=if(selection.isBlank()) instruction else
+                                            "$instruction\n\nSelected code:\n```python\n$selection\n```"
+                                    },
+                                    label={Text(action,maxLines=1)},
+                                    colors=AssistChipDefaults.assistChipColors(
+                                        labelColor=Color.White,
+                                        containerColor=Color.White.copy(alpha=.05f)
+                                    )
+                                )
+                            }
+                        }
                         if(vm.attachedFileName!=null || vm.shareCode) {
                             Row(
                                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -1881,9 +2594,15 @@ private fun AchievementNotice(
                         Text("Editor padding  ${vm.editorPadding.toInt()} px",color=text)
                         Slider(vm.editorPadding,{vm.editorPadding=it;vm.saveAppearance()},valueRange=0f..48f,steps=11)
                         }
-                        if(settingsSection=="Editor" || searchMatches("editor","font size","line spacing","highlight delay","autosave","ghost text","cursor","word wrap","syntax","autocomplete","line numbers","saving")){
+                        if(settingsSection=="Editor" || searchMatches("editor","font size","line spacing","highlight delay","autosave","ghost text","cursor","word wrap","syntax","autocomplete","line numbers","saving","tab width","indentation")){
                         Text("Editor font  ${vm.editorFontSize.toInt()} sp",color=text)
                         Slider(vm.editorFontSize,{vm.editorFontSize=it;vm.saveAppearance()},valueRange=12f..28f,steps=15)
+                        Text("Tab width  ${vm.tabWidth} spaces",color=text)
+                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                            listOf(2, 4, 8).forEach { width ->
+                                FilterChip(selected=vm.tabWidth==width,onClick={vm.tabWidth=width;vm.saveAppearance()},label={Text("$width spaces")})
+                            }
+                        }
                         Text("Line spacing  ${"%.2f".format(vm.lineSpacing)}×",color=text)
                         Slider(vm.lineSpacing,{vm.lineSpacing=it;vm.saveAppearance()},valueRange=0.9f..1.8f)
                         Text("Highlight delay  ${vm.highlightDelay.toInt()} ms",color=text)
@@ -1932,22 +2651,450 @@ private fun AchievementNotice(
         RunBurst(runBurst,vm.currentFileName,motionAllowed,runOrigin)
         }
     }
+    fileActionTarget?.let { saved ->
+        AlertDialog(
+            onDismissRequest={fileActionTarget=null},containerColor=Color(0xFF171A20),
+            title={Text(saved.fileName)},
+            text={Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                TextButton(onClick={
+                    vm.duplicateProjectFile(saved.fileName)
+                    fileActionTarget=null
+                },modifier=Modifier.fillMaxWidth()) { Text("Duplicate") }
+                TextButton(onClick={
+                    renameTarget=saved
+                    renameDraft=saved.name
+                    fileActionTarget=null
+                },modifier=Modifier.fillMaxWidth()) { Text("Rename") }
+                TextButton(onClick={
+                    vm.deleteProjectFile(saved.fileName)
+                    fileActionTarget=null
+                },modifier=Modifier.fillMaxWidth()) { Text("Move to Trash",color=Color(0xFFFF9AA3)) }
+            }},
+            confirmButton={TextButton(onClick={fileActionTarget=null}) { Text("Close") }}
+        )
+    }
+    renameTarget?.let { saved ->
+        AlertDialog(
+            onDismissRequest={renameTarget=null},containerColor=Color(0xFF171A20),
+            title={Text("Rename ${saved.fileName}")},
+            text={OutlinedTextField(
+                value=renameDraft,
+                onValueChange={renameDraft=it.take(60)},
+                label={Text("File name")},
+                singleLine=true
+            )},
+            confirmButton={TextButton(
+                enabled=renameDraft.isNotBlank(),
+                onClick={
+                    vm.renameProjectFile(saved.fileName,renameDraft)
+                    renameTarget=null
+                }
+            ) { Text("Rename") }},
+            dismissButton={TextButton(onClick={renameTarget=null}) { Text("Cancel") }}
+        )
+    }
+    if(showTrash) AlertDialog(
+        onDismissRequest={showTrash=false},containerColor=Color(0xFF171A20),
+        title={Text("Recently deleted")},
+        text={Column(Modifier.heightIn(max=430.dp).verticalScroll(rememberScrollState())) {
+            if(vm.deletedFiles.isEmpty()) Text("Trash is empty.",color=Color.LightGray)
+            vm.deletedFiles.forEach { deleted ->
+                TextButton(onClick={
+                    vm.restoreDeletedFile(deleted.trashName)
+                    showTrash=false
+                },modifier=Modifier.fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(deleted.originalName,color=Color.White)
+                        Text("Tap to restore",color=Color.Gray,fontSize=10.sp)
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showTrash=false}) { Text("Close") }}
+    )
+    if(showProjectTemplates) AlertDialog(
+        onDismissRequest={showProjectTemplates=false},containerColor=Color(0xFF171A20),
+        title={Text("New project")},
+        text={Column(Modifier.heightIn(max=440.dp).verticalScroll(rememberScrollState())) {
+            ProjectWorkspace.templates.forEach { template ->
+                TextButton(onClick={vm.makeNewProject(template);showProjectTemplates=false},
+                    modifier=Modifier.fillMaxWidth()) { Text(template) }
+            }
+        }},
+        confirmButton={TextButton(onClick={showProjectTemplates=false}) { Text("Cancel") }}
+    )
+    if(showPalette) AlertDialog(
+        onDismissRequest={showPalette=false},containerColor=Color(0xFF171A20),
+        title={Text("Commands")},
+        text={Column(Modifier.heightIn(max=430.dp)) {
+            OutlinedTextField(paletteQuery,{paletteQuery=it},label={Text("Search commands")},
+                singleLine=true,modifier=Modifier.fillMaxWidth())
+            val commands = listOf(if(vm.running) "Stop program" else "Run Python file",
+                "Save file","Find in file","Find in project","Project Problems","Replace in file","Go to line","Open file",
+                "Install package","List packages","Open Settings","Ask Astro")
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                commands.filter { it.contains(paletteQuery,true) }.forEach { command ->
+                    TextButton(onClick={
+                        showPalette=false
+                        when(command) {
+                            "Stop program" -> vm.stop()
+                            "Run Python file" -> {editorView?.flushCodeChange();vm.run();scope.launch{pager.animateScrollToPage(2)}}
+                            "Save file" -> {editorView?.flushCodeChange();vm.save()}
+                            "Find in file" -> {showFind=true;scope.launch{pager.animateScrollToPage(1)}}
+                            "Find in project" -> {
+                                editorView?.flushCodeChange()
+                                vm.save()
+                                projectSearchQuery=""
+                                vm.searchProject("")
+                                showProjectSearch=true
+                            }
+                            "Project Problems" -> {
+                                editorView?.flushCodeChange()
+                                vm.save()
+                                vm.scanProjectProblems()
+                                showProjectProblems=true
+                            }
+                            "Replace in file" -> {showFind=true;showReplace=true;scope.launch{pager.animateScrollToPage(1)}}
+                            "Go to line" -> showGoToLine=true
+                            "Open file" -> showQuickOpen=true
+                            "Install package" -> { packageDraft="";showPackageInstall=true }
+                            "List packages" -> {
+                                vm.consoleMode="Terminal"
+                                vm.input="packages"
+                                vm.submitConsoleEntry()
+                                scope.launch{pager.animateScrollToPage(2)}
+                            }
+                            "Open Settings" -> scope.launch{pager.animateScrollToPage(4)}
+                            "Ask Astro" -> scope.launch{pager.animateScrollToPage(3)}
+                        }
+                    },modifier=Modifier.fillMaxWidth()) { Text(command) }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showPalette=false}) { Text("Close") }}
+    )
+    if(showPackageInstall) AlertDialog(
+        onDismissRequest={showPackageInstall=false},containerColor=Color(0xFF171A20),
+        title={Text("Install Python package")},
+        text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("Project-scoped pure-Python wheels only. Native extensions are rejected safely.",color=Color.LightGray,fontSize=12.sp)
+            OutlinedTextField(
+                value=packageDraft,
+                onValueChange={packageDraft=it.take(90)},
+                label={Text("Package or package==version")},
+                singleLine=true,
+                modifier=Modifier.fillMaxWidth()
+            )
+            Text("Examples: pyfiglet  ·  humanize==4.10.0",color=Color.Gray,fontSize=10.sp)
+        }},
+        confirmButton={Button(
+            enabled=packageDraft.isNotBlank()&&!vm.running,
+            onClick={
+                val spec=packageDraft.trim()
+                vm.consoleMode="Terminal"
+                vm.input="pip install $spec"
+                vm.submitConsoleEntry()
+                showPackageInstall=false
+                scope.launch{pager.animateScrollToPage(2)}
+            }
+        ) { Text("Install") }},
+        dismissButton={TextButton(onClick={showPackageInstall=false}) { Text("Cancel") }}
+    )
+    if(showConsoleSearch) AlertDialog(
+        onDismissRequest={showConsoleSearch=false},containerColor=Color(0xFF171A20),
+        title={Text("Search Console")},
+        text={Column(Modifier.heightIn(max=480.dp)) {
+            OutlinedTextField(
+                value=consoleSearchQuery,
+                onValueChange={consoleSearchQuery=it},
+                label={Text("Find output")},
+                singleLine=true,
+                modifier=Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            val hits = remember(consoleSearchSnapshot,consoleSearchQuery) {
+                ConsoleSearch.search(consoleSearchSnapshot,consoleSearchQuery)
+            }
+            when {
+                consoleSearchQuery.isBlank() -> Text("Search the retained Console output.",color=Color.LightGray)
+                hits.isEmpty() -> Text("No matches.",color=Color.LightGray)
+                else -> {
+                    Text("${hits.size} match${if(hits.size==1) "" else "es"}",color=Color.Gray,fontSize=11.sp)
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        hits.forEach { hit ->
+                            TextButton(onClick={
+                                val totalLines=(consoleSearchSnapshot.count { it=='\n' }+1).coerceAtLeast(1)
+                                val target=if(totalLines<=1) 0 else
+                                    ((consoleScroll.maxValue.toLong()*(hit.line-1))/(totalLines-1)).toInt()
+                                showConsoleSearch=false
+                                scope.launch { consoleScroll.animateScrollTo(target.coerceIn(0,consoleScroll.maxValue)) }
+                            },modifier=Modifier.fillMaxWidth()) {
+                                Column(Modifier.fillMaxWidth()) {
+                                    Text("Line ${hit.line} · column ${hit.column}",color=accent,fontSize=11.sp,fontWeight=FontWeight.SemiBold)
+                                    Text(hit.lineText.trim().take(180),color=Color.LightGray,fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=2)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showConsoleSearch=false}) { Text("Close") }}
+    )
+    if(showProjectProblems) AlertDialog(
+        onDismissRequest={showProjectProblems=false},containerColor=Color(0xFF171A20),
+        title={Text("Project Problems · ${vm.currentProjectName}")},
+        text={Column(Modifier.heightIn(max=500.dp)) {
+            Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                when {
+                    vm.projectProblemsBusy -> {
+                        CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp)
+                        Spacer(Modifier.width(9.dp))
+                        Text("Scanning Python files…",color=Color.LightGray,fontSize=12.sp)
+                    }
+                    vm.projectProblemsError!=null -> Text(vm.projectProblemsError.orEmpty(),color=Color(0xFFFF9AA3),fontSize=12.sp,modifier=Modifier.weight(1f))
+                    else -> Text("${vm.projectProblems.size} problem${if(vm.projectProblems.size==1) "" else "s"}",
+                        color=Color.LightGray,fontSize=12.sp,modifier=Modifier.weight(1f))
+                }
+                TextButton(enabled=!vm.running&&!vm.projectProblemsBusy,onClick=vm::scanProjectProblems) { Text("Rescan") }
+            }
+            Spacer(Modifier.height(6.dp))
+            when {
+                vm.projectProblemsBusy && vm.projectProblems.isEmpty() -> Unit
+                vm.projectProblems.isEmpty() && vm.projectProblemsError==null ->
+                    Text("No diagnostics found in this project.",color=Color.LightGray)
+                else -> Column(Modifier.verticalScroll(rememberScrollState())) {
+                    vm.projectProblems.forEach { problem ->
+                        TextButton(onClick={
+                            vm.openProjectFile(problem.fileName)
+                            showProjectProblems=false
+                            scope.launch {
+                                pager.animateScrollToPage(1)
+                                delay(90)
+                                editorView?.goToLine(problem.line)
+                            }
+                        },modifier=Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(
+                                    "${problem.fileName}:${problem.line} · ${problem.message}",
+                                    color=if(problem.fatal) Color(0xFFFF9AA3) else Color(0xFFFFC88A),
+                                    fontSize=12.sp,maxLines=2
+                                )
+                                if(problem.lineText.isNotBlank()) Text(
+                                    problem.lineText,
+                                    color=Color.LightGray,
+                                    fontFamily=FontFamily.Monospace,
+                                    fontSize=10.sp,
+                                    maxLines=1
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showProjectProblems=false}) { Text("Close") }}
+    )
+    if(showProjectSearch) AlertDialog(
+        onDismissRequest={showProjectSearch=false},containerColor=Color(0xFF171A20),
+        title={Text("Find in project")},
+        text={Column(Modifier.heightIn(max=480.dp)) {
+            OutlinedTextField(
+                value=projectSearchQuery,
+                onValueChange={
+                    projectSearchQuery=it
+                    vm.searchProject(it)
+                },
+                label={Text("Search Python files")},
+                singleLine=true,
+                modifier=Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            when {
+                projectSearchQuery.isBlank() -> Text("Type to search every Python file in this project.",color=Color.LightGray)
+                vm.projectSearchBusy -> Text("Searching…",color=Color.LightGray)
+                vm.projectSearchResults.isEmpty() -> Text("No matches.",color=Color.LightGray)
+                else -> Column(Modifier.verticalScroll(rememberScrollState())) {
+                    vm.projectSearchResults.forEach { hit ->
+                        TextButton(
+                            enabled=!vm.running,
+                            onClick={
+                                editorView?.flushCodeChange()
+                                vm.openProjectFile(hit.fileName)
+                                showProjectSearch=false
+                                scope.launch {
+                                    pager.animateScrollToPage(1)
+                                    delay(90)
+                                    editorView?.goToLine(hit.line)
+                                }
+                            },
+                            modifier=Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text("${hit.fileName}:${hit.line}",color=accent,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                                Text(hit.lineText.trim().take(160),color=Color.LightGray,fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=2)
+                            }
+                        }
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showProjectSearch=false}) { Text("Close") }}
+    )
+    if(showQuickOpen) AlertDialog(
+        onDismissRequest={showQuickOpen=false},containerColor=Color(0xFF171A20),
+        title={Text("Open Python file")},
+        text={Column(Modifier.heightIn(max=430.dp)) {
+            OutlinedTextField(quickOpenQuery,{quickOpenQuery=it},label={Text("File name")},
+                singleLine=true,modifier=Modifier.fillMaxWidth())
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if(vm.running) Text("Stop the program before switching files.",color=Color.LightGray)
+                vm.savedCodes.filter { it.name.contains(quickOpenQuery,true) }.forEach { saved ->
+                    TextButton(enabled=!vm.running,onClick={
+                        editorView?.flushCodeChange()
+                        vm.openProjectFile(saved.fileName)
+                        showQuickOpen=false
+                        scope.launch{pager.animateScrollToPage(1)}
+                    },modifier=Modifier.fillMaxWidth()) { Text(saved.name + ".py") }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showQuickOpen=false}) { Text("Close") }}
+    )
+    if(showHistory) AlertDialog(
+        onDismissRequest={showHistory=false},containerColor=Color(0xFF171A20),
+        title={Text("History · ${vm.currentFileName}")},
+        text={Column(Modifier.heightIn(max=450.dp).verticalScroll(rememberScrollState())) {
+            val versions = remember(vm.currentFileName, showHistory) { vm.historyVersions() }
+            if (versions.isEmpty()) Text("No earlier versions yet.",color=Color.LightGray)
+            versions.forEach { version ->
+                TextButton(onClick={chosenVersion=version}) {
+                    Text(java.text.DateFormat.getDateTimeInstance().format(java.util.Date(version.nameWithoutExtension.toLongOrNull() ?: 0L)),
+                        color=if(chosenVersion==version) accent else Color.White)
+                }
+            }
+            if (chosenVersion != null) {
+                Text("Preview (first 3,000 characters)",color=accent,fontSize=11.sp)
+                Text(historyPreview,color=Color.LightGray,fontFamily=FontFamily.Monospace,fontSize=11.sp)
+            }
+        }},
+        confirmButton={TextButton(enabled=chosenVersion!=null,onClick={
+            chosenVersion?.let(vm::restoreHistory)
+            showHistory=false
+        }) { Text("Restore") }},
+        dismissButton={TextButton(onClick={showHistory=false}) { Text("Cancel") }}
+    )
+    if(showGoToLine) AlertDialog(
+        onDismissRequest={showGoToLine=false},containerColor=Color(0xFF171A20),
+        title={Text("Go to line")},
+        text={OutlinedTextField(lineDraft,{lineDraft=it.filter(Char::isDigit).take(8)},
+            label={Text("Line number")},singleLine=true)},
+        confirmButton={TextButton(onClick={
+            lineDraft.toIntOrNull()?.let { editorView?.goToLine(it) }
+            showGoToLine=false
+        }) { Text("Go") }},
+        dismissButton={TextButton(onClick={showGoToLine=false}) { Text("Cancel") }}
+    )
+    if(showProblems) AlertDialog(
+        onDismissRequest={showProblems=false},containerColor=Color(0xFF171A20),
+        title={Text("Problems · ${vm.currentFileName}")},
+        text={Column(Modifier.heightIn(max=450.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            if (vm.codeDiagnostics.isEmpty()) Text("No problems in this file.",color=Color.LightGray)
+            vm.codeDiagnostics.forEach { issue ->
+                TextButton(onClick={showProblems=false;selectedProblem=issue},modifier=Modifier.fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text("Line ${issueLineNumber(vm.code,issue.start)} · ${issue.message}",color=if(issue.fatal) Color(0xFFFF9AA3) else Color(0xFFFFC88A),fontSize=13.sp)
+                        Text(issueLineText(vm.code,issue.start).trim().take(120),color=Color.LightGray,fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=1)
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showProblems=false}) { Text("Close") }}
+    )
+    selectedProblem?.let { issue ->
+        val line = issueLineNumber(vm.code,issue.start)
+        AlertDialog(
+            onDismissRequest={selectedProblem=null},containerColor=Color(0xFF171A20),
+            title={Text("Problem · line $line")},
+            text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                Text("What happened",color=accent,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                Text(issue.message,color=Color.White,fontSize=13.sp)
+                Text("Where",color=accent,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                Text("${vm.currentFileName}:$line  ${issueLineText(vm.code,issue.start).trim().take(120)}",color=Color.LightGray,fontFamily=FontFamily.Monospace,fontSize=12.sp)
+                Text("Why Python dislikes it",color=accent,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                Text(issueWhy(issue.message),color=Color.LightGray,fontSize=13.sp)
+                Text("Possible fix",color=accent,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                Text(issueFix(issue.message),color=Color.LightGray,fontSize=13.sp)
+            }},
+            confirmButton={TextButton(onClick={
+                selectedProblem=null
+                editorView?.let { view ->
+                    val offset = issue.start.coerceIn(0,view.text?.length ?: 0)
+                    view.setSelection(offset)
+                    view.requestFocus()
+                }
+            }) { Text("Go to code") }},
+            dismissButton={TextButton(onClick={selectedProblem=null}) { Text("Close") }}
+        )
+    }
     if(showCodePreview) vm.pendingCode?.let { change ->
-        val preview = remember(change) { codeChangePreview(change.sourceSnapshot, change.code) }
+        val hunks = remember(change) { CodeEditHunks.diff(change.sourceSnapshot,change.code) }
+        var selectedHunks by remember(change) { mutableStateOf(hunks.indices.toSet()) }
         AlertDialog(
             onDismissRequest={showCodePreview=false},containerColor=Color(0xFF171A20),
             title={Text("Review edit · ${change.fileName}",fontSize=17.sp)},
-            text={Column(Modifier.heightIn(max=450.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                Text(preview.summary,color=accent,fontSize=12.sp)
-                Text("BEFORE",color=Color(0xFFFF8895),fontSize=10.sp,fontWeight=FontWeight.Bold)
-                Text(preview.before,color=Color(0xFFFFC0C7),fontFamily=FontFamily.Monospace,fontSize=12.sp,
-                    modifier=Modifier.fillMaxWidth().background(Color(0xFF292126)).padding(10.dp))
-                Text("AFTER",color=Color(0xFF81DDAF),fontSize=10.sp,fontWeight=FontWeight.Bold)
-                Text(preview.after,color=Color(0xFFB7F5D4),fontFamily=FontFamily.Monospace,fontSize=12.sp,
-                    modifier=Modifier.fillMaxWidth().background(Color(0xFF1E2B25)).padding(10.dp))
-                Text("Only changed lines shown. Your file stays untouched until you tap Apply.",color=Color.Gray,fontSize=10.sp)
+            text={Column(Modifier.heightIn(max=500.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                if(hunks.isEmpty()) {
+                    Text("Astro returned the same code. Nothing to apply.",color=Color.LightGray,fontSize=12.sp)
+                } else {
+                    Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                        Text("${selectedHunks.size}/${hunks.size} changes selected",color=accent,fontSize=12.sp,modifier=Modifier.weight(1f))
+                        TextButton(onClick={selectedHunks=if(selectedHunks.size==hunks.size) emptySet() else hunks.indices.toSet()}) {
+                            Text(if(selectedHunks.size==hunks.size) "None" else "All")
+                        }
+                    }
+                    hunks.forEachIndexed { index,hunk ->
+                        val selected=index in selectedHunks
+                        Surface(
+                            color=Color.White.copy(alpha=if(selected).06f else .025f),
+                            shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                            border=BorderStroke(1.dp,if(selected) accent.copy(alpha=.45f) else Color.White.copy(alpha=.10f)),
+                            modifier=Modifier.fillMaxWidth().clickable {
+                                selectedHunks=if(selected) selectedHunks-index else selectedHunks+index
+                            }
+                        ) {
+                            Column(Modifier.padding(10.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                                Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                    Checkbox(checked=selected,onCheckedChange={
+                                        selectedHunks=if(it) selectedHunks+index else selectedHunks-index
+                                    })
+                                    Text("Change ${index+1} · lines ${hunk.displayStart}-${hunk.displayEnd}",
+                                        color=Color.White,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                                }
+                                if(hunk.removed.isNotEmpty()) {
+                                    Text("BEFORE",color=Color(0xFFFF8895),fontSize=9.sp,fontWeight=FontWeight.Bold)
+                                    Text(hunk.removed.take(40).joinToString("\n"),color=Color(0xFFFFC0C7),
+                                        fontFamily=FontFamily.Monospace,fontSize=11.sp,
+                                        modifier=Modifier.fillMaxWidth().background(Color(0xFF292126)).padding(8.dp))
+                                }
+                                if(hunk.added.isNotEmpty()) {
+                                    Text("AFTER",color=Color(0xFF81DDAF),fontSize=9.sp,fontWeight=FontWeight.Bold)
+                                    Text(hunk.added.take(40).joinToString("\n"),color=Color(0xFFB7F5D4),
+                                        fontFamily=FontFamily.Monospace,fontSize=11.sp,
+                                        modifier=Modifier.fillMaxWidth().background(Color(0xFF1E2B25)).padding(8.dp))
+                                }
+                            }
+                        }
+                    }
+                    Text("Each checked block is applied independently. Unchecked blocks stay exactly as they are.",color=Color.Gray,fontSize=10.sp)
+                }
             }},
-            confirmButton={Button(onClick={vm.applyPendingCode();showCodePreview=false}) { Text("Apply edit") }},
+            confirmButton={
+                Button(
+                    enabled=hunks.isNotEmpty()&&selectedHunks.isNotEmpty(),
+                    onClick={vm.applyPendingCode(selectedHunks);showCodePreview=false}
+                ) { Text("Apply selected") }
+            },
             dismissButton={TextButton(onClick={showCodePreview=false}) { Text("Keep editing") }}
         )
     }
@@ -2103,6 +3250,25 @@ private fun codeChangePreview(original: String, proposed: String): CodeChangePre
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)){Text(title,color=Color(0xFFE6F5FF),fontSize=15.sp);Text(subtitle,color=Color.Gray,fontSize=11.sp)}
             Text("›",color=Color.Gray,fontSize=24.sp)
+        }
+    }
+}
+
+private fun ansiConsoleAnnotated(source:String, defaultColor:Color):AnnotatedString=buildAnnotatedString {
+    AnsiTextParser.parse(source).forEach { segment ->
+        val color=when(segment.color) {
+            AnsiColor.BLACK -> Color(0xFF55575E)
+            AnsiColor.RED -> Color(0xFFFF6B81)
+            AnsiColor.GREEN -> Color(0xFF7EE787)
+            AnsiColor.YELLOW -> Color(0xFFFFD866)
+            AnsiColor.BLUE -> Color(0xFF82AAFF)
+            AnsiColor.MAGENTA -> Color(0xFFC792EA)
+            AnsiColor.CYAN -> Color(0xFF89DDFF)
+            AnsiColor.WHITE -> Color(0xFFF2F2F2)
+            else -> defaultColor
+        }
+        withStyle(SpanStyle(color=color,fontWeight=if(segment.bold) FontWeight.Bold else FontWeight.Normal)) {
+            append(segment.text)
         }
     }
 }

@@ -7,6 +7,8 @@ import android.graphics.Canvas
 import android.graphics.RectF
 import android.os.Looper
 import android.view.MotionEvent
+import android.view.KeyEvent
+import android.view.inputmethod.EditorInfo
 import android.view.View
 import org.junit.Assert.*
 import org.junit.Before
@@ -62,6 +64,139 @@ class PythonEditorViewTest {
         assertEquals("v{alu}e", editor.text.toString())
         assertEquals(2, editor.selectionStart)
         assertEquals(5, editor.selectionEnd)
+    }
+    @Test fun codeMirrorBatchesRapidTypingAndCanFlushImmediately() {
+        val updates = mutableListOf<String>()
+        editor.onCodeChanged = updates::add
+        editor.text.append("r")
+        looper.idleFor(Duration.ofMillis(80))
+        editor.text.append("i")
+        looper.idleFor(Duration.ofMillis(119))
+        assertTrue(updates.isEmpty())
+        looper.idleFor(Duration.ofMillis(1))
+        assertEquals(listOf("vari"), updates)
+
+        editor.text.append("able")
+        editor.flushCodeChange()
+        assertEquals("variable", updates.last())
+        looper.idleFor(Duration.ofMillis(200))
+        assertEquals(2, updates.size)
+    }
+
+    @Test fun externalFileSwitchCancelsPendingOldTextSync() {
+        val updates = mutableListOf<String>()
+        editor.onCodeChanged = updates::add
+        editor.text.append(" old")
+        editor.setCodeIfDifferent("new file", revision = 1)
+        looper.idleFor(Duration.ofMillis(200))
+        assertEquals("new file", editor.text.toString())
+        assertTrue(updates.isEmpty())
+    }
+
+    @Test fun undoGroupsRapidCharacterTyping() {
+        editor.setCodeIfDifferent("", revision = 2)
+        editor.text.append("a")
+        editor.text.append("b")
+        editor.undoCode()
+        assertEquals("", editor.text.toString())
+    }
+
+    @Test fun typedOpeningPairPlacesCaretBetweenAndBackspaceRemovesEmptyPair() {
+        editor.setCodeIfDifferent("", revision = 3)
+        editor.text.insert(0, "(")
+        assertEquals("()", editor.text.toString())
+        assertEquals(1, editor.selectionStart)
+        editor.onKeyDown(KeyEvent.KEYCODE_DEL, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
+        assertEquals("", editor.text.toString())
+    }
+
+    @Test fun composingImeTextDoesNotInsertSmartPair() {
+        editor.setCodeIfDifferent("", revision = 9)
+        val connection = editor.onCreateInputConnection(EditorInfo())
+        assertTrue(connection.setComposingText("(", 1))
+        assertEquals("(", editor.text.toString())
+    }
+
+    @Test fun findReplaceAndGoToLineHandleUnicodeOffsets() {
+        editor.setCodeIfDifferent("🐍 value\nvalue", revision = 10)
+        editor.setSelection(0)
+        assertTrue(editor.findNext("value"))
+        assertEquals(3, editor.selectionStart)
+        assertTrue(editor.replaceSelection("value", "name"))
+        assertEquals("🐍 name\nvalue", editor.text.toString())
+        assertEquals(1, editor.replaceAllMatches("value", "item"))
+        editor.goToLine(2)
+        assertEquals("🐍 name\n".length, editor.selectionStart)
+    }
+
+    @Test fun hardwareShortcutsCallSaveAndRun() {
+        var saves = 0
+        var runs = 0
+        editor.onSaveRequested = { saves++ }
+        editor.onRunRequested = { runs++ }
+        editor.onKeyDown(KeyEvent.KEYCODE_S,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_S, 0, KeyEvent.META_CTRL_ON))
+        editor.onKeyDown(KeyEvent.KEYCODE_ENTER,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0, KeyEvent.META_CTRL_ON))
+        assertEquals(1, saves)
+        assertEquals(1, runs)
+    }
+
+    @Test fun hardwareUndoAndRedoUseEditorHistory() {
+        editor.setCodeIfDifferent("", revision = 11)
+        editor.text.append("abc")
+        editor.onKeyDown(KeyEvent.KEYCODE_Z,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_Z, 0, KeyEvent.META_CTRL_ON))
+        assertEquals("", editor.text.toString())
+        editor.onKeyDown(KeyEvent.KEYCODE_Z,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_Z, 0,
+                KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON))
+        assertEquals("abc", editor.text.toString())
+    }
+
+    @Test fun hardwareQuickOpenAndCommandPalette() {
+        var quickOpen = 0
+        var palette = 0
+        editor.onQuickOpenRequested = { quickOpen++ }
+        editor.onPaletteRequested = { palette++ }
+        editor.onKeyDown(KeyEvent.KEYCODE_P,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_P, 0, KeyEvent.META_CTRL_ON))
+        editor.onKeyDown(KeyEvent.KEYCODE_P,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_P, 0,
+                KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON))
+        assertEquals(1, quickOpen)
+        assertEquals(1, palette)
+    }
+
+    @Test fun typingExistingCloserSkipsDuplicate() {
+        editor.setCodeIfDifferent(")", revision = 4)
+        editor.setSelection(0)
+        editor.text.insert(0, ")")
+        assertEquals(")", editor.text.toString())
+        assertEquals(1, editor.selectionStart)
+    }
+
+    @Test fun enterAfterColonAddsConfiguredIndent() {
+        editor.setCodeIfDifferent("if ready:", revision = 5)
+        editor.setSelection(editor.text.length)
+        editor.text.insert(editor.selectionStart, "\n")
+        assertEquals("if ready:\n    ", editor.text.toString())
+        assertEquals(editor.text.length, editor.selectionStart)
+    }
+
+    @Test fun indentAndCommentSelectionPreserveCodeAndUndoAsSingleAction() {
+        editor.setCodeIfDifferent("one\ntwo", revision = 6)
+        editor.setSelection(0, editor.text.length)
+        assertTrue(editor.indentSelection())
+        assertEquals("    one\n    two", editor.text.toString())
+        editor.undoCode()
+        assertEquals("one\ntwo", editor.text.toString())
+
+        editor.setSelection(0, editor.text.length)
+        assertTrue(editor.toggleCommentSelection())
+        assertEquals("# one\n# two", editor.text.toString())
+        assertTrue(editor.toggleCommentSelection())
+        assertEquals("one\ntwo", editor.text.toString())
     }
     @Test fun closingToolbarKeySkipsExistingCloser() {
         editor.setText("()")

@@ -26,13 +26,15 @@ fun ConsoleKeyToolbar(
     externalText: String,
     outputLength: Int,
     outputScroll: ScrollState,
-    containerColor: Color = Color(0xFF050505)
+    containerColor: Color = Color(0xFF050505),
+    autoScroll: Boolean = true
 ) {
     var ctrl by remember { mutableStateOf(false) }
     var alt by remember { mutableStateOf(false) }
     var lastNonBlank by remember { mutableStateOf("") }
 
-    LaunchedEffect(outputLength) {
+    LaunchedEffect(outputLength, autoScroll) {
+        if (!autoScroll) return@LaunchedEffect
         withFrameNanos { }
         outputScroll.scrollTo(outputScroll.maxValue)
     }

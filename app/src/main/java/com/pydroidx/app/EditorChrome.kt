@@ -37,6 +37,7 @@ fun IdeGlyph(name: String, color: Color, modifier: Modifier = Modifier) {
             "Redo" -> { m(16f,5f);l(21f,10f);l(16f,15f);m(21f,10f);l(10f,10f);c(1f,10f,1f,21f,10f,21f) }
             "Close" -> { m(6f,6f);l(18f,18f);m(18f,6f);l(6f,18f) }
             "New file" -> { m(12f,4f);l(12f,20f);m(4f,12f);l(20f,12f) }
+            "Problems" -> { m(12f,3f);l(22f,20f);l(2f,20f);path.close();m(12f,9f);l(12f,14f);m(12f,17f);l(12.1f,17f) }
             else -> {
                 drawCircle(color, 7f*sx, style=Stroke(1.6f*sx))
                 drawCircle(color, 2.5f*sx, style=Stroke(1.6f*sx))

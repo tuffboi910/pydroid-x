@@ -23,6 +23,14 @@ internal class ConsoleOutputBuffer(
         if (truncated) "[Earlier output truncated]\n$content" else content.toString()
 
     @Synchronized
+    fun visibleTail(maxCharacters: Int = 32_000): String {
+        var start = (content.length - maxCharacters.coerceAtLeast(1)).coerceAtLeast(0)
+        if (start > 0 && start < content.length && Character.isLowSurrogate(content[start])) start--
+        val marker = if (truncated || start > 0) "[Earlier output retained for Copy]\n" else ""
+        return marker + content.substring(start)
+    }
+
+    @Synchronized
     fun clear() {
         content.clear()
         truncated = false

@@ -125,6 +125,7 @@ data class RuntimeIssue(
     val replaceFrom: String = "", val replaceTo: String = ""
 )
 data class SavedCode(val name: String, val modified: Long, val fileName: String)
+data class ProjectProblem(val fileName: String, val line: Int, val message: String, val fatal: Boolean, val lineText: String)
 data class PendingCodeChange(val code: String, val fileName: String, val sourceSnapshot: String)
 
 private fun issueLineNumber(source: String, offset: Int): Int =
@@ -188,6 +189,10 @@ class IdeViewModel : ViewModel() {
     var running by mutableStateOf(false)
     var codeDiagnostics by mutableStateOf<List<CodeDiagnostic>>(emptyList())
     var runtimeIssue by mutableStateOf<RuntimeIssue?>(null)
+    var projectProblems by mutableStateOf<List<ProjectProblem>>(emptyList())
+    var projectProblemsBusy by mutableStateOf(false)
+    var projectProblemsError by mutableStateOf<String?>(null)
+    private var projectProblemsToken = 0
     var projectSearchResults by mutableStateOf<List<ProjectSearchHit>>(emptyList())
     var projectSearchBusy by mutableStateOf(false)
     private var projectSearchToken = 0
@@ -1046,6 +1051,57 @@ class IdeViewModel : ViewModel() {
         }
     }
 
+    fun scanProjectProblems() {
+        if (running || !::projectDir.isInitialized) return
+        val directory=projectDir
+        val project=currentProjectName
+        val token=++projectProblemsToken
+        projectProblemsBusy=true
+        projectProblemsError=null
+        thread(name="PY4U-ProjectProblems") {
+            val scan=runCatching {
+                val runner=Python.getInstance().getModule("runner")
+                val results=ArrayList<ProjectProblem>()
+                val files=directory.listFiles()?.asSequence()
+                    ?.filter { it.isFile && it.extension.equals("py",true) && it.length()<=1_000_000L }
+                    ?.sortedBy { it.name.lowercase() }
+                    ?.take(100)
+                    ?.toList()
+                    .orEmpty()
+                for(file in files) {
+                    if(results.size>=250) break
+                    val source=readProjectText(file)
+                    val values=JSONArray(runner.callAttr("diagnose",source).toString())
+                    for(index in 0 until values.length()) {
+                        if(results.size>=250) break
+                        val issue=values.getJSONObject(index)
+                        val start=issue.getInt("start").coerceIn(0,source.length)
+                        results += ProjectProblem(
+                            fileName=file.name,
+                            line=issueLineNumber(source,start),
+                            message=issue.optString("message","Python problem"),
+                            fatal=issue.optBoolean("fatal",false),
+                            lineText=issueLineText(source,start).trim().take(180)
+                        )
+                    }
+                }
+                results
+            }
+            mainHandler.post {
+                if(token!=projectProblemsToken || !::projectDir.isInitialized ||
+                    projectDir!=directory || currentProjectName!=project) return@post
+                projectProblemsBusy=false
+                scan.onSuccess {
+                    projectProblems=it
+                    projectProblemsError=null
+                }.onFailure {
+                    projectProblems=emptyList()
+                    projectProblemsError=it.message ?: "Couldn’t scan project"
+                }
+            }
+        }
+    }
+
     fun searchProject(query: String) {
         if (!::projectDir.isInitialized) return
         val token=++projectSearchToken
@@ -1512,6 +1568,7 @@ private fun AchievementNotice(
     var showQuickOpen by remember { mutableStateOf(false) }
     var showProjectSearch by remember { mutableStateOf(false) }
     var projectSearchQuery by remember { mutableStateOf("") }
+    var showProjectProblems by remember { mutableStateOf(false) }
     var showConsoleSearch by remember { mutableStateOf(false) }
     var consoleSearchQuery by remember { mutableStateOf("") }
     var consoleSearchSnapshot by remember { mutableStateOf("") }
@@ -2621,7 +2678,7 @@ private fun AchievementNotice(
             OutlinedTextField(paletteQuery,{paletteQuery=it},label={Text("Search commands")},
                 singleLine=true,modifier=Modifier.fillMaxWidth())
             val commands = listOf(if(vm.running) "Stop program" else "Run Python file",
-                "Save file","Find in file","Find in project","Replace in file","Go to line","Open file",
+                "Save file","Find in file","Find in project","Project Problems","Replace in file","Go to line","Open file",
                 "Open Settings","Ask Astro")
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 commands.filter { it.contains(paletteQuery,true) }.forEach { command ->
@@ -2638,6 +2695,12 @@ private fun AchievementNotice(
                                 projectSearchQuery=""
                                 vm.searchProject("")
                                 showProjectSearch=true
+                            }
+                            "Project Problems" -> {
+                                editorView?.flushCodeChange()
+                                vm.save()
+                                vm.scanProjectProblems()
+                                showProjectProblems=true
                             }
                             "Replace in file" -> {showFind=true;showReplace=true;scope.launch{pager.animateScrollToPage(1)}}
                             "Go to line" -> showGoToLine=true
@@ -2691,6 +2754,60 @@ private fun AchievementNotice(
             }
         }},
         confirmButton={TextButton(onClick={showConsoleSearch=false}) { Text("Close") }}
+    )
+    if(showProjectProblems) AlertDialog(
+        onDismissRequest={showProjectProblems=false},containerColor=Color(0xFF171A20),
+        title={Text("Project Problems · ${vm.currentProjectName}")},
+        text={Column(Modifier.heightIn(max=500.dp)) {
+            Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                when {
+                    vm.projectProblemsBusy -> {
+                        CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp)
+                        Spacer(Modifier.width(9.dp))
+                        Text("Scanning Python files…",color=Color.LightGray,fontSize=12.sp)
+                    }
+                    vm.projectProblemsError!=null -> Text(vm.projectProblemsError.orEmpty(),color=Color(0xFFFF9AA3),fontSize=12.sp,modifier=Modifier.weight(1f))
+                    else -> Text("${vm.projectProblems.size} problem${if(vm.projectProblems.size==1) "" else "s"}",
+                        color=Color.LightGray,fontSize=12.sp,modifier=Modifier.weight(1f))
+                }
+                TextButton(enabled=!vm.running&&!vm.projectProblemsBusy,onClick=vm::scanProjectProblems) { Text("Rescan") }
+            }
+            Spacer(Modifier.height(6.dp))
+            when {
+                vm.projectProblemsBusy && vm.projectProblems.isEmpty() -> Unit
+                vm.projectProblems.isEmpty() && vm.projectProblemsError==null ->
+                    Text("No diagnostics found in this project.",color=Color.LightGray)
+                else -> Column(Modifier.verticalScroll(rememberScrollState())) {
+                    vm.projectProblems.forEach { problem ->
+                        TextButton(onClick={
+                            vm.openProjectFile(problem.fileName)
+                            showProjectProblems=false
+                            scope.launch {
+                                pager.animateScrollToPage(1)
+                                delay(90)
+                                editorView?.goToLine(problem.line)
+                            }
+                        },modifier=Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(
+                                    "${problem.fileName}:${problem.line} · ${problem.message}",
+                                    color=if(problem.fatal) Color(0xFFFF9AA3) else Color(0xFFFFC88A),
+                                    fontSize=12.sp,maxLines=2
+                                )
+                                if(problem.lineText.isNotBlank()) Text(
+                                    problem.lineText,
+                                    color=Color.LightGray,
+                                    fontFamily=FontFamily.Monospace,
+                                    fontSize=10.sp,
+                                    maxLines=1
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showProjectProblems=false}) { Text("Close") }}
     )
     if(showProjectSearch) AlertDialog(
         onDismissRequest={showProjectSearch=false},containerColor=Color(0xFF171A20),

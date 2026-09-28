@@ -179,6 +179,7 @@ class IdeViewModel : ViewModel() {
     var currentFileName by mutableStateOf("main.py")
     val savedCodes = mutableStateListOf<SavedCode>()
     val deletedFiles = mutableStateListOf<TrashedProjectFile>()
+    val openFileTabs = mutableStateListOf<String>()
     val projectNames = mutableStateListOf<String>()
     var currentProjectName by mutableStateOf("default")
     var editorRevision by mutableIntStateOf(0)
@@ -391,6 +392,7 @@ class IdeViewModel : ViewModel() {
         settings.edit().putString("current_file",currentFileName).putString("current_project",currentProjectName).apply()
         refreshProjects()
         refreshSaved()
+        restoreOpenTabs()
         editorRevision++
         thread {
             val version = runCatching { Python.getInstance().getModule("runner").callAttr("version").toString() }
@@ -683,6 +685,55 @@ class IdeViewModel : ViewModel() {
         deletedFiles.addAll(ProjectFileTrash.list(projectDir))
     }
 
+    private fun openTabsKey(project: String = currentProjectName): String = "open_tabs::$project"
+
+    private fun persistOpenTabs() {
+        if (!::settings.isInitialized) return
+        settings.edit().putString(openTabsKey(),OpenFileTabsCodec.encode(openFileTabs)).apply()
+    }
+
+    private fun restoreOpenTabs() {
+        if (!::settings.isInitialized || !::projectDir.isInitialized) return
+        val existing=projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }
+            ?.map { it.name }?.toSet().orEmpty()
+        val restored=OpenFileTabsCodec.decode(settings.getString(openTabsKey(),null))
+            .filter { it in existing }.takeLast(12).toMutableList()
+        if(currentFileName in existing) {
+            restored.remove(currentFileName)
+            restored.add(currentFileName)
+        }
+        openFileTabs.clear()
+        openFileTabs.addAll(restored)
+        persistOpenTabs()
+    }
+
+    private fun touchOpenTab(fileName: String) {
+        if (fileName !in openFileTabs) openFileTabs.add(fileName)
+        while(openFileTabs.size>12) {
+            val removable=openFileTabs.indexOfFirst { it!=currentFileName }
+            if(removable<0) break
+            openFileTabs.removeAt(removable)
+        }
+        persistOpenTabs()
+    }
+
+    fun closeFileTab(fileName: String) {
+        if (running || fileName !in openFileTabs) return
+        if(fileName!=currentFileName) {
+            openFileTabs.remove(fileName)
+            persistOpenTabs()
+            return
+        }
+        if(openFileTabs.size<=1) return
+        save()
+        val oldIndex=openFileTabs.indexOf(fileName)
+        openFileTabs.remove(fileName)
+        val next=openFileTabs.getOrNull(oldIndex.coerceAtMost(openFileTabs.lastIndex))
+            ?: openFileTabs.lastOrNull()
+        persistOpenTabs()
+        if(next!=null) openProjectFile(next)
+    }
+
     fun makeNewProject(template: String = "Blank") {
         if (running || !::projectsRoot.isInitialized) return
         save()
@@ -724,6 +775,7 @@ class IdeViewModel : ViewModel() {
         settings.edit().putString("current_project",currentProjectName).putString("current_file",currentFileName).apply()
         refreshProjects()
         refreshSaved()
+        restoreOpenTabs()
         editorRevision++
     }
 
@@ -786,6 +838,7 @@ class IdeViewModel : ViewModel() {
         shareCode=false
         settings.edit().putString("current_file",currentFileName).apply()
         refreshSaved()
+        touchOpenTab(currentFileName)
         editorRevision++
     }
 
@@ -852,6 +905,7 @@ class IdeViewModel : ViewModel() {
         pendingCode=null
         shareCode=false
         settings.edit().putString("current_file",currentFileName).apply()
+        touchOpenTab(currentFileName)
         editorRevision++
         refreshSaved()
     }
@@ -872,6 +926,11 @@ class IdeViewModel : ViewModel() {
             mainHandler.post {
                 result.onSuccess {
                     migrateEditorFileState(source.name,target.name)
+                    val tabIndex=openFileTabs.indexOf(source.name)
+                    if(tabIndex>=0) {
+                        openFileTabs[tabIndex]=target.name
+                        persistOpenTabs()
+                    }
                     if (wasCurrent) {
                         currentFileName=target.name
                         settings.edit().putString("current_file",currentFileName).apply()
@@ -907,11 +966,18 @@ class IdeViewModel : ViewModel() {
             result.onFailure { error ->
                 mainHandler.post { saveError=error.message ?: "Couldn’t delete ${source.name}" }
             }.onSuccess {
+                mainHandler.post {
+                    openFileTabs.remove(source.name)
+                    persistOpenTabs()
+                }
                 if (!wasCurrent) {
                     mainHandler.post { saveError=null;refreshSaved() }
                     return@onSuccess
                 }
-                val replacement=projectDir.listFiles()?.filter {
+                val preferredTab=openFileTabs.firstOrNull { tabName ->
+                    File(projectDir,tabName).isFile
+                }
+                val replacement=preferredTab?.let { File(projectDir,it) } ?: projectDir.listFiles()?.filter {
                     it.isFile && it.extension.equals("py",true)
                 }?.maxByOrNull { it.lastModified() }
                 if (replacement != null) {
@@ -919,6 +985,7 @@ class IdeViewModel : ViewModel() {
                     mainHandler.post {
                         loaded.onSuccess { text ->
                             currentFileName=replacement.name
+                            touchOpenTab(currentFileName)
                             code=text
                             codeDiagnostics=emptyList()
                             pendingCode=null
@@ -934,6 +1001,7 @@ class IdeViewModel : ViewModel() {
                         mainHandler.post {
                             created.onSuccess {
                                 currentFileName=fallback.name
+                                touchOpenTab(currentFileName)
                                 code=""
                                 codeDiagnostics=emptyList()
                                 pendingCode=null
@@ -1761,6 +1829,50 @@ private fun AchievementNotice(
                                 contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
                             ){IdeGlyph("Close",Color(0xFF8C8C94))}
                         }
+                        }
+                        if(vm.openFileTabs.isNotEmpty()) {
+                            Row(
+                                Modifier.fillMaxWidth().heightIn(min=34.dp,max=40.dp)
+                                    .horizontalScroll(rememberScrollState())
+                                    .background(safeColor(vm.tabBarHex,0xFF181F29))
+                                    .padding(horizontal=6.dp,vertical=3.dp),
+                                horizontalArrangement=Arrangement.spacedBy(5.dp),
+                                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                            ) {
+                                vm.openFileTabs.forEach { fileName ->
+                                    val active=fileName==vm.currentFileName
+                                    Surface(
+                                        color=if(active) Color.White.copy(alpha=.14f) else Color.White.copy(alpha=.045f),
+                                        shape=androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                                        border=BorderStroke(1.dp,Color.White.copy(alpha=if(active).18f else .08f))
+                                    ) {
+                                        Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                            Text(
+                                                fileName,
+                                                color=if(active) Color.White else Color(0xFFB0B2BA),
+                                                fontSize=11.sp,
+                                                maxLines=1,
+                                                overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                modifier=Modifier.widthIn(max=130.dp)
+                                                    .clickable(enabled=!vm.running) {
+                                                        editorView?.flushCodeChange()
+                                                        vm.openProjectFile(fileName)
+                                                    }
+                                                    .padding(start=9.dp,end=5.dp,top=6.dp,bottom=6.dp)
+                                            )
+                                            if(vm.openFileTabs.size>1) {
+                                                Text(
+                                                    "×",
+                                                    color=Color(0xFF8C8C94),
+                                                    fontSize=16.sp,
+                                                    modifier=Modifier.clickable(enabled=!vm.running) { vm.closeFileTab(fileName) }
+                                                        .padding(horizontal=7.dp,vertical=4.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                         if (showFind) {
                             Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),

@@ -1194,6 +1194,10 @@ private fun AchievementNotice(
     var showGoToLine by remember { mutableStateOf(false) }
     var lineDraft by remember { mutableStateOf("") }
     var showHistory by remember { mutableStateOf(false) }
+    var showPalette by remember { mutableStateOf(false) }
+    var paletteQuery by remember { mutableStateOf("") }
+    var showQuickOpen by remember { mutableStateOf(false) }
+    var quickOpenQuery by remember { mutableStateOf("") }
     var chosenVersion by remember { mutableStateOf<File?>(null) }
     var historyPreview by remember { mutableStateOf("") }
     LaunchedEffect(chosenVersion) {
@@ -1511,10 +1515,6 @@ private fun AchievementNotice(
                                 onClick={scope.launch{pager.animateScrollToPage(0)}},
                                 contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
                             ){IdeGlyph("Close",Color(0xFF8C8C94))}
-                            TextButton(
-                                onClick={editorView?.flushCodeChange();vm.makeNewCode()},
-                                contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
-                            ){IdeGlyph("New file",Color(0xFFBFC0C7))}
                         }
                         }
                         if (showFind) {
@@ -1552,6 +1552,8 @@ private fun AchievementNotice(
                                 view.onFindRequested={ replace -> showFind=true;showReplace=replace }
                                 view.onSaveRequested=vm::save
                                 view.onRunRequested={if (!vm.running) { vm.run();scope.launch{pager.animateScrollToPage(2)} }}
+                                view.onPaletteRequested={showPalette=true}
+                                view.onQuickOpenRequested={showQuickOpen=true}
                                 view.onCodeChanged=vm::updateCode
                                 view.onDiagnosticTap={selectedProblem=it}
                                 view.requestSmartCompletion=vm::requestCompletion
@@ -1562,6 +1564,8 @@ private fun AchievementNotice(
                                 view.onFindRequested={ replace -> showFind=true;showReplace=replace }
                                 view.onSaveRequested=vm::save
                                 view.onRunRequested={if (!vm.running) { vm.run();scope.launch{pager.animateScrollToPage(2)} }}
+                                view.onPaletteRequested={showPalette=true}
+                                view.onQuickOpenRequested={showQuickOpen=true}
                                 view.onDiagnosticTap={selectedProblem=it}
                                 view.setBackgroundColor(bg.toArgb())
                                 view.setCodeIfDifferent(vm.code,revision)
@@ -1587,10 +1591,11 @@ private fun AchievementNotice(
                                     verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                                 ){
                                     val matchingPairs = mapOf("(" to ")", "[" to "]", "{" to "}", "\"" to "\"", "'" to "'")
-                                    listOf("Tab","(",")","[","]","{","}","\"","'",":","=","#").forEach{key->
+                                    listOf("⌘","Tab","(",")","[","]","{","}","\"","'",":","=","#").forEach{key->
                                         OutlinedButton(
                                             onClick={
                                                 when {
+                                                    key=="⌘" -> showPalette=true
                                                     key=="Tab"&&editorView?.acceptGhostSuggestion()==true -> Unit
                                                     key=="Tab"&&editorView?.indentSelection()==true -> Unit
                                                     key=="Tab" -> editorView?.insertAtCursor(" ".repeat(vm.tabWidth))
@@ -2142,6 +2147,56 @@ private fun AchievementNotice(
         RunBurst(runBurst,vm.currentFileName,motionAllowed,runOrigin)
         }
     }
+    if(showPalette) AlertDialog(
+        onDismissRequest={showPalette=false},containerColor=Color(0xFF171A20),
+        title={Text("Commands")},
+        text={Column(Modifier.heightIn(max=430.dp)) {
+            OutlinedTextField(paletteQuery,{paletteQuery=it},label={Text("Search commands")},
+                singleLine=true,modifier=Modifier.fillMaxWidth())
+            val commands = listOf(if(vm.running) "Stop program" else "Run Python file",
+                "Save file","Find in file","Replace in file","Go to line","Open file",
+                "Open Settings","Ask Astro")
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                commands.filter { it.contains(paletteQuery,true) }.forEach { command ->
+                    TextButton(onClick={
+                        showPalette=false
+                        when(command) {
+                            "Stop program" -> vm.stop()
+                            "Run Python file" -> {editorView?.flushCodeChange();vm.run();scope.launch{pager.animateScrollToPage(2)}}
+                            "Save file" -> {editorView?.flushCodeChange();vm.save()}
+                            "Find in file" -> {showFind=true;scope.launch{pager.animateScrollToPage(1)}}
+                            "Replace in file" -> {showFind=true;showReplace=true;scope.launch{pager.animateScrollToPage(1)}}
+                            "Go to line" -> showGoToLine=true
+                            "Open file" -> showQuickOpen=true
+                            "Open Settings" -> scope.launch{pager.animateScrollToPage(4)}
+                            "Ask Astro" -> scope.launch{pager.animateScrollToPage(3)}
+                        }
+                    },modifier=Modifier.fillMaxWidth()) { Text(command) }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showPalette=false}) { Text("Close") }}
+    )
+    if(showQuickOpen) AlertDialog(
+        onDismissRequest={showQuickOpen=false},containerColor=Color(0xFF171A20),
+        title={Text("Open Python file")},
+        text={Column(Modifier.heightIn(max=430.dp)) {
+            OutlinedTextField(quickOpenQuery,{quickOpenQuery=it},label={Text("File name")},
+                singleLine=true,modifier=Modifier.fillMaxWidth())
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if(vm.running) Text("Stop the program before switching files.",color=Color.LightGray)
+                vm.savedCodes.filter { it.name.contains(quickOpenQuery,true) }.forEach { saved ->
+                    TextButton(enabled=!vm.running,onClick={
+                        editorView?.flushCodeChange()
+                        vm.openSaved(saved.name)
+                        showQuickOpen=false
+                        scope.launch{pager.animateScrollToPage(1)}
+                    },modifier=Modifier.fillMaxWidth()) { Text(saved.name + ".py") }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showQuickOpen=false}) { Text("Close") }}
+    )
     if(showHistory) AlertDialog(
         onDismissRequest={showHistory=false},containerColor=Color(0xFF171A20),
         title={Text("History · ${vm.currentFileName}")},

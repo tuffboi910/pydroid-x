@@ -29,6 +29,8 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     var onFindRequested: ((Boolean) -> Unit)? = null
     var onSaveRequested: (() -> Unit)? = null
     var onRunRequested: (() -> Unit)? = null
+    var onPaletteRequested: (() -> Unit)? = null
+    var onQuickOpenRequested: (() -> Unit)? = null
     var onDiagnosticTap: ((CodeDiagnostic) -> Unit)? = null
     var requestSmartCompletion: ((String, Int, (CompletionResult) -> Unit) -> Unit)? = null
     var requestCodeDiagnostics: ((String, (List<CodeDiagnostic>) -> Unit) -> Unit)? = null
@@ -702,6 +704,10 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (event?.isCtrlPressed == true && keyCode == KeyEvent.KEYCODE_P) {
+            if (event.isShiftPressed) onPaletteRequested?.invoke() else onQuickOpenRequested?.invoke()
+            return true
+        }
         if (event?.isCtrlPressed == true && keyCode == KeyEvent.KEYCODE_Z) {
             if (event.isShiftPressed) redoCode() else undoCode()
             return true

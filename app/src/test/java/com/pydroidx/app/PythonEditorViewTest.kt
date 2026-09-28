@@ -154,6 +154,20 @@ class PythonEditorViewTest {
         assertEquals("abc", editor.text.toString())
     }
 
+    @Test fun hardwareQuickOpenAndCommandPalette() {
+        var quickOpen = 0
+        var palette = 0
+        editor.onQuickOpenRequested = { quickOpen++ }
+        editor.onPaletteRequested = { palette++ }
+        editor.onKeyDown(KeyEvent.KEYCODE_P,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_P, 0, KeyEvent.META_CTRL_ON))
+        editor.onKeyDown(KeyEvent.KEYCODE_P,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_P, 0,
+                KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON))
+        assertEquals(1, quickOpen)
+        assertEquals(1, palette)
+    }
+
     @Test fun typingExistingCloserSkipsDuplicate() {
         editor.setCodeIfDifferent(")", revision = 4)
         editor.setSelection(0)

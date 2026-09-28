@@ -18,6 +18,7 @@ import android.text.TextWatcher
 import android.text.style.ForegroundColorSpan
 import android.os.Handler
 import android.os.Looper
+import android.util.AtomicFile
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -289,6 +290,9 @@ class IdeViewModel : ViewModel() {
     private lateinit var aiKeys: SecureAiKeyStore
     private lateinit var settings: android.content.SharedPreferences
 
+    private fun readProjectText(file: File): String = AtomicFile(file).openRead()
+        .bufferedReader(Charsets.UTF_8).use { it.readText() }
+
     fun initialize(context: Context) {
         appContext = context.applicationContext
         aiKeys = SecureAiKeyStore(context.applicationContext)
@@ -371,9 +375,9 @@ class IdeViewModel : ViewModel() {
         currentFileName = settings.getString("current_file","main.py") ?: "main.py"
         var current = File(projectDir,currentFileName)
         if (!current.exists()) current = existing.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
-        if (!current.exists()) current.writeText(code)
+        if (!current.exists() && !File(current.path + ".bak").exists()) current.writeText(code)
         currentFileName = current.name
-        code = current.readText()
+        code = readProjectText(current)
         if (code == legacyStarter) {
             code = "print(\"Hello world!\")\n"
             current.writeText(code)
@@ -702,9 +706,9 @@ class IdeViewModel : ViewModel() {
         currentProjectName = safeName
         val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
         var current = files.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
-        if (!current.exists()) current.writeText("print(\"Hello world!\")\n")
+        if (!current.exists() && !File(current.path + ".bak").exists()) current.writeText("print(\"Hello world!\")\n")
         currentFileName = current.name
-        code = current.readText()
+        code = readProjectText(current)
         codeDiagnostics = emptyList()
         pendingCode = null
         shareCode = false
@@ -784,7 +788,7 @@ class IdeViewModel : ViewModel() {
             it.isFile && it.extension.equals("py",true) && it.nameWithoutExtension.replace('_',' ')==displayName
         } ?: return
         currentFileName=file.name
-        code=file.readText()
+        code=readProjectText(file)
         codeDiagnostics=emptyList()
         pendingCode=null
         shareCode=false
@@ -877,7 +881,7 @@ class IdeViewModel : ViewModel() {
         if (version !in ProjectFileHistory.versions(target)) return
         val currentSnapshot = code
         viewModelScope.launch {
-            val recovered = withContext(Dispatchers.IO) { runCatching { version.readText() } }
+            val recovered = withContext(Dispatchers.IO) { runCatching { readProjectText(version) } }
             recovered.onSuccess { snapshot ->
                 if (projectDir == target.parentFile && currentFileName == target.name && code == currentSnapshot) {
                     ProjectFileWriter.checkpoint(target, currentSnapshot) { result ->
@@ -954,7 +958,7 @@ class IdeViewModel : ViewModel() {
         if (file.name != currentFileName) {
             save()
             currentFileName = file.name
-            code = file.readText()
+            code = readProjectText(file)
             codeDiagnostics = emptyList()
             settings.edit().putString("current_file", currentFileName).apply()
             editorRevision++
@@ -1226,7 +1230,7 @@ private fun AchievementNotice(
     var historyPreview by remember { mutableStateOf("") }
     LaunchedEffect(chosenVersion) {
         historyPreview = chosenVersion?.let { version ->
-            withContext(Dispatchers.IO) { runCatching { version.readText().take(3000) }.getOrDefault("Couldn’t read snapshot") }
+            withContext(Dispatchers.IO) { runCatching { readProjectText(version).take(3000) }.getOrDefault("Couldn’t read snapshot") }
         }.orEmpty()
     }
     var showAiSettings by remember { mutableStateOf(false) }

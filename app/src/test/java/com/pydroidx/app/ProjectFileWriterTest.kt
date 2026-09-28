@@ -1,6 +1,7 @@
 package com.pydroidx.app
 
 import android.app.Application
+import android.util.AtomicFile
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
@@ -64,5 +65,13 @@ class ProjectFileWriterTest {
         ProjectFileWriter.checkpoint(file, "unsaved 🐍") { finished.countDown() }
         assertTrue(finished.await(5, TimeUnit.SECONDS))
         assertEquals("unsaved 🐍", ProjectFileHistory.versions(file).first().readText())
+    }
+
+    @Test fun interruptedAtomicWriteKeepsPreviousCodeReadable() {
+        val file = File(Files.createTempDirectory("py4u-interrupted-").toFile(), "main.py")
+        file.writeText("print('safe')")
+        val atomic = AtomicFile(file)
+        atomic.startWrite().use { it.write("partial".toByteArray()) }
+        assertEquals("print('safe')", atomic.openRead().bufferedReader().use { it.readText() })
     }
 }

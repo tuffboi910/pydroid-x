@@ -16,12 +16,12 @@ internal object ProjectFileWriter {
         executor.execute {
             val result = runCatching {
                 val bytes = content.toByteArray(StandardCharsets.UTF_8)
+                val atomic = AtomicFile(file)
                 if (file.isFile && file.length() <= 1_000_000L) {
-                    val oldBytes = file.readBytes()
+                    val oldBytes = atomic.openRead().use { it.readBytes() }
                     if (oldBytes.contentEquals(bytes)) return@runCatching
                     ProjectFileHistory.checkpoint(file, oldBytes)
                 }
-                val atomic = AtomicFile(file)
                 val stream = atomic.startWrite()
                 try {
                     stream.write(bytes)

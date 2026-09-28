@@ -671,13 +671,21 @@ class IdeViewModel : ViewModel() {
         savedCodes.addAll(files.map { SavedCode(it.nameWithoutExtension.replace('_',' '),it.lastModified()) })
     }
 
-    fun makeNewProject() {
+    fun makeNewProject(template: String = "Blank") {
         if (running || !::projectsRoot.isInitialized) return
         save()
         autosaveJob?.cancel()
         namingJob?.cancel()
         val name = ProjectWorkspace.nextName(projectNames, "Project")
-        File(projectsRoot,name).mkdirs()
+        val directory = File(projectsRoot,name)
+        if (!directory.isDirectory && !directory.mkdirs()) {
+            saveError = "Couldn’t create project $name"
+            return
+        }
+        if (runCatching { File(directory,"main.py").writeText(ProjectWorkspace.templateSource(template)) }.isFailure) {
+            saveError = "Couldn’t create starter file in $name"
+            return
+        }
         switchProject(name)
     }
 
@@ -1212,6 +1220,7 @@ private fun AchievementNotice(
     var showPalette by remember { mutableStateOf(false) }
     var paletteQuery by remember { mutableStateOf("") }
     var showQuickOpen by remember { mutableStateOf(false) }
+    var showProjectTemplates by remember { mutableStateOf(false) }
     var quickOpenQuery by remember { mutableStateOf("") }
     var chosenVersion by remember { mutableStateOf<File?>(null) }
     var historyPreview by remember { mutableStateOf("") }
@@ -1450,7 +1459,7 @@ private fun AchievementNotice(
                                 )
                             }
                             OutlinedButton(
-                                onClick={vm.makeNewProject()},
+                                onClick={showProjectTemplates=true},
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
                             ){Text("＋ Project")}
                         }
@@ -2172,6 +2181,17 @@ private fun AchievementNotice(
         RunBurst(runBurst,vm.currentFileName,motionAllowed,runOrigin)
         }
     }
+    if(showProjectTemplates) AlertDialog(
+        onDismissRequest={showProjectTemplates=false},containerColor=Color(0xFF171A20),
+        title={Text("New project")},
+        text={Column(Modifier.heightIn(max=440.dp).verticalScroll(rememberScrollState())) {
+            ProjectWorkspace.templates.forEach { template ->
+                TextButton(onClick={vm.makeNewProject(template);showProjectTemplates=false},
+                    modifier=Modifier.fillMaxWidth()) { Text(template) }
+            }
+        }},
+        confirmButton={TextButton(onClick={showProjectTemplates=false}) { Text("Cancel") }}
+    )
     if(showPalette) AlertDialog(
         onDismissRequest={showPalette=false},containerColor=Color(0xFF171A20),
         title={Text("Commands")},

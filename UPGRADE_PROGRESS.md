@@ -52,6 +52,7 @@ The older `b119229` checkout is untouched. This checklist tracks reconstructed w
 - Syntax tokenization already ran on a worker, but applying every token span still happened on the UI thread. The next checkpoint limits span application to a prefetched viewport and refreshes it on scroll/resize. Actual frame-time profiling remains a physical-device task.
 - GitHub Actions runs 208, 209, and 210 passed Android unit tests and APK builds. Command palette and Quick Open are implemented with actual actions and hardware shortcuts; Android CI is pending for this checkpoint.
 - Astro gets an editor selection handoff. With explicit code sharing enabled, it receives bounded project names, current diagnostics, and recent Console output. Provider behavior still needs configured-credential and device verification.
+- Project creation now offers seven concrete starter choices. Five nontrivial starters were parsed and run with host Python using deterministic stdin where needed. Android project-picker UI awaits CI/device verification.
 
 ## Current files changed
 

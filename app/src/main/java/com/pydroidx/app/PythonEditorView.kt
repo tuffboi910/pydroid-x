@@ -31,6 +31,7 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     var onRunRequested: (() -> Unit)? = null
     var onPaletteRequested: (() -> Unit)? = null
     var onQuickOpenRequested: (() -> Unit)? = null
+    var onFileStateChanged: ((EditorFileState) -> Unit)? = null
     var onDiagnosticTap: ((CodeDiagnostic) -> Unit)? = null
     var requestSmartCompletion: ((String, Int, (CompletionResult) -> Unit) -> Unit)? = null
     var requestCodeDiagnostics: ((String, (List<CodeDiagnostic>) -> Unit) -> Unit)? = null
@@ -59,6 +60,8 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     private val completionItems get() = completionSession.items
     private var selectedCompletion = 0
     private var readyForSelectionChanges = false
+    private var restoringFileState = false
+    private var restoredFileStateRevision = Int.MIN_VALUE
     private var popupOwnsGesture = false
     private var popupTouchMoved = false
     private val completionPopupBounds = RectF()
@@ -185,13 +188,43 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         if (autocompleteEnabled && hasFocus()) postDelayed(completionRunnable, CompletionSession.DELAY_MS)
     }
 
+    private fun notifyFileStateChanged() {
+        if (!readyForSelectionChanges || restoringFileState) return
+        onFileStateChanged?.invoke(
+            EditorFileState(
+                selectionStart=selectionStart.coerceAtLeast(0),
+                selectionEnd=selectionEnd.coerceAtLeast(0),
+                scrollX=scrollX.coerceAtLeast(0),
+                scrollY=scrollY.coerceAtLeast(0)
+            )
+        )
+    }
+
     override fun onSelectionChanged(start: Int, end: Int) {
         super.onSelectionChanged(start, end)
         // TextView invokes this during construction, before Kotlin fields exist.
-        if (readyForSelectionChanges && !applyingHighlight && !applyingHistory) scheduleCompletion()
+        if (readyForSelectionChanges && !applyingHighlight && !applyingHistory) {
+            scheduleCompletion()
+            notifyFileStateChanged()
+        }
+    }
+
+    fun restoreFileStateOnce(state: EditorFileState, revision: Int) {
+        if (restoredFileStateRevision==revision) return
+        restoredFileStateRevision=revision
+        restoringFileState=true
+        val length=text?.length ?: 0
+        val start=state.selectionStart.coerceIn(0,length)
+        val end=state.selectionEnd.coerceIn(0,length)
+        setSelection(start,end)
+        post {
+            scrollTo(state.scrollX.coerceAtLeast(0),state.scrollY.coerceAtLeast(0))
+            restoringFileState=false
+        }
     }
 
     override fun onDetachedFromWindow() {
+        notifyFileStateChanged()
         flushCodeChange()
         clearCompletion()
         removeCallbacks(highlightRunnable)
@@ -995,6 +1028,7 @@ internal class PythonEditorView(context: Context) : EditText(context) {
 
     override fun onScrollChanged(horizontal: Int, vertical: Int, oldHorizontal: Int, oldVertical: Int) {
         super.onScrollChanged(horizontal, vertical, oldHorizontal, oldVertical)
+        notifyFileStateChanged()
         if (cachedSyntaxRanges != null) {
             val (first, last) = syntaxWindow()
             if (first < syntaxWindowStart || last > syntaxWindowEnd) {

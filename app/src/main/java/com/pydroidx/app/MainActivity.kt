@@ -282,6 +282,8 @@ class IdeViewModel : ViewModel() {
     @Volatile private var stopRequested = false
     private var autosaveJob: Job? = null
     private var namingJob: Job? = null
+    private val editorFileStates = mutableMapOf<String, EditorFileState>()
+    private val editorStateJobs = mutableMapOf<String, Job>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val outputBuffer = ConsoleOutputBuffer()
     private val outputFlushScheduled = AtomicBoolean(false)
@@ -793,6 +795,45 @@ class IdeViewModel : ViewModel() {
         return file.takeIf { it.isFile && it.parentFile==projectDir && it.extension.equals("py",true) }
     }
 
+    private fun editorStateKey(project: String = currentProjectName, file: String = currentFileName): String =
+        "editor_state::$project::$file"
+
+    fun editorFileState(): EditorFileState {
+        if (!::settings.isInitialized) return EditorFileState()
+        val key=editorStateKey()
+        return editorFileStates[key]
+            ?: EditorFileStateCodec.decode(settings.getString(key,null))
+                ?.also { editorFileStates[key]=it }
+            ?: EditorFileState()
+    }
+
+    fun rememberEditorFileState(state: EditorFileState) {
+        if (!::settings.isInitialized) return
+        val key=editorStateKey()
+        editorFileStates[key]=state
+        editorStateJobs.remove(key)?.cancel()
+        editorStateJobs[key]=viewModelScope.launch {
+            delay(350)
+            settings.edit().putString(key,EditorFileStateCodec.encode(state)).apply()
+            editorStateJobs.remove(key)
+        }
+    }
+
+    private fun migrateEditorFileState(oldName: String, newName: String) {
+        if (!::settings.isInitialized || oldName==newName) return
+        val oldKey=editorStateKey(file=oldName)
+        val newKey=editorStateKey(file=newName)
+        val state=editorFileStates.remove(oldKey) ?: EditorFileStateCodec.decode(settings.getString(oldKey,null))
+        editorStateJobs.remove(oldKey)?.cancel()
+        editorStateJobs.remove(newKey)?.cancel()
+        val edit=settings.edit().remove(oldKey)
+        if(state!=null) {
+            editorFileStates[newKey]=state
+            edit.putString(newKey,EditorFileStateCodec.encode(state))
+        }
+        edit.apply()
+    }
+
     fun openSaved(displayName: String) {
         if (running || !::projectDir.isInitialized) return
         val file=projectDir.listFiles()?.firstOrNull {
@@ -830,6 +871,7 @@ class IdeViewModel : ViewModel() {
         ProjectFileWriter.rename(source,target) { result ->
             mainHandler.post {
                 result.onSuccess {
+                    migrateEditorFileState(source.name,target.name)
                     if (wasCurrent) {
                         currentFileName=target.name
                         settings.edit().putString("current_file",currentFileName).apply()
@@ -1201,6 +1243,14 @@ class IdeViewModel : ViewModel() {
     override fun onCleared() {
         completionTask?.cancel(true)
         completionWorker.shutdownNow()
+        editorStateJobs.values.forEach { it.cancel() }
+        if (::settings.isInitialized && editorFileStates.isNotEmpty()) {
+            val edit=settings.edit()
+            editorFileStates.forEach { (key,state) ->
+                edit.putString(key,EditorFileStateCodec.encode(state))
+            }
+            edit.apply()
+        }
         stopRequested = true
         stdin.offer(stopInputSignal)
         super.onCleared()
@@ -1750,10 +1800,12 @@ private fun AchievementNotice(
                                 view.onPaletteRequested={showPalette=true}
                                 view.onQuickOpenRequested={showQuickOpen=true}
                                 view.onCodeChanged=vm::updateCode
+                                view.onFileStateChanged=vm::rememberEditorFileState
                                 view.onDiagnosticTap={selectedProblem=it}
                                 view.requestSmartCompletion=vm::requestCompletion
                                 view.requestCodeDiagnostics=vm::requestDiagnostics
                                 view.setCodeIfDifferent(vm.code,revision)
+                                view.restoreFileStateOnce(vm.editorFileState(),revision)
                             }},
                             update={view->
                                 view.onFindRequested={ replace -> showFind=true;showReplace=replace }
@@ -1761,9 +1813,11 @@ private fun AchievementNotice(
                                 view.onRunRequested={if (!vm.running) { vm.run();scope.launch{pager.animateScrollToPage(2)} }}
                                 view.onPaletteRequested={showPalette=true}
                                 view.onQuickOpenRequested={showQuickOpen=true}
+                                view.onFileStateChanged=vm::rememberEditorFileState
                                 view.onDiagnosticTap={selectedProblem=it}
                                 view.setBackgroundColor(bg.toArgb())
                                 view.setCodeIfDifferent(vm.code,revision)
+                                view.restoreFileStateOnce(vm.editorFileState(),revision)
                                 view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting,vm.fontName,
                                     vm.lineSpacing,vm.editorPadding,vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness,
                                     vm.lineNumbers,vm.highlightCurrentLine,vm.customFontPath,

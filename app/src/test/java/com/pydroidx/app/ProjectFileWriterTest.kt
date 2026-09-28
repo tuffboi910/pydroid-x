@@ -30,4 +30,21 @@ class ProjectFileWriterTest {
         assertTrue(results.all { it.isSuccess })
         assertEquals("print('🐍')\n", file.readText())
     }
+
+    @Test fun renameWaitsForQueuedSave() {
+        val dir = Files.createTempDirectory("py4u-rename-").toFile()
+        val original = File(dir, "untitled_1.py")
+        val renamed = File(dir, "calculator.py")
+        val finished = CountDownLatch(2)
+        var renamedSuccessfully = false
+        ProjectFileWriter.enqueue(original, "print('saved')") { finished.countDown() }
+        ProjectFileWriter.rename(original, renamed) { result ->
+            renamedSuccessfully = result.isSuccess
+            finished.countDown()
+        }
+        assertTrue(finished.await(5, TimeUnit.SECONDS))
+        assertTrue(renamedSuccessfully)
+        assertEquals("print('saved')", renamed.readText())
+        assertTrue(!original.exists())
+    }
 }

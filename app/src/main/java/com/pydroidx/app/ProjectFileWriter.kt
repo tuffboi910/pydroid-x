@@ -2,6 +2,7 @@ package com.pydroidx.app
 
 import android.util.AtomicFile
 import java.io.File
+import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
 
@@ -25,6 +26,16 @@ internal object ProjectFileWriter {
                 }
             }
             complete(result)
+        }
+    }
+
+    fun rename(source: File, target: File, complete: (Result<Unit>) -> Unit) {
+        executor.execute {
+            complete(runCatching {
+                if (target.exists() || !source.renameTo(target)) {
+                    throw IOException("Could not rename ${source.name} to ${target.name}")
+                }
+            })
         }
     }
 }

@@ -708,10 +708,17 @@ class IdeViewModel : ViewModel() {
         if (code != snapshot) return
         val old = File(projectDir,currentFileName)
         val target = uniqueFile(localPurposeName(snapshot))
-        if (old.exists() && old.renameTo(target)) {
-            currentFileName = target.name
-            settings.edit().putString("current_file",currentFileName).apply()
-            refreshSaved()
+        autosaveJob?.cancel()
+        // The writer commits the latest contents before moving the file. Future
+        // autosaves use the new name, so a delayed write cannot recreate untitled.py.
+        persistCode(projectDir, old.name, snapshot)
+        currentFileName = target.name
+        settings.edit().putString("current_file",currentFileName).apply()
+        ProjectFileWriter.rename(old, target) { result ->
+            mainHandler.post {
+                if (result.isFailure) saveError = result.exceptionOrNull()?.message
+                if (::projectDir.isInitialized && projectDir == target.parentFile) refreshSaved()
+            }
         }
     }
 

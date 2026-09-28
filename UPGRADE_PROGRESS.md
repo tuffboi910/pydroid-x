@@ -47,6 +47,7 @@ The older `b119229` checkout is untouched. This checklist tracks reconstructed w
 - The next checkpoint adds in-file Find, Replace, Replace All, Go to Line, and keyboard Find/Replace shortcuts. Its Android CI run is pending.
 - GitHub Actions runs 203, 204, and 205 passed their Python suites, Android unit tests, and debug APK builds. The next history checkpoint is pending CI.
 - Saves now serialize automatic renames, and Android `ON_STOP` flushes pending editor edits before saving. History retains at most 12 versions per file, with a one-minute cadence; large files over 1 MB skip automatic snapshots.
+- GitHub Actions run 206 passed Android tests and APK packaging for the history checkpoint. Console now limits live layout to its newest 32,000 characters while retaining more output for Copy; its own CI is pending.
 
 ## Current files changed
 

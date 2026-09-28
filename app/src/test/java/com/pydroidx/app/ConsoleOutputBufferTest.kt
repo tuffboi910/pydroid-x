@@ -28,4 +28,14 @@ class ConsoleOutputBufferTest {
         buffer.append("ok")
         assertEquals("ok", buffer.snapshot())
     }
+
+    @Test fun visibleTailLimitsLayoutButCopyKeepsRetainedOutput() {
+        val buffer = ConsoleOutputBuffer(maxCharacters = 100, retainedCharacters = 80)
+        buffer.append("0123456789abcdefghijklmnopqrstuvwxyz")
+        assertEquals("[Earlier output retained for Copy]\nuvwxyz", buffer.visibleTail(6))
+        assertEquals("0123456789abcdefghijklmnopqrstuvwxyz", buffer.snapshot())
+        buffer.clear()
+        buffer.append("🐍x")
+        assertEquals("[Earlier output retained for Copy]\n🐍x", buffer.visibleTail(2))
+    }
 }

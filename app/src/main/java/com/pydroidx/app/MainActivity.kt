@@ -281,7 +281,7 @@ class IdeViewModel : ViewModel() {
     private val outputFlushScheduled = AtomicBoolean(false)
     private val outputFlushRunnable = Runnable {
         outputFlushScheduled.set(false)
-        output = outputBuffer.snapshot()
+        output = outputBuffer.visibleTail()
     }
     lateinit var projectDir: File
     private lateinit var projectsRoot: File
@@ -899,6 +899,7 @@ class IdeViewModel : ViewModel() {
         output = ""
         runtimeIssue = null
     }
+    fun fullOutput(): String = outputBuffer.snapshot()
 
     fun applyRuntimeFix() {
         val issue = runtimeIssue ?: return
@@ -1152,6 +1153,7 @@ private fun AchievementNotice(
     val context = LocalContext.current
     val aiScroll = rememberScrollState()
     val consoleScroll = rememberScrollState()
+    var consoleAutoScroll by remember { mutableStateOf(true) }
     val consoleInputFocus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val pages = listOf("FOLDERS", "PYTHON", "CONSOLE", "HELPER", "SETTINGS")
@@ -1650,6 +1652,13 @@ private fun AchievementNotice(
                                     shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
                                     modifier=Modifier.graphicsLayer { scaleX=modeScale;scaleY=modeScale }){Text(mode)}
                             }
+                            TextButton(onClick={consoleAutoScroll=!consoleAutoScroll}) {
+                                Text(if(consoleAutoScroll) "Auto on" else "Auto off",fontSize=11.sp)
+                            }
+                            TextButton(onClick={
+                                val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("PY4U Console",vm.fullOutput()))
+                            }) { Text("Copy",fontSize=11.sp) }
                         }
                         Spacer(Modifier.height(14.dp))
                         Surface(
@@ -1707,7 +1716,7 @@ private fun AchievementNotice(
                                         }
                                     }
                                 }
-                                ConsoleKeyToolbar(consoleInputValue,{consoleInputValue=it;vm.input=it.text},vm.inputHistory,consoleInputFocus,vm.input,vm.output.length,consoleScroll,safeColor(vm.toolbarHex,0xFF050505))
+                                ConsoleKeyToolbar(consoleInputValue,{consoleInputValue=it;vm.input=it.text},vm.inputHistory,consoleInputFocus,vm.input,vm.output.length,consoleScroll,safeColor(vm.toolbarHex,0xFF050505),consoleAutoScroll)
                                 Surface(
                                     color=safeColor(vm.consoleBackgroundHex,0xFF050505),
                                     shape=androidx.compose.foundation.shape.RoundedCornerShape(24.dp),

@@ -44,6 +44,12 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     private var highlightGeneration = 0L
     private var highlightTask: Future<*>? = null
     private val syntaxSpans = ArrayList<ForegroundColorSpan>()
+    private var cachedSyntaxRanges: List<SyntaxRange>? = null
+    private var syntaxWindowStart = 0
+    private var syntaxWindowEnd = 0
+    private val visibleSyntaxRunnable = Runnable {
+        cachedSyntaxRanges?.let(::applyVisibleSyntax)
+    }
     private var highlightDelayMs = 220L
     private var autocompleteEnabled = true
     private var ghostAlpha = 122
@@ -189,6 +195,7 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         removeCallbacks(highlightRunnable)
         removeCallbacks(diagnosticsRunnable)
         removeCallbacks(codeSyncRunnable)
+        removeCallbacks(visibleSyntaxRunnable)
         highlightGeneration++
         highlightTask?.cancel(true)
         super.onDetachedFromWindow()
@@ -240,6 +247,7 @@ internal class PythonEditorView(context: Context) : EditText(context) {
                     shouldRecordHistory = false
                     highlightGeneration++
                     highlightTask?.cancel(true)
+                    cachedSyntaxRanges = null
                     val source = s ?: ""
                     if (before == 0 && count == 1) {
                         val typed = pendingTypedEdit
@@ -343,6 +351,7 @@ internal class PythonEditorView(context: Context) : EditText(context) {
             diagnostics = emptyList()
             highlightGeneration++
             highlightTask?.cancel(true)
+            cachedSyntaxRanges = null
             clearCompletion()
             loadedRevision = revision
         }
@@ -360,6 +369,7 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         codeDirty = false
         highlightGeneration++
         highlightTask?.cancel(true)
+        cachedSyntaxRanges = null
         clearSyntaxSpans()
         clearCompletion()
         applyingHighlight = true
@@ -917,6 +927,8 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     }
 
     private fun clearSyntaxSpans() {
+        cachedSyntaxRanges = null
+        removeCallbacks(visibleSyntaxRunnable)
         val editable = text ?: return
         if (syntaxSpans.isEmpty()) return
         applyingHighlight = true
@@ -930,12 +942,73 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         }
     }
 
+    private fun syntaxWindow(): Pair<Int, Int> {
+        val currentLayout = layout ?: return 0 to minOf(text.length, 12_000)
+        val screen = height.coerceAtLeast(1)
+        val top = (scrollY - totalPaddingTop - screen).coerceAtLeast(0)
+        val bottom = (scrollY - totalPaddingTop + screen * 2).coerceAtMost(currentLayout.height)
+        val first = currentLayout.getLineForVertical(top)
+        val last = currentLayout.getLineForVertical(bottom.coerceAtLeast(0))
+        return currentLayout.getLineStart(first) to currentLayout.getLineEnd(last)
+    }
+
+    private fun applyVisibleSyntax(ranges: List<SyntaxRange>) {
+        val editable = text ?: return
+        val (first, last) = syntaxWindow()
+        syntaxWindowStart = first
+        syntaxWindowEnd = last
+        applyingHighlight = true
+        beginBatchEdit()
+        try {
+            syntaxSpans.forEach(editable::removeSpan)
+            syntaxSpans.clear()
+            // Lexer output is ordered; skip tokens before the prefetched viewport.
+            var low = 0
+            var high = ranges.size
+            while (low < high) {
+                val mid = (low + high) ushr 1
+                if (ranges[mid].end <= first) low = mid + 1 else high = mid
+            }
+            while (low < ranges.size && ranges[low].start < last) {
+                val range = ranges[low++]
+                if (range.start >= 0 && range.end <= editable.length && range.end > range.start) {
+                    val span = ForegroundColorSpan(range.color)
+                    editable.setSpan(span, range.start, range.end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    syntaxSpans += span
+                }
+            }
+        } finally {
+            endBatchEdit()
+            applyingHighlight = false
+        }
+    }
+
+    override fun onScrollChanged(horizontal: Int, vertical: Int, oldHorizontal: Int, oldVertical: Int) {
+        super.onScrollChanged(horizontal, vertical, oldHorizontal, oldVertical)
+        if (cachedSyntaxRanges != null) {
+            val (first, last) = syntaxWindow()
+            if (first < syntaxWindowStart || last > syntaxWindowEnd) {
+                removeCallbacks(visibleSyntaxRunnable)
+                postDelayed(visibleSyntaxRunnable, 32)
+            }
+        }
+    }
+
+    override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
+        super.onSizeChanged(width, height, oldWidth, oldHeight)
+        if (cachedSyntaxRanges != null) {
+            removeCallbacks(visibleSyntaxRunnable)
+            post(visibleSyntaxRunnable)
+        }
+    }
+
     private fun highlightNow() {
         val editable = text ?: return
         if (!highlightingEnabled) return
         val source = renderSource.toString()
         val generation = ++highlightGeneration
         highlightTask?.cancel(true)
+        cachedSyntaxRanges = null
         if (source.length > 250_000) {
             clearSyntaxSpans()
             setTextColor(editorTextColor)
@@ -947,22 +1020,8 @@ internal class PythonEditorView(context: Context) : EditText(context) {
             val ranges = PythonSyntaxHighlighter.ranges(source, palette)
             post {
                 if (generation != highlightGeneration || !highlightingEnabled || text !== editable) return@post
-                applyingHighlight = true
-                beginBatchEdit()
-                try {
-                    syntaxSpans.forEach(editable::removeSpan)
-                    syntaxSpans.clear()
-                    ranges.forEach { range ->
-                        if (range.start >= 0 && range.end <= editable.length && range.end > range.start) {
-                            val span = ForegroundColorSpan(range.color)
-                            editable.setSpan(span, range.start, range.end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                            syntaxSpans += span
-                        }
-                    }
-                } finally {
-                    endBatchEdit()
-                    applyingHighlight = false
-                }
+                cachedSyntaxRanges = ranges
+                applyVisibleSyntax(ranges)
             }
         }
     }

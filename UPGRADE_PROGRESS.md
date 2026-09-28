@@ -49,6 +49,7 @@ The older `b119229` checkout is untouched. This checklist tracks reconstructed w
 - Saves now serialize automatic renames, and Android `ON_STOP` flushes pending editor edits before saving. History retains at most 12 versions per file, with a one-minute cadence; large files over 1 MB skip automatic snapshots.
 - GitHub Actions run 206 passed Android tests and APK packaging for the history checkpoint. Console now limits live layout to its newest 32,000 characters while retaining more output for Copy; its own CI is pending.
 - Run 207 reached APK packaging but failed one Console unit assertion about an emoji boundary; the assertion was corrected. Runtime exceptions now identify their actual project source file, and project imports are purged after each run so another project cannot reuse stale modules. New CI is pending.
+- Syntax tokenization already ran on a worker, but applying every token span still happened on the UI thread. The next checkpoint limits span application to a prefetched viewport and refreshes it on scroll/resize. Actual frame-time profiling remains a physical-device task.
 
 ## Current files changed
 

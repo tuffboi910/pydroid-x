@@ -2165,10 +2165,12 @@ private fun AchievementNotice(
                                 }
                                 Spacer(Modifier.height(12.dp))
                                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                                    Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
+                                    Text(
+                                        ansiConsoleAnnotated(vm.output.ifEmpty{"Ready"},safeColor(vm.consoleTextHex,0xFFE8E8EC)),
                                         fontFamily=FontFamily.Monospace,fontSize=vm.terminalFontSize.sp,
                                         lineHeight=(vm.terminalFontSize+6).sp,
-                                        modifier=Modifier.fillMaxSize().verticalScroll(consoleScroll).padding(bottom=if(vm.runtimeIssue!=null)180.dp else 8.dp))
+                                        modifier=Modifier.fillMaxSize().verticalScroll(consoleScroll).padding(bottom=if(vm.runtimeIssue!=null)180.dp else 8.dp)
+                                    )
                                     vm.runtimeIssue?.let { issue ->
                                         var showDetails by remember(issue.details) { mutableStateOf(false) }
                                         Surface(color=Color(0xFF151316),shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
@@ -3208,6 +3210,25 @@ private fun codeChangePreview(original: String, proposed: String): CodeChangePre
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)){Text(title,color=Color(0xFFE6F5FF),fontSize=15.sp);Text(subtitle,color=Color.Gray,fontSize=11.sp)}
             Text("›",color=Color.Gray,fontSize=24.sp)
+        }
+    }
+}
+
+private fun ansiConsoleAnnotated(source:String, defaultColor:Color):AnnotatedString=buildAnnotatedString {
+    AnsiTextParser.parse(source).forEach { segment ->
+        val color=when(segment.color) {
+            AnsiColor.BLACK -> Color(0xFF55575E)
+            AnsiColor.RED -> Color(0xFFFF6B81)
+            AnsiColor.GREEN -> Color(0xFF7EE787)
+            AnsiColor.YELLOW -> Color(0xFFFFD866)
+            AnsiColor.BLUE -> Color(0xFF82AAFF)
+            AnsiColor.MAGENTA -> Color(0xFFC792EA)
+            AnsiColor.CYAN -> Color(0xFF89DDFF)
+            AnsiColor.WHITE -> Color(0xFFF2F2F2)
+            else -> defaultColor
+        }
+        withStyle(SpanStyle(color=color,fontWeight=if(segment.bold) FontWeight.Bold else FontWeight.Normal)) {
+            append(segment.text)
         }
     }
 }

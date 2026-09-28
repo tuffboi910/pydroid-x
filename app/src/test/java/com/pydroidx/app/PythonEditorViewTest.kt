@@ -8,6 +8,7 @@ import android.graphics.RectF
 import android.os.Looper
 import android.view.MotionEvent
 import android.view.KeyEvent
+import android.view.inputmethod.EditorInfo
 import android.view.View
 import org.junit.Assert.*
 import org.junit.Before
@@ -107,6 +108,13 @@ class PythonEditorViewTest {
         assertEquals(1, editor.selectionStart)
         editor.onKeyDown(KeyEvent.KEYCODE_DEL, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
         assertEquals("", editor.text.toString())
+    }
+
+    @Test fun composingImeTextDoesNotInsertSmartPair() {
+        editor.setCodeIfDifferent("", revision = 9)
+        val connection = editor.onCreateInputConnection(EditorInfo())
+        assertTrue(connection.setComposingText("(", 1))
+        assertEquals("(", editor.text.toString())
     }
 
     @Test fun typingExistingCloserSkipsDuplicate() {

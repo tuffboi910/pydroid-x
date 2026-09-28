@@ -14,6 +14,7 @@ import android.text.TextWatcher
 import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.inputmethod.BaseInputConnection
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.widget.EditText
@@ -261,6 +262,13 @@ internal class PythonEditorView(context: Context) : EditText(context) {
             }
             override fun afterTextChanged(s: Editable?) {
                 if (applyingSmartEdit || applyingHighlight || applyingHistory) return
+                // An IME can replace provisional text repeatedly. Never insert a
+                // closer or delete its neighbor while that text is composing.
+                if (s != null && BaseInputConnection.getComposingSpanStart(s) >= 0) {
+                    pendingPairDeleteAt = null
+                    pendingTypedEdit = null
+                    return
+                }
                 val deletePairAt = pendingPairDeleteAt
                 pendingPairDeleteAt = null
                 if (deletePairAt != null && s != null && deletePairAt in 0 until s.length) {
@@ -695,10 +703,11 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         if (keyCode == KeyEvent.KEYCODE_DEL && selectionStart == selectionEnd &&
             selectionStart > 0 && selectionStart < text.length &&
             matchingCloser(text[selectionStart - 1], text[selectionStart])) {
+            val cursor = selectionStart
             beginBatchEdit()
             try {
-                text.delete(selectionStart - 1, selectionStart + 1)
-                setSelection(selectionStart - 1)
+                text.delete(cursor - 1, cursor + 1)
+                setSelection(cursor - 1)
             } finally { endBatchEdit() }
             return true
         }

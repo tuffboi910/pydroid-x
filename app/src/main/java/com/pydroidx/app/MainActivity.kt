@@ -766,6 +766,13 @@ class IdeViewModel : ViewModel() {
         save()
         autosaveJob?.cancel()
         namingJob?.cancel()
+        projectProblemsToken++
+        projectProblemsBusy=false
+        projectProblems=emptyList()
+        projectProblemsError=null
+        projectSearchToken++
+        projectSearchBusy=false
+        projectSearchResults=emptyList()
         projectDir = targetDir
         currentProjectName = safeName
         val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
@@ -2377,6 +2384,41 @@ private fun AchievementNotice(
                                 Text("Lesson: $topic",color=Color.LightGray,fontSize=11.sp,modifier=Modifier.weight(1f),maxLines=1)
                                 TextButton(onClick={vm.rejectTeaching()}) { Text("Dismiss",fontSize=11.sp) }
                                 TextButton(onClick={vm.acceptTeaching()}) { Text("Teach me",fontSize=11.sp) }
+                            }
+                        }
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement=Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf("Explain","Fix","Refactor","Optimize","Tests").forEach { action ->
+                                AssistChip(
+                                    onClick={
+                                        val view=editorView
+                                        val start=minOf(view?.selectionStart ?: 0,view?.selectionEnd ?: 0).coerceAtLeast(0)
+                                        val end=maxOf(view?.selectionStart ?: 0,view?.selectionEnd ?: 0)
+                                            .coerceAtMost(view?.text?.length ?: 0)
+                                        val selection=if(view!=null && end>start)
+                                            view.text.subSequence(start,end).toString().take(8000) else ""
+                                        val target=if(selection.isNotBlank())
+                                            "the selected code in ${vm.currentFileName}"
+                                            else "the current file ${vm.currentFileName}"
+                                        val instruction=when(action) {
+                                            "Explain" -> "Explain $target clearly. Focus on what it does and why."
+                                            "Fix" -> "Inspect $target for the most important real bug or error and fix it. Preserve unrelated behavior."
+                                            "Refactor" -> "Refactor $target for clarity and maintainability without changing behavior."
+                                            "Optimize" -> "Optimize $target only where there is a justified performance improvement. Preserve behavior."
+                                            else -> "Generate focused tests for $target, prioritizing edge cases and regressions."
+                                        }
+                                        vm.shareCode=true
+                                        vm.aiPrompt=if(selection.isBlank()) instruction else
+                                            "$instruction\n\nSelected code:\n```python\n$selection\n```"
+                                    },
+                                    label={Text(action,maxLines=1)},
+                                    colors=AssistChipDefaults.assistChipColors(
+                                        labelColor=Color.White,
+                                        containerColor=Color.White.copy(alpha=.05f)
+                                    )
+                                )
                             }
                         }
                         if(vm.attachedFileName!=null || vm.shareCode) {

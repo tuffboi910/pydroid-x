@@ -49,6 +49,22 @@ class ProjectFileWriterTest {
         assertTrue(!original.exists())
     }
 
+    @Test fun renameCarriesExistingHistory() {
+        val dir = Files.createTempDirectory("py4u-rename-history-").toFile()
+        val source = File(dir, "untitled_1.py").apply { writeText("old") }
+        ProjectFileHistory.recoveryPoint(source, "older".toByteArray())
+        val finished = CountDownLatch(1)
+        var succeeded = false
+        val target = File(dir, "calculator.py")
+        ProjectFileWriter.rename(source, target) { result ->
+            succeeded = result.isSuccess
+            finished.countDown()
+        }
+        assertTrue(finished.await(5, TimeUnit.SECONDS))
+        assertTrue(succeeded)
+        assertEquals("older", ProjectFileHistory.versions(target).first().readText())
+    }
+
     @Test fun replacingFileKeepsRecoverablePreviousVersion() {
         val file = File(Files.createTempDirectory("py4u-history-").toFile(), "main.py")
         file.writeText("print('before')\n")

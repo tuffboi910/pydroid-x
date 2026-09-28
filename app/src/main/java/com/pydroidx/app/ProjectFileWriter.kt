@@ -41,6 +41,12 @@ internal object ProjectFileWriter {
                 if (target.exists() || !source.renameTo(target)) {
                     throw IOException("Could not rename ${source.name} to ${target.name}")
                 }
+                val historyRoot = File(source.parentFile, ".history")
+                val oldHistory = File(historyRoot, source.name)
+                val newHistory = File(historyRoot, target.name)
+                if (oldHistory.isDirectory && !newHistory.exists() && !oldHistory.renameTo(newHistory)) {
+                    throw IOException("Renamed ${source.name}, but its history could not be moved")
+                }
             })
         }
     }

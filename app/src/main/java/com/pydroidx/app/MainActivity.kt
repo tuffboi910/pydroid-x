@@ -597,7 +597,7 @@ class IdeViewModel : ViewModel() {
     private fun extractTeachingOffer(answer: String): String? =
         Regex("\\[TEACH:([^]]+)]", RegexOption.IGNORE_CASE).find(answer)?.groupValues?.get(1)?.trim()
 
-    fun applyPendingCode() {
+    fun applyPendingCode(selectedHunks: Set<Int>? = null) {
         val change = pendingCode ?: return
         if (currentFileName != change.fileName || code != change.sourceSnapshot) {
             pendingCode = null
@@ -611,13 +611,15 @@ class IdeViewModel : ViewModel() {
                     aiMessages.add(AiMessage(false, "Couldn’t protect the current file: ${result.exceptionOrNull()?.message}"))
                 } else if (pendingCode == change && projectDir == target.parentFile &&
                     currentFileName == change.fileName && code == change.sourceSnapshot) {
-                    val replacement = change.code
+                    val replacement = if (selectedHunks == null) change.code else
+                        CodeEditHunks.applySelected(change.sourceSnapshot, change.code, selectedHunks)
                     code = replacement + if (replacement.endsWith("\n")) "" else "\n"
                     editorRevision++
                     save()
                     pendingCode = null
                     showCodeNotice=false
-                    aiMessages.add(AiMessage(false, "Applied to $currentFileName ✓"))
+                    aiMessages.add(AiMessage(false, if(selectedHunks==null) "Applied to $currentFileName ✓"
+                        else "Applied ${selectedHunks.size} selected change${if(selectedHunks.size==1) "" else "s"} to $currentFileName ✓"))
                 }
             }
         }
@@ -2994,21 +2996,63 @@ private fun AchievementNotice(
         )
     }
     if(showCodePreview) vm.pendingCode?.let { change ->
-        val preview = remember(change) { codeChangePreview(change.sourceSnapshot, change.code) }
+        val hunks = remember(change) { CodeEditHunks.diff(change.sourceSnapshot,change.code) }
+        var selectedHunks by remember(change) { mutableStateOf(hunks.indices.toSet()) }
         AlertDialog(
             onDismissRequest={showCodePreview=false},containerColor=Color(0xFF171A20),
             title={Text("Review edit · ${change.fileName}",fontSize=17.sp)},
-            text={Column(Modifier.heightIn(max=450.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                Text(preview.summary,color=accent,fontSize=12.sp)
-                Text("BEFORE",color=Color(0xFFFF8895),fontSize=10.sp,fontWeight=FontWeight.Bold)
-                Text(preview.before,color=Color(0xFFFFC0C7),fontFamily=FontFamily.Monospace,fontSize=12.sp,
-                    modifier=Modifier.fillMaxWidth().background(Color(0xFF292126)).padding(10.dp))
-                Text("AFTER",color=Color(0xFF81DDAF),fontSize=10.sp,fontWeight=FontWeight.Bold)
-                Text(preview.after,color=Color(0xFFB7F5D4),fontFamily=FontFamily.Monospace,fontSize=12.sp,
-                    modifier=Modifier.fillMaxWidth().background(Color(0xFF1E2B25)).padding(10.dp))
-                Text("Only changed lines shown. Your file stays untouched until you tap Apply.",color=Color.Gray,fontSize=10.sp)
+            text={Column(Modifier.heightIn(max=500.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                if(hunks.isEmpty()) {
+                    Text("Astro returned the same code. Nothing to apply.",color=Color.LightGray,fontSize=12.sp)
+                } else {
+                    Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                        Text("${selectedHunks.size}/${hunks.size} changes selected",color=accent,fontSize=12.sp,modifier=Modifier.weight(1f))
+                        TextButton(onClick={selectedHunks=if(selectedHunks.size==hunks.size) emptySet() else hunks.indices.toSet()}) {
+                            Text(if(selectedHunks.size==hunks.size) "None" else "All")
+                        }
+                    }
+                    hunks.forEachIndexed { index,hunk ->
+                        val selected=index in selectedHunks
+                        Surface(
+                            color=Color.White.copy(alpha=if(selected).06f else .025f),
+                            shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                            border=BorderStroke(1.dp,if(selected) accent.copy(alpha=.45f) else Color.White.copy(alpha=.10f)),
+                            modifier=Modifier.fillMaxWidth().clickable {
+                                selectedHunks=if(selected) selectedHunks-index else selectedHunks+index
+                            }
+                        ) {
+                            Column(Modifier.padding(10.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                                Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                    Checkbox(checked=selected,onCheckedChange={
+                                        selectedHunks=if(it) selectedHunks+index else selectedHunks-index
+                                    })
+                                    Text("Change ${index+1} · lines ${hunk.displayStart}-${hunk.displayEnd}",
+                                        color=Color.White,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                                }
+                                if(hunk.removed.isNotEmpty()) {
+                                    Text("BEFORE",color=Color(0xFFFF8895),fontSize=9.sp,fontWeight=FontWeight.Bold)
+                                    Text(hunk.removed.take(40).joinToString("\n"),color=Color(0xFFFFC0C7),
+                                        fontFamily=FontFamily.Monospace,fontSize=11.sp,
+                                        modifier=Modifier.fillMaxWidth().background(Color(0xFF292126)).padding(8.dp))
+                                }
+                                if(hunk.added.isNotEmpty()) {
+                                    Text("AFTER",color=Color(0xFF81DDAF),fontSize=9.sp,fontWeight=FontWeight.Bold)
+                                    Text(hunk.added.take(40).joinToString("\n"),color=Color(0xFFB7F5D4),
+                                        fontFamily=FontFamily.Monospace,fontSize=11.sp,
+                                        modifier=Modifier.fillMaxWidth().background(Color(0xFF1E2B25)).padding(8.dp))
+                                }
+                            }
+                        }
+                    }
+                    Text("Each checked block is applied independently. Unchecked blocks stay exactly as they are.",color=Color.Gray,fontSize=10.sp)
+                }
             }},
-            confirmButton={Button(onClick={vm.applyPendingCode();showCodePreview=false}) { Text("Apply edit") }},
+            confirmButton={
+                Button(
+                    enabled=hunks.isNotEmpty()&&selectedHunks.isNotEmpty(),
+                    onClick={vm.applyPendingCode(selectedHunks);showCodePreview=false}
+                ) { Text("Apply selected") }
+            },
             dismissButton={TextButton(onClick={showCodePreview=false}) { Text("Keep editing") }}
         )
     }

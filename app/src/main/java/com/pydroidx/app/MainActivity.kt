@@ -872,10 +872,10 @@ class IdeViewModel : ViewModel() {
         }
     }
 
-    private fun migrateEditorFileState(oldName: String, newName: String) {
+    private fun migrateEditorFileState(oldName: String, newName: String, project: String = currentProjectName) {
         if (!::settings.isInitialized || oldName==newName) return
-        val oldKey=editorStateKey(file=oldName)
-        val newKey=editorStateKey(file=newName)
+        val oldKey=editorStateKey(project=project,file=oldName)
+        val newKey=editorStateKey(project=project,file=newName)
         val state=editorFileStates.remove(oldKey) ?: EditorFileStateCodec.decode(settings.getString(oldKey,null))
         editorStateJobs.remove(oldKey)?.cancel()
         editorStateJobs.remove(newKey)?.cancel()
@@ -913,7 +913,9 @@ class IdeViewModel : ViewModel() {
     fun renameProjectFile(fileName: String, requestedName: String) {
         if (running) return
         val source=projectPythonFile(fileName) ?: return
-        val target=File(projectDir,ProjectFileTrash.safePythonFileName(requestedName))
+        val directory=projectDir
+        val project=currentProjectName
+        val target=File(directory,ProjectFileTrash.safePythonFileName(requestedName))
         if (target==source) return
         if (target.exists()) {
             saveError="${target.name} already exists"
@@ -924,8 +926,9 @@ class IdeViewModel : ViewModel() {
         namingJob?.cancel()
         ProjectFileWriter.rename(source,target) { result ->
             mainHandler.post {
+                if (!::projectDir.isInitialized || projectDir!=directory || currentProjectName!=project) return@post
                 result.onSuccess {
-                    migrateEditorFileState(source.name,target.name)
+                    migrateEditorFileState(source.name,target.name,project)
                     val tabIndex=openFileTabs.indexOf(source.name)
                     if(tabIndex>=0) {
                         openFileTabs[tabIndex]=target.name
@@ -946,10 +949,12 @@ class IdeViewModel : ViewModel() {
     fun duplicateProjectFile(fileName: String) {
         if (running) return
         val source=projectPythonFile(fileName) ?: return
+        val directory=projectDir
         if (source.name==currentFileName) save()
-        val target=ProjectFileTrash.duplicateTarget(projectDir,source)
+        val target=ProjectFileTrash.duplicateTarget(directory,source)
         ProjectFileWriter.duplicate(source,target) { result ->
             mainHandler.post {
+                if (!::projectDir.isInitialized || projectDir!=directory) return@post
                 result.onSuccess { saveError=null;refreshSaved() }
                     .onFailure { saveError=it.message ?: "Couldn’t duplicate ${source.name}" }
             }
@@ -959,30 +964,39 @@ class IdeViewModel : ViewModel() {
     fun deleteProjectFile(fileName: String) {
         if (running) return
         val source=projectPythonFile(fileName) ?: return
+        val directory=projectDir
+        val project=currentProjectName
+        val preferredTabs=openFileTabs.filter { it!=source.name }
         val wasCurrent=source.name==currentFileName
         if (wasCurrent) save()
         namingJob?.cancel()
         ProjectFileWriter.trash(source) { result ->
             result.onFailure { error ->
-                mainHandler.post { saveError=error.message ?: "Couldn’t delete ${source.name}" }
-            }.onSuccess {
                 mainHandler.post {
-                    openFileTabs.remove(source.name)
-                    persistOpenTabs()
+                    if (::projectDir.isInitialized && projectDir==directory && currentProjectName==project)
+                        saveError=error.message ?: "Couldn’t delete ${source.name}"
                 }
+            }.onSuccess {
                 if (!wasCurrent) {
-                    mainHandler.post { saveError=null;refreshSaved() }
+                    mainHandler.post {
+                        if (!::projectDir.isInitialized || projectDir!=directory || currentProjectName!=project) return@post
+                        openFileTabs.remove(source.name)
+                        persistOpenTabs()
+                        saveError=null
+                        refreshSaved()
+                    }
                     return@onSuccess
                 }
-                val preferredTab=openFileTabs.firstOrNull { tabName ->
-                    File(projectDir,tabName).isFile
-                }
-                val replacement=preferredTab?.let { File(projectDir,it) } ?: projectDir.listFiles()?.filter {
+                val preferredTab=preferredTabs.firstOrNull { tabName -> File(directory,tabName).isFile }
+                val replacement=preferredTab?.let { File(directory,it) } ?: directory.listFiles()?.filter {
                     it.isFile && it.extension.equals("py",true)
                 }?.maxByOrNull { it.lastModified() }
                 if (replacement != null) {
                     val loaded=runCatching { readProjectText(replacement) }
                     mainHandler.post {
+                        if (!::projectDir.isInitialized || projectDir!=directory || currentProjectName!=project) return@post
+                        openFileTabs.remove(source.name)
+                        persistOpenTabs()
                         loaded.onSuccess { text ->
                             currentFileName=replacement.name
                             touchOpenTab(currentFileName)
@@ -996,9 +1010,12 @@ class IdeViewModel : ViewModel() {
                         }.onFailure { saveError=it.message ?: "Couldn’t open another file";refreshSaved() }
                     }
                 } else {
-                    val fallback=File(projectDir,"main.py")
+                    val fallback=File(directory,"main.py")
                     ProjectFileWriter.enqueue(fallback,"") { created ->
                         mainHandler.post {
+                            if (!::projectDir.isInitialized || projectDir!=directory || currentProjectName!=project) return@post
+                            openFileTabs.remove(source.name)
+                            persistOpenTabs()
                             created.onSuccess {
                                 currentFileName=fallback.name
                                 touchOpenTab(currentFileName)
@@ -1019,8 +1036,10 @@ class IdeViewModel : ViewModel() {
 
     fun restoreDeletedFile(trashName: String) {
         if (running || !::projectDir.isInitialized) return
-        ProjectFileWriter.restore(projectDir,trashName) { result ->
+        val directory=projectDir
+        ProjectFileWriter.restore(directory,trashName) { result ->
             mainHandler.post {
+                if (!::projectDir.isInitialized || projectDir!=directory) return@post
                 result.onSuccess { saveError=null;refreshSaved() }
                     .onFailure { saveError=it.message ?: "Couldn’t restore deleted file" }
             }

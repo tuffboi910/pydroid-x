@@ -1,30 +1,41 @@
-# PY4U upgrade status
+# PY4U manual continuation status
 
-Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The default `main` branch is unchanged. The local checkout tracks the pushed upgrade branch. Every remote checkpoint was verified against the local Git tree before its ref was advanced.
+Branch: `py4u/masterpiece-manual` in `tuffboi910/pydroid-x`.
 
-## Implemented and checked
+This branch was created from the latest pushed `py4u/masterpiece-upgrade` checkpoint so the Work agent can later continue its own branch independently. The original agent branch remains untouched.
 
-- Editor: reduced typing allocations and model sync, incremental line index, worker syntax tokenization, visible-area color spans, smart typed pairs and Backspace, indentation and comment actions, in-file Find/Replace/Replace All/Go to Line, current-file Problems navigation, and hardware shortcuts for Save, Run, Find, Replace, Undo, Redo, Quick Open, and Command Palette.
-- Console: coalesced output before UI dispatch, bounded live text layout, retained output Copy, autoscroll control, and project-file traceback navigation. Python modules imported from one project are removed from the module cache after its run.
-- Data safety: serialized atomic writes across activity recreation, ordered automatic file rename, save on Android backgrounding, bounded local file history, deliberate restore preview, and recovery points before Astro edits/restores.
-- Projects: runnable Blank, Hello World, CLI, Calculator, Automation, Guessing Game, and CSV Data starters. Five nontrivial scripts passed local parse and execution checks.
-- Astro: editor-selection question handoff; bounded project names, diagnostics, and recent Console context only when code sharing is enabled; existing preview/Accept/Reject flow retained.
-- Navigation: searchable command palette and Quick Open backed by actual actions.
+## Source-level implementation completed on this branch
+
+- Editor responsiveness and rendering work from the agent checkpoint retained: reduced hot-path allocations, worker syntax highlighting, visible-range spans, smart pairs, paired Backspace, indentation/comment actions, IME composition protection, UTF-16-safe offsets, autocomplete, diagnostics, in-file Find/Replace/Replace All/Go to Line, and hardware shortcuts.
+- Project-wide search with bounded background scanning and jump-to-match.
+- Project-wide Problems scan with file/line navigation.
+- Persistent multi-file tabs.
+- Per-file cursor and scroll restoration.
+- Project file rename, duplicate, recoverable delete/restore, and exact file identity handling.
+- Atomic/serialized saves, autosave/rename race protection, recovery snapshots, bounded local history, background/lifecycle saves, and safe history restore.
+- Console output coalescing, retained output, Copy, autoscroll control, Console search, project traceback navigation, and ANSI SGR colors/bold rendering.
+- Astro contextual actions: Explain, Fix, Refactor, Optimize, and Tests.
+- Astro code preview with selective per-hunk acceptance instead of all-or-nothing replacement.
+- Project templates and Quick Open / Command Palette navigation.
+- Project-scoped runtime package installation for universal pure-Python wheels using `pip install PACKAGE` or `PACKAGE==VERSION`; native-extension wheels are rejected instead of pretending they will work. Runtime-installed packages are added to that project only.
+- Existing AI provider fallback, on-device GGUF support, settings, themes, motion controls, and current Android runtime functionality retained.
 
 ## Verification
 
-- Host Python analyzer/runtime suite: 22 tests pass with declared Jedi 0.19.2 installed.
-- Android CI runs 202–206 and 208–211 passed unit tests and debug APK packaging. Run 207 exposed a mistaken Unicode-tail test assertion; the assertion was corrected and run 208 passed.
-- Run 212 (Astro context) passed. Run 213 (project starters) was still in progress at this document update. The latest atomic-read recovery change awaits Android CI.
-- Git diff checks and clean local status were verified at each checkpoint. No physical Android device or emulator was attached to this Work environment.
+- The manual branch has repeatedly passed GitHub Android CI checkpoints, including unit tests and debug APK packaging.
+- The selective Astro hunk checkpoint `317dbe8` passed CI.
+- Later ANSI Console and runtime package-install checkpoints are being validated by the same workflow.
+- Earlier one-off failures were diagnosed rather than ignored: one compile failure exposed a history-preview visibility bug and was fixed; another Robolectric run failed while downloading a Maven dependency with a network socket error, while adjacent reruns passed.
+- No physical Android phone or emulator is attached to this environment, so actual keyboard feel, high-refresh scrolling, haptics, rotation geometry, OEM IME behavior, thermal behavior, and real provider/GGUF performance cannot be honestly certified here.
 
-## Incomplete or unverified
+## Deliberate limits
 
-- Measure typing, scrolling, Console throughput, keyboard transitions, and touch accuracy on a physical high-refresh device. UI geometry, animation timing, haptics, accessibility font scaling, rotation, and process-death recovery require device checks.
-- The editor still needs project-wide search/Problems, robust file tabs and per-file cursor/scroll restoration, folding/sticky context if justified, and more real-world IME testing.
-- Project actions still lack rename/duplicate/move/delete/recovery UI and folder navigation. History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots.
-- Astro lacks per-hunk acceptance and constrained project-agent operations. Live provider and offline-model behavior need configured credentials/models and device testing.
-- Android runtime package installation is not implemented. The terminal truthfully reports this; installed-package listing already works. Do not advertise unsupported wheels as installable.
-- Console search, richer ANSI rendering, and large-output interaction beyond the retained window remain. Broad UI/motion polish and first-run/accessibility passes remain.
+- Runtime package installation supports universal pure-Python wheels only. Native Android wheels and arbitrary compiled extensions remain unsupported unless a compatible Android build is bundled or added later.
+- Runtime package dependency resolution is intentionally conservative: missing pure-Python dependencies can be installed explicitly rather than silently executing an opaque dependency solver on-device.
+- Physical-device UX/performance verification is still required before calling any mobile IDE completely bug-free.
 
-The older `b119229` checkout was left intact. The previously lost `f386e22` object was not recovered; this branch reconstructs new work from the valid `a86c076` remote base.
+## Branch safety
+
+- Agent branch: `py4u/masterpiece-upgrade`
+- Manual continuation: `py4u/masterpiece-manual`
+- The agent branch was not merged into, reset, force-pushed, or otherwise modified by this manual continuation.

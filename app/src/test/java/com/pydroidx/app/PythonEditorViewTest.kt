@@ -117,6 +117,31 @@ class PythonEditorViewTest {
         assertEquals("(", editor.text.toString())
     }
 
+    @Test fun findReplaceAndGoToLineHandleUnicodeOffsets() {
+        editor.setCodeIfDifferent("🐍 value\nvalue", revision = 10)
+        editor.setSelection(0)
+        assertTrue(editor.findNext("value"))
+        assertEquals(3, editor.selectionStart)
+        assertTrue(editor.replaceSelection("value", "name"))
+        assertEquals("🐍 name\nvalue", editor.text.toString())
+        assertEquals(1, editor.replaceAllMatches("value", "item"))
+        editor.goToLine(2)
+        assertEquals("🐍 name\n".length, editor.selectionStart)
+    }
+
+    @Test fun hardwareShortcutsCallSaveAndRun() {
+        var saves = 0
+        var runs = 0
+        editor.onSaveRequested = { saves++ }
+        editor.onRunRequested = { runs++ }
+        editor.onKeyDown(KeyEvent.KEYCODE_S,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_S, 0, KeyEvent.META_CTRL_ON))
+        editor.onKeyDown(KeyEvent.KEYCODE_ENTER,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0, KeyEvent.META_CTRL_ON))
+        assertEquals(1, saves)
+        assertEquals(1, runs)
+    }
+
     @Test fun typingExistingCloserSkipsDuplicate() {
         editor.setCodeIfDifferent(")", revision = 4)
         editor.setSelection(0)

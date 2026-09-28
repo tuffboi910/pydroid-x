@@ -1109,6 +1109,12 @@ private fun AchievementNotice(
     val pages = listOf("FOLDERS", "PYTHON", "CONSOLE", "HELPER", "SETTINGS")
     val pageIcons = listOf("Folders", "Python", "Console", "Helper", "Settings")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
+    var showFind by remember { mutableStateOf(false) }
+    var showReplace by remember { mutableStateOf(false) }
+    var findQuery by remember { mutableStateOf("") }
+    var replacement by remember { mutableStateOf("") }
+    var showGoToLine by remember { mutableStateOf(false) }
+    var lineDraft by remember { mutableStateOf("") }
     var showAiSettings by remember { mutableStateOf(false) }
     var showCodePreview by remember { mutableStateOf(false) }
     var showProblems by remember { mutableStateOf(false) }
@@ -1405,6 +1411,9 @@ private fun AchievementNotice(
                             Spacer(Modifier.width(7.dp))
                             Box(Modifier.size(6.dp).background(Color(0xFF8AB4F8),androidx.compose.foundation.shape.CircleShape))
                             Spacer(Modifier.width(8.dp))
+                            TextButton(onClick={showFind=true},modifier=Modifier.width(42.dp)) {
+                                Text("Find",fontSize=11.sp)
+                            }
                             IconButton(onClick={editorView?.undoCode()},modifier=Modifier.size(34.dp)) {
                                 IdeGlyph("Undo",Color(0xFFD8D9E0))
                             }
@@ -1422,9 +1431,40 @@ private fun AchievementNotice(
                             ){IdeGlyph("New file",Color(0xFFBFC0C7))}
                         }
                         }
+                        if (showFind) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),
+                                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                OutlinedTextField(findQuery,{findQuery=it},label={Text("Find in file")},
+                                    singleLine=true,modifier=Modifier.weight(1f))
+                                TextButton(onClick={
+                                    if (editorView?.findNext(findQuery) != true && findQuery.isNotEmpty())
+                                        Toast.makeText(context,"No matches",Toast.LENGTH_SHORT).show()
+                                }) { Text("Next") }
+                                TextButton(onClick={showFind=false;showReplace=false}) { Text("×") }
+                            }
+                            Row(Modifier.fillMaxWidth().padding(horizontal=8.dp)) {
+                                TextButton(onClick={showReplace=!showReplace}) { Text("Replace") }
+                                TextButton(onClick={showGoToLine=true}) { Text("Go to line") }
+                            }
+                            if (showReplace) Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),
+                                verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                OutlinedTextField(replacement,{replacement=it},label={Text("Replace with")},
+                                    singleLine=true,modifier=Modifier.weight(1f))
+                                TextButton(onClick={editorView?.replaceSelection(findQuery,replacement)}) {
+                                    Text("One")
+                                }
+                                TextButton(onClick={
+                                    val count=editorView?.replaceAllMatches(findQuery,replacement) ?: 0
+                                    Toast.makeText(context,"Replaced $count",Toast.LENGTH_SHORT).show()
+                                }) { Text("All") }
+                            }
+                        }
                         AndroidView(
                             factory={context->PythonEditorView(context).also{view->
                                 editorView=view
+                                view.onFindRequested={ replace -> showFind=true;showReplace=replace }
+                                view.onSaveRequested=vm::save
+                                view.onRunRequested={if (!vm.running) { vm.run();scope.launch{pager.animateScrollToPage(2)} }}
                                 view.onCodeChanged=vm::updateCode
                                 view.onDiagnosticTap={selectedProblem=it}
                                 view.requestSmartCompletion=vm::requestCompletion
@@ -1432,6 +1472,9 @@ private fun AchievementNotice(
                                 view.setCodeIfDifferent(vm.code,revision)
                             }},
                             update={view->
+                                view.onFindRequested={ replace -> showFind=true;showReplace=replace }
+                                view.onSaveRequested=vm::save
+                                view.onRunRequested={if (!vm.running) { vm.run();scope.launch{pager.animateScrollToPage(2)} }}
                                 view.onDiagnosticTap={selectedProblem=it}
                                 view.setBackgroundColor(bg.toArgb())
                                 view.setCodeIfDifferent(vm.code,revision)
@@ -1997,6 +2040,17 @@ private fun AchievementNotice(
         RunBurst(runBurst,vm.currentFileName,motionAllowed,runOrigin)
         }
     }
+    if(showGoToLine) AlertDialog(
+        onDismissRequest={showGoToLine=false},containerColor=Color(0xFF171A20),
+        title={Text("Go to line")},
+        text={OutlinedTextField(lineDraft,{lineDraft=it.filter(Char::isDigit).take(8)},
+            label={Text("Line number")},singleLine=true)},
+        confirmButton={TextButton(onClick={
+            lineDraft.toIntOrNull()?.let { editorView?.goToLine(it) }
+            showGoToLine=false
+        }) { Text("Go") }},
+        dismissButton={TextButton(onClick={showGoToLine=false}) { Text("Cancel") }}
+    )
     if(showProblems) AlertDialog(
         onDismissRequest={showProblems=false},containerColor=Color(0xFF171A20),
         title={Text("Problems · ${vm.currentFileName}")},

@@ -26,6 +26,9 @@ import java.util.concurrent.TimeUnit
 
 internal class PythonEditorView(context: Context) : EditText(context) {
     var onCodeChanged: ((String) -> Unit)? = null
+    var onFindRequested: ((Boolean) -> Unit)? = null
+    var onSaveRequested: (() -> Unit)? = null
+    var onRunRequested: (() -> Unit)? = null
     var onDiagnosticTap: ((CodeDiagnostic) -> Unit)? = null
     var requestSmartCompletion: ((String, Int, (CompletionResult) -> Unit) -> Unit)? = null
     var requestCodeDiagnostics: ((String, (List<CodeDiagnostic>) -> Unit) -> Unit)? = null
@@ -689,6 +692,24 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (event?.isCtrlPressed == true && keyCode == KeyEvent.KEYCODE_S) {
+            flushCodeChange()
+            onSaveRequested?.invoke()
+            return true
+        }
+        if (event?.isCtrlPressed == true && keyCode == KeyEvent.KEYCODE_ENTER) {
+            flushCodeChange()
+            onRunRequested?.invoke()
+            return true
+        }
+        if (event?.isCtrlPressed == true && keyCode == KeyEvent.KEYCODE_F) {
+            onFindRequested?.invoke(false)
+            return true
+        }
+        if (event?.isCtrlPressed == true && keyCode == KeyEvent.KEYCODE_H) {
+            onFindRequested?.invoke(true)
+            return true
+        }
         if (event?.isCtrlPressed == true && keyCode == KeyEvent.KEYCODE_SLASH) {
             if (toggleCommentSelection()) return true
         }
@@ -719,6 +740,63 @@ internal class PythonEditorView(context: Context) : EditText(context) {
             }
         }
         return super.onKeyDown(keyCode,event)
+    }
+
+    fun findNext(query: String): Boolean {
+        if (query.isEmpty()) return false
+        val source = text.toString()
+        val start = selectionEnd.coerceIn(0, source.length)
+        val next = source.indexOf(query, start, ignoreCase = true)
+            .takeIf { it >= 0 } ?: source.indexOf(query, 0, ignoreCase = true)
+        if (next < 0) return false
+        setSelection(next, next + query.length)
+        requestFocus()
+        return true
+    }
+
+    fun replaceSelection(query: String, replacement: String): Boolean {
+        if (query.isEmpty()) return false
+        val start = selectionStart
+        val end = selectionEnd
+        if (start < 0 || end <= start || !text.subSequence(start, end).toString().equals(query, true)) {
+            return findNext(query)
+        }
+        text.replace(start, end, replacement)
+        setSelection((start + replacement.length).coerceAtMost(text.length))
+        return true
+    }
+
+    fun replaceAllMatches(query: String, replacement: String): Int {
+        if (query.isEmpty()) return 0
+        val source = text.toString()
+        var count = 0
+        var from = 0
+        val result = StringBuilder(source.length)
+        while (from < source.length) {
+            val hit = source.indexOf(query, from, ignoreCase = true)
+            if (hit < 0) break
+            result.append(source, from, hit).append(replacement)
+            from = hit + query.length
+            count++
+        }
+        if (count == 0) return 0
+        result.append(source, from, source.length)
+        val cursor = selectionStart.coerceAtLeast(0)
+        text.replace(0, text.length, result)
+        setSelection(cursor.coerceAtMost(text.length))
+        return count
+    }
+
+    fun goToLine(number: Int) {
+        val target = number.coerceAtLeast(1)
+        var line = 1
+        var offset = 0
+        while (offset < text.length && line < target) {
+            if (text[offset] == '\n') line++
+            offset++
+        }
+        setSelection(offset)
+        requestFocus()
     }
 
     override fun onDraw(canvas: Canvas) {

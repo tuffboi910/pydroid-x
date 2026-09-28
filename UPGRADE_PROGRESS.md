@@ -40,6 +40,12 @@ The older `b119229` checkout is untouched. This checklist tracks reconstructed w
 | Session restore, file history, deletion recovery | Not reconstructed or verified. |
 | Motion polish and final device QA | Partial base exists; keep restrained and avoid cursor animation, pill buttons, fake metrics, emoji icons, AI imagery/copy, and web-only work. |
 
+## Verified upgrade checkpoints
+
+- The editor, diagnostics, Console output coalescing, and atomic save checkpoint is backed up on `py4u/masterpiece-upgrade` and reviewed in draft PR #5.
+- GitHub Actions run 202 passed the Python suite, Android unit tests, and debug APK build. Physical-device behavior and frame timing remain unverified.
+- The next checkpoint adds in-file Find, Replace, Replace All, Go to Line, and keyboard Find/Replace shortcuts. Its Android CI run is pending.
+
 ## Current files changed
 
 - `app/src/main/java/com/pydroidx/app/LineBreakIndex.kt`

@@ -184,6 +184,7 @@ class IdeViewModel : ViewModel() {
     var input by mutableStateOf("")
     val inputHistory = ConsoleInputHistory()
     var runtimeVersion by mutableStateOf("Loading Python…")
+    var saveError by mutableStateOf<String?>(null)
     var consoleMode by mutableStateOf("Python")
     var aiPrompt by mutableStateOf("")
     val aiMessages = mutableStateListOf<AiMessage>()
@@ -764,12 +765,7 @@ class IdeViewModel : ViewModel() {
             val snapshot = code
             val fileName = currentFileName
             val directory = projectDir
-            launch(Dispatchers.IO) {
-                if (::projectDir.isInitialized) {
-                    File(directory,fileName).writeText(snapshot)
-                    mainHandler.post { refreshSaved() }
-                }
-            }
+            persistCode(directory, fileName, snapshot)
         }
     }
     fun saveAppearance() {
@@ -825,13 +821,17 @@ class IdeViewModel : ViewModel() {
     }
     fun save() {
         autosaveJob?.cancel()
-        val snapshot = code
-        val fileName = currentFileName
-        val directory = projectDir
-        viewModelScope.launch(Dispatchers.IO) {
-            if (::projectDir.isInitialized) {
-                File(directory,fileName).writeText(snapshot)
-                mainHandler.post { refreshSaved() }
+        if (::projectDir.isInitialized) persistCode(projectDir, currentFileName, code)
+    }
+    private fun persistCode(directory: File, fileName: String, snapshot: String) {
+        ProjectFileWriter.enqueue(File(directory, fileName), snapshot) { result ->
+            mainHandler.post {
+                if (result.isFailure) {
+                    saveError = "Couldn’t save $fileName: ${result.exceptionOrNull()?.message ?: "storage error"}"
+                } else if (::projectDir.isInitialized && projectDir == directory) {
+                    saveError = null
+                    refreshSaved()
+                }
             }
         }
     }
@@ -1192,6 +1192,12 @@ private fun AchievementNotice(
         val keyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
         Box(Modifier.fillMaxSize().background(bg)) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+            vm.saveError?.let { error ->
+                Text(error + " · Tap to retry", color=Color.White, fontSize=12.sp,
+                    modifier=Modifier.fillMaxWidth().background(Color(0xFF8B2835))
+                        .clickable { editorView?.flushCodeChange(); vm.save() }
+                        .padding(horizontal=12.dp, vertical=8.dp))
+            }
             if(vm.showHeader) {
                 BoxWithConstraints(
                     Modifier.fillMaxWidth().padding(horizontal=8.dp, vertical=6.dp)

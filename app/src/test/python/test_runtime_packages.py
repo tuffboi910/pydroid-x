@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).parents[2] / "main" / "python"))
 import runtime_packages
@@ -40,6 +41,45 @@ class FakeIndex:
 
 
 class RuntimePackageTests(unittest.TestCase):
+    def test_late_commit_failure_rolls_back_earlier_distribution(self):
+        def wheel(name, dependency=""):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w") as archive:
+                archive.writestr(name + "/__init__.py", "new")
+                archive.writestr(name + "-1.0.dist-info/METADATA",
+                                 "Name: %s\nVersion: 1.0\n%s" % (name, dependency))
+                archive.writestr(name + "-1.0.dist-info/WHEEL", "Root-Is-Purelib: true\n")
+            return buffer.getvalue()
+        wheels = {"py4usample": wheel("py4usample", "Requires-Dist: py4uoptional==1.0\n"),
+                  "py4uoptional": wheel("py4uoptional")}
+        class Index:
+            def __call__(self, url, timeout):
+                name = "py4uoptional" if "py4uoptional" in url else "py4usample"
+                data = wheels[name]
+                if url.startswith("https://pypi.org/"):
+                    filename = name + "-1.0-py3-none-any.whl"
+                    return io.BytesIO(json.dumps({"releases": {"1.0": [{
+                        "filename": filename, "packagetype": "bdist_wheel", "size": len(data),
+                        "url": "https://files.pythonhosted.org/" + filename,
+                        "digests": {"sha256": hashlib.sha256(data).hexdigest()}}]}}).encode())
+                return io.BytesIO(data)
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            previous = pathlib.Path(root) / "py4uoptional"
+            previous.mkdir()
+            (previous / "old.txt").write_text("previous")
+            real_replace = runtime_packages.os.replace
+            def fail_second(source, destination):
+                if destination == str(pathlib.Path(root) / "py4usample"):
+                    raise OSError("simulated late failure")
+                return real_replace(source, destination)
+            messages = []
+            with mock.patch.object(runtime_packages.os, "replace", side_effect=fail_second):
+                with self.assertRaisesRegex(OSError, "simulated late failure"):
+                    runtime_packages.install(["py4usample"], root, messages.append, Index())
+            self.assertEqual("previous", (previous / "old.txt").read_text())
+            self.assertFalse((pathlib.Path(root) / "py4usample").exists())
+            self.assertFalse(any(item.startswith("Installed") for item in messages))
+
     def test_pure_wheel_extra_installs_declared_optional_dependency(self):
         def make_wheel(name, metadata):
             buffer = io.BytesIO()

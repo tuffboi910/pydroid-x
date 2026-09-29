@@ -254,18 +254,24 @@ def install(requirements, root, output, opener=urllib.request.urlopen, cancelled
 
     for raw in requirements:
         resolve(raw, 0)
-    for name in order:
-        if cancelled():
-            raise InterruptedError("Package installation stopped")
-        version, data, contents, _ = planned[name]
-        stage = tempfile.mkdtemp(prefix=".install-", dir=root)
-        target = os.path.join(root, name)
-        backup = target + ".previous"
-        try:
+    stages = {}
+    backups = {}
+    committed = []
+    expanded_bytes = 0
+    try:
+        for name in order:
+            if cancelled():
+                raise InterruptedError("Package installation stopped")
+            version, data, contents, _ = planned[name]
+            stage = tempfile.mkdtemp(prefix=".install-", dir=root)
+            stages[name] = stage
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 for item, path in contents:
                     if cancelled():
                         raise InterruptedError("Package installation stopped")
+                    expanded_bytes += item.file_size
+                    if expanded_bytes > MAX_EXPANDED:
+                        raise ValueError("Package dependency contents exceed the size limit")
                     destination = os.path.join(stage, path)
                     os.makedirs(os.path.dirname(destination), exist_ok=True)
                     with archive.open(item) as source, open(destination, "wb") as sink:
@@ -276,22 +282,48 @@ def install(requirements, root, output, opener=urllib.request.urlopen, cancelled
                             if not chunk:
                                 break
                             sink.write(chunk)
-            if os.path.exists(backup):
-                shutil.rmtree(backup)
+
+        for name in order:
+            if cancelled():
+                raise InterruptedError("Package installation stopped")
+            target = os.path.join(root, name)
             if os.path.exists(target):
+                backup = tempfile.mkdtemp(prefix=".rollback-", dir=root)
+                os.rmdir(backup)
                 os.replace(target, backup)
-            try:
-                os.replace(stage, target)
-            except BaseException:
-                if os.path.exists(backup):
+                backups[name] = backup
+            os.replace(stages[name], target)
+            committed.append(name)
+    except BaseException as failure:
+        rollback_errors = []
+        for name in reversed(order):
+            target = os.path.join(root, name)
+            backup = backups.get(name)
+            if name in committed and os.path.exists(target):
+                try:
+                    shutil.rmtree(target)
+                except OSError as error:
+                    rollback_errors.append(error)
+                    continue
+            if backup and os.path.exists(backup):
+                try:
                     os.replace(backup, target)
-                raise
-            if os.path.exists(backup):
-                shutil.rmtree(backup)
-        finally:
+                except OSError as error:
+                    rollback_errors.append(error)
+        if rollback_errors:
+            raise RuntimeError("Package rollback failed; previous versions remain in hidden .rollback folders") from failure
+        raise
+    finally:
+        for stage in stages.values():
             if os.path.exists(stage):
-                shutil.rmtree(stage)
-        activate(root)
+                shutil.rmtree(stage, ignore_errors=True)
+
+    for backup in backups.values():
+        if os.path.exists(backup):
+            shutil.rmtree(backup, ignore_errors=True)
+    activate(root)
+    for name in order:
+        version = planned[name][0]
         installed.append("%s %s" % (name, version))
         output("Installed %s %s\n" % (name, version))
 

@@ -16,6 +16,41 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[28], application=Application::class)
 class ProjectFileWriterTest {
+    @Test fun projectEditRejectsStaleFileBeforeWritingAnyTarget() {
+        val root = Files.createTempDirectory("py4u-project-edit-").toFile()
+        val first = File(root, "first.py").apply { writeText("first\n") }
+        val second = File(root, "second.py").apply { writeText("changed\n") }
+        val finished = CountDownLatch(1)
+        var failed = false
+        ProjectFileWriter.applyProjectEdits(root, listOf(
+            ProjectEdit("first.py", "first\n", "FIRST\n"),
+            ProjectEdit("second.py", "old\n", "SECOND\n"))) {
+            failed = it.isFailure; finished.countDown()
+        }
+        assertTrue(finished.await(5, TimeUnit.SECONDS))
+        assertTrue(failed)
+        assertEquals("first\n", first.readText())
+        assertEquals("changed\n", second.readText())
+    }
+
+    @Test fun projectEditCheckpointsEverySelectedFile() {
+        val root = Files.createTempDirectory("py4u-project-edit-good-").toFile()
+        val first = File(root, "first.py").apply { writeText("first\n") }
+        val second = File(root, "second.py").apply { writeText("second\n") }
+        val finished = CountDownLatch(1)
+        var success = false
+        ProjectFileWriter.applyProjectEdits(root, listOf(
+            ProjectEdit("first.py", "first\n", "FIRST\n"),
+            ProjectEdit("second.py", "second\n", "SECOND\n"))) {
+            success = it.isSuccess; finished.countDown()
+        }
+        assertTrue(finished.await(5, TimeUnit.SECONDS))
+        assertTrue(success)
+        assertEquals("FIRST\n", first.readText())
+        assertEquals("SECOND\n", second.readText())
+        assertEquals("first\n", ProjectFileHistory.versions(first).first().readText())
+    }
+
     @Test fun latestUnsavedDraftSurvivesAndSavedContentClearsOnlyMatchingDraft() {
         val root = Files.createTempDirectory("py4u-draft-").toFile()
         val file = File(root, "nested/main.py").apply { parentFile.mkdirs(); writeText("saved") }

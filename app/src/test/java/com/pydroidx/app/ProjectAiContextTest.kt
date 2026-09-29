@@ -6,6 +6,20 @@ import org.junit.Test
 import java.nio.file.Files
 
 class ProjectAiContextTest {
+    @Test fun editableSourcesContainOnlyCompleteFilesWithinBudget() {
+        val root = Files.createTempDirectory("astro-editable").toFile()
+        try {
+            root.resolve("main.py").writeText("old")
+            root.resolve("small.py").writeText("small source")
+            root.resolve("large.py").writeText("x".repeat(9_000))
+            val sources = ProjectAiContext.editableSources(root, "main.py", "live buffer", maxCharacters=1_500)
+            assertTrue(sources["main.py"] == "live buffer")
+            assertTrue(sources["small.py"] == "small source")
+            assertFalse(sources.containsKey("large.py"))
+            assertTrue(ProjectAiContext.editableSources(root, "main.py", "x".repeat(2_000), 1_500).isEmpty())
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun explicitContextUsesLiveCurrentBufferAndBoundedNestedFiles() {
         val root = Files.createTempDirectory("astro-project").toFile()
         try {

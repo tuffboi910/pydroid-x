@@ -22,7 +22,8 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Astro project context is budgeted per file so a long active buffer does not crowd out the rest of the project; on-device models receive a smaller context based on their configured token window. Android CI passed.
 - Project-context replies are analysis-only in the IDE: fenced code from that mode cannot become an Apply action because the shared active file may be truncated. Current-file sharing retains guarded edit previews. Android CI passed.
 - Runtime package downloads and extraction check the existing Stop signal between bounded chunks and clean staging on cancellation. Android CI passed.
-- Unsaved editor snapshots are coalesced into an atomic on-disk draft journal outside visible project files. On project/file reopening after process recreation, a differing draft requires explicit Restore or Discard; a successful save removes only a matching draft. Backgrounding flushes editor changes even with autosave disabled. A Robolectric regression covers newer drafts surviving an older save. Android CI pending.
+- Unsaved editor snapshots are coalesced into an atomic on-disk draft journal outside visible project files. On project/file reopening after process recreation, a differing draft requires explicit Restore or Discard; a successful save removes only a matching draft. Backgrounding flushes editor changes even with autosave disabled. A Robolectric regression covers newer drafts surviving an older save. Android CI run 256 passed tests and debug APK packaging.
+- Astro project edits now use only complete, bounded, explicitly shared Python files. Responses must name exact shared paths with complete fenced replacements; a project preview selects individual hunks per file. The serialized writer verifies every on-disk source before writing, checkpoints all selected files, and rolls back earlier writes if a later write fails. Stale or unexpected paths fail closed. Android CI pending.
 
 ## Verification
 
@@ -39,7 +40,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 
 - The editor still needs tab pinning, persistence for recently closed recovery, folding/sticky context if justified, and more real-world IME testing. Find in Project scans nested Python files and caps results at 200. Project Problems scans nested Python files, caps at 300 files and 8 MB total, skips files above 1 MB, and requires an explicit scan. Failed writes still need on-disk recovery when storage becomes available; the in-memory pending text survives only while the process lives.
 - History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots. Drafts larger than 2 MB and unavailable storage need an explicit recovery/error path; the new draft journal needs Android CI and device process-death validation.
-- Astro still lacks constrained multi-file edit proposals and agent operations. Project context is read-only input.
+- Astro has constrained multi-file proposals, but lacks multi-step agent operations, cross-request planning, and device-tested provider output reliability.
 - Runtime installation currently supports compatible pure-Python wheels only; native Android wheels, package extras, and wheel script/data layouts need separate implementation. Dependency conflict resolution and upgrades of already imported modules need more work.
 - Full terminal cursor-motion/progress controls and interaction beyond the retained output window remain. Broader UI/motion polish, accessibility, and performance profiling remain.
 

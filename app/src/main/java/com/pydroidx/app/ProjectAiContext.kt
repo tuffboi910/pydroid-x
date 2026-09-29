@@ -4,6 +4,25 @@ import java.io.File
 
 /** Explicitly shared project sources. Call only on the AI worker thread. */
 internal object ProjectAiContext {
+    /** Only complete files may be offered for an apply-capable project edit. */
+    fun editableSources(root: File, currentPath: String, currentText: String,
+                        maxCharacters: Int = 18_000): Map<String, String> {
+        val budget = maxCharacters.coerceIn(1_500, 24_000)
+        val sources = linkedMapOf<String, String>()
+        if (currentText.length + currentPath.length + 32 > budget) return emptyMap()
+        sources[currentPath] = currentText
+        var used = currentText.length + currentPath.length + 32
+        for (file in ProjectWorkspace.pythonFiles(root, 300).sortedBy { it.path }) {
+            val path = ProjectWorkspace.relativePath(root, file) ?: continue
+            if (path == currentPath || sources.size >= 8 || file.length() > 8_000L) continue
+            val text = runCatching { file.readText(Charsets.UTF_8) }.getOrNull() ?: continue
+            if (used + text.length + path.length + 32 > budget) continue
+            sources[path] = text
+            used += text.length + path.length + 32
+        }
+        return sources
+    }
+
     fun build(root: File, currentPath: String, currentText: String,
               maxFiles: Int = 12, maxCharacters: Int = 24_000): String {
         val files = ProjectWorkspace.pythonFiles(root, maxFiles.coerceAtLeast(1) * 20)

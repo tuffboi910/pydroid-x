@@ -214,4 +214,46 @@ internal object ProjectFileWriter {
             })
         }
     }
+
+    /** All targets are checked before the first write; recovery points cover rollback failures. */
+    fun applyProjectEdits(root: File, edits: List<ProjectEdit>, complete: (Result<Unit>) -> Unit) {
+        executor.execute {
+            complete(runCatching {
+                if (edits.isEmpty() || edits.size > 8 || edits.map { it.path }.distinct().size != edits.size)
+                    throw IOException("Invalid project edit selection")
+                val targets = edits.map { edit ->
+                    val target = ProjectWorkspace.resolvePath(root, edit.path)
+                        ?.takeIf { it.isFile && it.extension.equals("py", true) }
+                        ?: throw IOException("File is no longer available: ${edit.path}")
+                    val bytes = AtomicFile(target).openRead().use { it.readBytes() }
+                    if (!bytes.contentEquals(edit.original.toByteArray(StandardCharsets.UTF_8)))
+                        throw IOException("File changed since Astro read it: ${edit.path}")
+                    target to bytes
+                }
+                targets.forEach { (file, original) -> ProjectFileHistory.recoveryPoint(file, original) }
+                val written = mutableListOf<Pair<File, ByteArray>>()
+                try {
+                    edits.zip(targets).forEach { (edit, target) ->
+                        val (file, original) = target
+                        writeAtomic(file, edit.proposed.toByteArray(StandardCharsets.UTF_8))
+                        written.add(file to original)
+                    }
+                } catch (failure: Throwable) {
+                    val rollbackErrors = written.reversed().mapNotNull { (file, original) ->
+                        runCatching { writeAtomic(file, original) }.exceptionOrNull()
+                    }
+                    if (rollbackErrors.isNotEmpty()) throw IOException(
+                        "Some edits could not be rolled back; restore them from History", failure)
+                    throw failure
+                }
+            })
+        }
+    }
+
+    private fun writeAtomic(file: File, bytes: ByteArray) {
+        val atomic = AtomicFile(file)
+        val stream = atomic.startWrite()
+        try { stream.write(bytes); atomic.finishWrite(stream) }
+        catch (error: Throwable) { atomic.failWrite(stream); throw error }
+    }
 }

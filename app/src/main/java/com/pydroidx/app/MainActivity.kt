@@ -232,6 +232,8 @@ class IdeViewModel : ViewModel() {
     var aiFallbackNotice by mutableStateOf<String?>(null)
     var aiProgress by mutableStateOf<String?>(null)
     var pendingCode by mutableStateOf<PendingCodeChange?>(null)
+    var pendingProjectEdits by mutableStateOf<List<ProjectEdit>>(emptyList())
+        private set
     var teachingOffer by mutableStateOf<String?>(null)
     var showCodeNotice by mutableStateOf(false)
     var showTeachingNotice by mutableStateOf(false)
@@ -849,6 +851,7 @@ class IdeViewModel : ViewModel() {
     fun askAi(testOnly: Boolean = false, preferredSlot: Int? = null) {
         if (aiBusy) return
         if (!testOnly) { showCodeNotice=false; showTeachingNotice=false }
+        if (!testOnly) pendingProjectEdits = emptyList()
         aiProgress=null
         var slots = configuredAiSlots()
         if (preferredSlot != null) slots = slots.filter { it.index == preferredSlot }
@@ -902,25 +905,25 @@ class IdeViewModel : ViewModel() {
         thread(name = "PY4U-AI") {
             val historySnapshot = if (!testOnly) aiMessages.dropLast(2).toList() else emptyList()
             val result = runCatching {
-                val projectContext = if (shareProjectSnapshot) ProjectAiContext.build(
-                    directorySnapshot, fileNameSnapshot, codeSnapshot) else null
-                val localProjectContext = if (shareProjectSnapshot && slots.any { it.provider == "On-device" }) {
-                    ProjectAiContext.build(directorySnapshot, fileNameSnapshot, codeSnapshot,
-                        maxCharacters=(localContextSize * 2).coerceIn(1_500, 8_000))
-                } else null
+                val projectSources = if (shareProjectSnapshot) ProjectAiContext.editableSources(
+                    directorySnapshot, fileNameSnapshot, codeSnapshot) else emptyMap()
+                val localSources = if (shareProjectSnapshot && slots.any { it.provider == "On-device" })
+                    ProjectAiContext.editableSources(directorySnapshot, fileNameSnapshot, codeSnapshot,
+                        maxCharacters=(localContextSize * 2).coerceIn(1_500, 8_000)) else emptyMap()
                 var lastFailure: Throwable? = null
                 slots.forEachIndexed { index, slot ->
                     try {
-                        val sharedContext = if (slot.provider == "On-device") localProjectContext else projectContext
-                        val providerQuestion = if (sharedContext != null) question +
-                            "\n\nExplicitly shared project Python sources (propose edits to the current file only):" + sharedContext else question
-                        val providerCode = if (shareCodeSnapshot && sharedContext == null) codeSnapshot else null
+                        val sharedSources = if (slot.provider == "On-device") localSources else projectSources
+                        val providerQuestion = if (sharedSources.isNotEmpty()) question +
+                            "\n\nComplete project sources shared for this request. To propose an edit, return each complete changed file as File: exact/path.py followed by a fenced python block. Never include omitted or partial files:\n" +
+                            sharedSources.entries.joinToString("\n") { (path, source) -> "File: $path\n```python\n$source\n```" } else question
+                        val providerCode = if (shareCodeSnapshot && sharedSources.isEmpty()) codeSnapshot else null
                         if (index > 0) viewModelScope.launch {
                             val message = "${slots[index-1].label} AI unavailable • switching to ${slot.label} AI"
                             aiProgress = message
                             if ((assistantReplyCount+1) % 3 == 0) aiFallbackNotice = message
                         }
-                        return@runCatching if (slot.provider == "On-device") LocalAiRuntime.chat(
+                        val response = if (slot.provider == "On-device") LocalAiRuntime.chat(
                             appContext, localModelForSlot(slot.index), providerQuestion,
                             providerCode, historySnapshot,
                             localContextSize, localThreads, localResponseTokens,
@@ -943,6 +946,7 @@ class IdeViewModel : ViewModel() {
                                 }
                             }
                         }
+                        return@runCatching response to sharedSources
                     } catch (failure: Throwable) {
                         lastFailure = failure
                     }
@@ -950,7 +954,8 @@ class IdeViewModel : ViewModel() {
                 throw lastFailure ?: IllegalStateException("No configured AI connection worked")
             }
             val succeeded = result.isSuccess
-            val answer = result.getOrElse { "AI error: ${it.message ?: "All three AI connections failed"}" }
+            val answer = result.getOrNull()?.first ?: "AI error: ${result.exceptionOrNull()?.message ?: "All three AI connections failed"}"
+            val sharedSources = result.getOrNull()?.second.orEmpty()
             viewModelScope.launch {
                 val cleanAnswer = answer.replace(Regex("\\s*\\[TEACH:[^]]+]",RegexOption.IGNORE_CASE),"").trimEnd()
                 if (testOnly) {
@@ -959,10 +964,12 @@ class IdeViewModel : ViewModel() {
                     if (aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex] = AiMessage(false,cleanAnswer)
                     if (succeeded) {
                         assistantReplyCount++
-                        extractPythonFile(answer)?.let { proposed ->
+                        if (shareProjectSnapshot && sharedSources.isNotEmpty()) {
+                            val edits = ProjectEditProposal.parse(answer, sharedSources)
+                            if (edits.isNotEmpty() && projectDir == directorySnapshot) pendingProjectEdits = edits
+                        } else extractPythonFile(answer)?.let { proposed ->
                             if (shareProjectSnapshot) {
-                                aiMessages.add(AiMessage(false,
-                                    "Project context is for analysis. Share only the current file when you want Astro to propose an edit."))
+                                aiMessages.add(AiMessage(false, "This file is too large for a complete project edit. Narrow the request or share the current file only."))
                             } else if (currentFileName == fileNameSnapshot && code == codeSnapshot) {
                                 pendingCode = PendingCodeChange(proposed, fileNameSnapshot, codeSnapshot)
                                 showCodeNotice = assistantReplyCount % 3 == 0
@@ -1017,6 +1024,46 @@ class IdeViewModel : ViewModel() {
         }
     }
     fun rejectPendingCode() { pendingCode = null; showCodeNotice=false }
+    fun rejectProjectEdits() { pendingProjectEdits = emptyList() }
+
+    fun applyProjectEdits(selected: Map<String, Set<Int>>) {
+        val pending = pendingProjectEdits
+        if (pending.isEmpty() || selected.keys.any { path -> pending.none { it.path == path } }) return
+        val edits = pending.mapNotNull { edit ->
+            val hunks = CodeHunks.between(edit.original, edit.proposed)
+            val chosen = selected[edit.path].orEmpty()
+            if (chosen.any { it !in hunks.indices }) return
+            if (chosen.isEmpty()) null else edit.copy(proposed=CodeHunks.apply(edit.original, hunks, chosen))
+        }
+        if (edits.isEmpty()) return
+        val directory = projectDir
+        if (edits.any { it.path == currentFileName && code != it.original }) {
+            aiMessages.add(AiMessage(false, "Current editor text changed. Review a new proposal before applying."))
+            pendingProjectEdits = emptyList()
+            return
+        }
+        ProjectFileWriter.applyProjectEdits(directory, edits) { result ->
+            mainHandler.post {
+                result.onSuccess {
+                    if (projectDir == directory) {
+                        edits.firstOrNull { it.path == currentFileName }?.let { edit ->
+                            if (code == edit.original) {
+                                code = edit.proposed
+                                codeDiagnostics = emptyList()
+                                unsavedTabs.remove(edit.path)
+                                editorRevision++
+                            }
+                        }
+                        if (projectProblems.isNotEmpty()) projectProblemsStale = true
+                        refreshSaved()
+                        refreshBrowserEntries()
+                    }
+                    pendingProjectEdits = emptyList()
+                    aiMessages.add(AiMessage(false, "Applied ${edits.size} reviewed file edit${if (edits.size == 1) "" else "s"}. Previous versions are in History."))
+                }.onFailure { aiMessages.add(AiMessage(false, "Project edit was not applied: ${it.message}")) }
+            }
+        }
+    }
     fun acceptTeaching() {
         val topic = teachingOffer ?: return
         teachingOffer = null
@@ -1188,6 +1235,7 @@ class IdeViewModel : ViewModel() {
         checkDraft(current)
         codeDiagnostics = emptyList()
         pendingCode = null
+        pendingProjectEdits = emptyList()
         shareCode = false
         shareProjectCode = false
         clearAttachment()
@@ -1919,6 +1967,7 @@ private fun AchievementNotice(
     }
     var showAiSettings by remember { mutableStateOf(false) }
     var showCodePreview by remember { mutableStateOf(false) }
+    var showProjectPreview by remember { mutableStateOf(false) }
     var showProblems by remember { mutableStateOf(false) }
     var selectedProblem by remember { mutableStateOf<CodeDiagnostic?>(null) }
     var selectedAiSlot by remember { mutableIntStateOf(0) }
@@ -2795,6 +2844,17 @@ private fun AchievementNotice(
                                 }
                             }
                         }
+                        if (vm.pendingProjectEdits.isNotEmpty()) {
+                            Surface(color=accent.copy(alpha=.10f),shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                border=BorderStroke(1.dp,accent.copy(alpha=.4f))) {
+                                Row(Modifier.fillMaxWidth().padding(9.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                    Text("Project edit ready · ${vm.pendingProjectEdits.size} files",color=Color.White,
+                                        modifier=Modifier.weight(1f),fontSize=12.sp)
+                                    TextButton(onClick={vm.rejectProjectEdits()}) { Text("Dismiss") }
+                                    Button(onClick={showProjectPreview=true}) { Text("Preview") }
+                                }
+                            }
+                        }
                         vm.teachingOffer?.let { topic ->
                             Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
                                 Text("Lesson: $topic",color=Color.LightGray,fontSize=11.sp,modifier=Modifier.weight(1f),maxLines=1)
@@ -3312,6 +3372,37 @@ private fun AchievementNotice(
                 }
             }) { Text("Go to code") }},
             dismissButton={TextButton(onClick={selectedProblem=null}) { Text("Close") }}
+        )
+    }
+    if(showProjectPreview) vm.pendingProjectEdits.takeIf { it.isNotEmpty() }?.let { edits ->
+        val selected = remember(edits) { mutableStateMapOf<String, Set<Int>>().apply {
+            edits.forEach { edit -> put(edit.path, CodeHunks.between(edit.original, edit.proposed).indices.toSet()) }
+        } }
+        AlertDialog(
+            onDismissRequest={showProjectPreview=false},containerColor=Color(0xFF171A20),
+            title={Text("Review project edits")},
+            text={Column(Modifier.heightIn(max=470.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                edits.forEach { edit ->
+                    Text(edit.path,color=accent,fontWeight=FontWeight.Bold)
+                    CodeHunks.between(edit.original, edit.proposed).forEachIndexed { index,hunk ->
+                        Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                            Checkbox(checked=index in selected[edit.path].orEmpty(),onCheckedChange={ checked ->
+                                selected[edit.path] = if (checked) selected[edit.path].orEmpty() + index
+                                    else selected[edit.path].orEmpty() - index
+                            })
+                            Text("Line ${hunk.from + 1}",color=Color.White)
+                        }
+                        Text(hunk.before.take(50).joinToString("\n").ifBlank { "(no lines)" },
+                            color=Color(0xFFFFC0C7),fontFamily=FontFamily.Monospace,fontSize=12.sp)
+                        Text(hunk.replacement.take(50).joinToString("\n").ifBlank { "(no lines)" },
+                            color=Color(0xFFB7F5D4),fontFamily=FontFamily.Monospace,fontSize=12.sp)
+                    }
+                }
+                Text("Files are checked for changes before any write. History keeps a recovery copy of every selected file.",color=Color.Gray,fontSize=11.sp)
+            }},
+            confirmButton={Button(enabled=selected.values.any { it.isNotEmpty() },
+                onClick={vm.applyProjectEdits(selected.toMap());showProjectPreview=false}) { Text("Apply selected") }},
+            dismissButton={TextButton(onClick={showProjectPreview=false}) { Text("Keep reviewing") }}
         )
     }
     if(showCodePreview) vm.pendingCode?.let { change ->

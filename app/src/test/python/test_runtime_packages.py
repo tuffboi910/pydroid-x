@@ -41,6 +41,21 @@ class FakeIndex:
 
 
 class RuntimePackageTests(unittest.TestCase):
+    def test_runtime_package_state_and_import_take_precedence_over_bundled_copy(self):
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            bundled = pathlib.Path(root) / "bundled-copy"
+            bundled.mkdir()
+            (bundled / "py4usample").mkdir()
+            (bundled / "py4usample" / "__init__.py").write_text("value = -1\n")
+            sys.path.insert(0, str(bundled))
+            try:
+                runtime_packages.install(["py4usample==1.0"], root, lambda _: None,
+                                         FakeIndex(wheel_bytes()))
+                self.assertEqual(42, importlib.import_module("py4usample").value)
+                self.assertIn(("py4usample", "1.0", "runtime"), runtime_packages.package_state(root))
+            finally:
+                sys.path.remove(str(bundled))
+
     def test_late_commit_failure_rolls_back_earlier_distribution(self):
         def wheel(name, dependency=""):
             buffer = io.BytesIO()

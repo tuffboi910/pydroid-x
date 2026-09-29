@@ -34,11 +34,37 @@ SUPPORTED_TAGS = {tag for tag in sys_tags() if tag.abi == "none" and tag.platfor
 def activate(root):
     if not os.path.isdir(root):
         return
-    for name in sorted(os.listdir(root)):
-        path = os.path.join(root, name)
-        if os.path.isdir(path) and not name.startswith(".") and path not in sys.path:
-            sys.path.append(path)
+    paths = [os.path.join(root, name) for name in sorted(os.listdir(root))
+             if not name.startswith(".") and os.path.isdir(os.path.join(root, name)) and
+             any(child.endswith(".dist-info") for child in os.listdir(os.path.join(root, name)))]
+    for path in paths:
+        while path in sys.path:
+            sys.path.remove(path)
+    # Keep the active project first, then user-installed wheels ahead of bundled versions.
+    first = bool(sys.path and os.path.realpath(sys.path[0]) == os.path.realpath(os.getcwd()))
+    sys.path[1 if first else 0:1 if first else 0] = paths
     importlib.invalidate_caches()
+
+
+def package_state(root):
+    activate(root)
+    private = set()
+    if os.path.isdir(root):
+        for name in os.listdir(root):
+            path = os.path.join(root, name)
+            if not name.startswith(".") and os.path.isdir(path):
+                private.update(canonicalize_name(d.metadata.get("Name", d.name))
+                               for d in importlib.metadata.distributions(path=[path]))
+    seen = set()
+    rows = []
+    for distribution in importlib.metadata.distributions():
+        name = distribution.metadata.get("Name", distribution.name)
+        normalized = canonicalize_name(name)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        rows.append((name, distribution.version, "runtime" if normalized in private else "bundled"))
+    return sorted(rows, key=lambda row: row[0].lower())
 
 
 def _download(url, maximum, opener, cancelled):

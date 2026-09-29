@@ -653,8 +653,8 @@ def run_terminal_command(command, project_dir, bridge):
             if not args: raise ValueError("Usage: touch FILE")
             open(project_path(args[0]), "a", encoding="utf-8").close()
         elif name == "packages" or (name == "pip" and (not args or args[0] == "list")):
-            rows = sorted((d.metadata.get("Name", d.name), d.version) for d in importlib.metadata.distributions())
-            out.write("Installed packages:\n" + "\n".join("%s %s" % row for row in rows) + "\n")
+            rows = runtime_packages.package_state(_package_root(root))
+            out.write("Installed packages:\n" + "\n".join("%s %s (%s)" % row for row in rows) + "\n")
         elif name in ("python", "py"):
             if not args:
                 out.write(sys.version + "\n")

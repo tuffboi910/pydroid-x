@@ -104,6 +104,34 @@ def outer(items):
         issue = json.loads(runner.diagnose(source))[0]
         self.assertEqual(source.index("not_defined"), issue["start"])
         self.assertEqual("not_defined", source[issue["start"]:issue["end"]])
+        self.assertEqual(len(source[:source.index("not_defined")].encode("utf-16-le")) // 2,
+                         issue["start_utf16"])
+
+    def test_project_diagnostics_use_live_buffer_and_report_file_line_severity(self):
+        with tempfile.TemporaryDirectory() as project:
+            pathlib.Path(project, "main.py").write_text("print(stale)\n", encoding="utf-8")
+            pathlib.Path(project, "helper.py").write_text(
+                "label = '🐍'\nprint(helper_missing)\n", encoding="utf-8")
+            results = json.loads(runner.diagnose_project(
+                "# live\nprint(buffer_missing)\n", "main.py", project))
+            self.assertEqual(
+                [("main.py", 2, "warning", "Undefined name: buffer_missing"),
+                 ("helper.py", 2, "warning", "Undefined name: helper_missing")],
+                [(item["file"], item["line"], item["severity"], item["message"])
+                 for item in results])
+            helper = next(item for item in results if item["file"] == "helper.py")
+            helper_source = "label = '🐍'\nprint(helper_missing)\n"
+            prefix = helper_source[:helper_source.index("helper_missing")]
+            self.assertEqual(len(prefix.encode("utf-16-le")) // 2, helper["start_utf16"])
+
+    def test_project_diagnostics_skip_non_python_and_oversized_files(self):
+        with tempfile.TemporaryDirectory() as project:
+            pathlib.Path(project, "notes.txt").write_text("print(missing)", encoding="utf-8")
+            pathlib.Path(project, "large.py").write_text("x" * 40, encoding="utf-8")
+            results = json.loads(runner.diagnose_project("print(ok)\n", "main.py", project,
+                                                        max_file_bytes=32))
+            self.assertEqual([("main.py", "Undefined name: ok")],
+                             [(item["file"], item["message"]) for item in results])
 
     def test_match_capture_is_defined(self):
         source = """

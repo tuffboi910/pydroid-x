@@ -284,6 +284,15 @@ class _UndefinedNameAnalyzer(ast.NodeVisitor):
 
 def diagnose(source):
     """Return syntax errors and conservative unresolved-name warnings with exact ranges."""
+    def utf16_offset(index):
+        return len(source[:max(0, index)].encode("utf-16-le")) // 2
+
+    def serialize(issues):
+        for issue in issues:
+            issue["start_utf16"] = utf16_offset(issue["start"])
+            issue["end_utf16"] = utf16_offset(issue["end"])
+        return json.dumps(issues)
+
     try:
         compile(source, "<editor>", "exec")
         tree = ast.parse(source)
@@ -292,7 +301,7 @@ def diagnose(source):
         line = max(1, exc.lineno or 1)
         start = sum(len(value) for value in lines[:line - 1]) + max(0, (exc.offset or 1) - 1)
         end = min(len(source), start + 1)
-        return json.dumps([{
+        return serialize([{
             "start": start,
             "end": end,
             "message": exc.msg,
@@ -312,7 +321,58 @@ def diagnose(source):
     for item in tree.body:
         analyzer.visit(item)
     issues.sort(key=lambda item: (item["start"], item["end"]))
-    return json.dumps(issues)
+    return serialize(issues)
+
+
+def diagnose_project(current_source, current_filename, project_dir, max_files=300,
+                     max_file_bytes=1_000_000, max_total_bytes=8_000_000):
+    """Diagnose bounded top-level Python files, using the live buffer for the active file."""
+    root = os.path.realpath(project_dir)
+    current_filename = os.path.basename(current_filename)
+    try:
+        names = sorted(name for name in os.listdir(root)
+                       if name.lower().endswith(".py")
+                       and os.path.isfile(os.path.join(root, name)))
+    except OSError:
+        names = []
+    if current_filename.lower().endswith(".py"):
+        names = [current_filename] + [name for name in names if name != current_filename]
+
+    results = []
+    total_bytes = 0
+    for name in names[:max(1, max_files)]:
+        path = os.path.join(root, name)
+        if name == current_filename:
+            source = current_source
+        else:
+            try:
+                size = os.path.getsize(path)
+                if size > max_file_bytes:
+                    continue
+                with open(path, "r", encoding="utf-8", errors="replace") as stream:
+                    source = stream.read(max_file_bytes + 1)
+            except (OSError, UnicodeError):
+                continue
+        encoded_size = len(source.encode("utf-8", errors="replace"))
+        if encoded_size > max_file_bytes or total_bytes + encoded_size > max_total_bytes:
+            continue
+        total_bytes += encoded_size
+        for issue in json.loads(diagnose(source)):
+            start = issue["start"]
+            line = source.count("\n", 0, start) + 1
+            lines = source.splitlines()
+            preview = lines[line - 1].strip()[:160] if line <= len(lines) else ""
+            results.append({
+                "file": name,
+                "line": line,
+                "severity": "error" if issue.get("fatal") else "warning",
+                "message": issue["message"],
+                "preview": preview,
+                "start_utf16": issue["start_utf16"],
+                "end_utf16": issue["end_utf16"],
+                "fatal": issue.get("fatal", False),
+            })
+    return json.dumps(results)
 
 
 def complete(source, cursor, project_dir):

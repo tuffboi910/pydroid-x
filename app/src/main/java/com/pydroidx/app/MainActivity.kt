@@ -127,6 +127,10 @@ data class RuntimeIssue(
     val hint: String, val details: String, val fileName: String,
     val replaceFrom: String = "", val replaceTo: String = ""
 )
+internal data class ProjectProblem(
+    val fileName: String, val line: Int, val severity: String, val message: String,
+    val preview: String, val start: Int, val end: Int, val fatal: Boolean
+)
 data class SavedCode(val name: String, val modified: Long, val fileName: String)
 data class PendingCodeChange(val code: String, val fileName: String, val sourceSnapshot: String)
 
@@ -190,6 +194,14 @@ class IdeViewModel : ViewModel() {
     var output by mutableStateOf("")
     var running by mutableStateOf(false)
     var codeDiagnostics by mutableStateOf<List<CodeDiagnostic>>(emptyList())
+    internal var projectProblems by mutableStateOf<List<ProjectProblem>>(emptyList())
+        private set
+    internal var scanningProjectProblems by mutableStateOf(false)
+        private set
+    internal var projectProblemsStale by mutableStateOf(false)
+        private set
+    internal var projectProblemsError by mutableStateOf<String?>(null)
+        private set
     var runtimeIssue by mutableStateOf<RuntimeIssue?>(null)
     var waitingInput by mutableStateOf(false)
     var input by mutableStateOf("")
@@ -699,6 +711,11 @@ class IdeViewModel : ViewModel() {
         1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS, LinkedBlockingQueue()
     )
     private var completionTask: java.util.concurrent.Future<*>? = null
+    private val projectDiagnosticsWorker = java.util.concurrent.ThreadPoolExecutor(
+        1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS, LinkedBlockingQueue()
+    )
+    private var projectDiagnosticsTask: java.util.concurrent.Future<*>? = null
+    private var projectDiagnosticsGeneration = 0L
     fun requestCompletion(source: String, cursor: Int, deliver: (CompletionResult) -> Unit) {
         if (!autocomplete || !::projectDir.isInitialized) { deliver(CompletionResult(emptyList())); return }
         completionTask?.cancel(false)
@@ -727,7 +744,8 @@ class IdeViewModel : ViewModel() {
                 val values = JSONArray(raw)
                 (0 until values.length()).map { index ->
                     values.getJSONObject(index).let {
-                        CodeDiagnostic(it.getInt("start"), it.getInt("end"), it.optString("message"), it.optBoolean("fatal", false))
+                    CodeDiagnostic(it.optInt("start_utf16", it.getInt("start")),
+                        it.optInt("end_utf16", it.getInt("end")), it.optString("message"), it.optBoolean("fatal", false))
                     }
                 }
             }.getOrDefault(emptyList())
@@ -735,6 +753,46 @@ class IdeViewModel : ViewModel() {
                 if (code == source) codeDiagnostics = diagnostics
             }
             deliver(diagnostics)
+        }
+    }
+    internal fun scanProjectProblems() {
+        if (!::projectDir.isInitialized) return
+        val source = code
+        val fileName = currentFileName
+        val directory = projectDir
+        val generation = ++projectDiagnosticsGeneration
+        scanningProjectProblems = true
+        if (projectProblems.isNotEmpty()) projectProblemsStale = true
+        projectProblemsError = null
+        projectDiagnosticsTask?.cancel(false)
+        projectDiagnosticsWorker.purge()
+        projectDiagnosticsTask = projectDiagnosticsWorker.submit {
+            val result = runCatching {
+                val raw = Python.getInstance().getModule("runner")
+                    .callAttr("diagnose_project", source, fileName, directory.absolutePath).toString()
+                val values = JSONArray(raw)
+                (0 until values.length()).map { index ->
+                    values.getJSONObject(index).let { item ->
+                        ProjectProblem(item.optString("file"), item.optInt("line", 1),
+                            item.optString("severity", "warning"), item.optString("message"),
+                            item.optString("preview"), item.optInt("start_utf16"),
+                            item.optInt("end_utf16"), item.optBoolean("fatal", false))
+                    }
+                }
+            }
+            viewModelScope.launch {
+                if (generation != projectDiagnosticsGeneration) return@launch
+                scanningProjectProblems = false
+                if (projectDir == directory && currentFileName == fileName && code == source) {
+                    result.onSuccess { projectProblems = it; projectProblemsStale = false }
+                        .onFailure {
+                            projectProblemsError = "Couldn’t scan project: ${it.message}"
+                            projectProblemsStale = projectProblems.isNotEmpty()
+                        }
+                } else {
+                    projectProblemsStale = true
+                }
+            }
         }
     }
     private fun refreshProjects() {
@@ -777,6 +835,12 @@ class IdeViewModel : ViewModel() {
         val targetDir = File(projectsRoot,safeName)
         if (!targetDir.exists() || !targetDir.isDirectory || targetDir.parentFile != projectsRoot) return
         if (targetDir == projectDir) return
+        projectDiagnosticsGeneration++
+        projectDiagnosticsTask?.cancel(false)
+        projectProblems = emptyList()
+        scanningProjectProblems = false
+        projectProblemsStale = false
+        projectProblemsError = null
         rememberEditorLocation()
         save()
         autosaveJob?.cancel()
@@ -879,6 +943,7 @@ class IdeViewModel : ViewModel() {
         while(file.exists()) file=File(projectDir,"untitled_${++number}.py")
         file.writeText("")
         currentFileName=file.name
+        projectProblemsStale = projectProblems.isNotEmpty()
         addOpenTab(file.name)
         code=""
         codeDiagnostics=emptyList()
@@ -931,6 +996,7 @@ class IdeViewModel : ViewModel() {
         rememberEditorLocation()
         save()
         currentFileName=file.name
+        projectProblemsStale = projectProblems.isNotEmpty()
         addOpenTab(file.name)
         code=readProjectText(file)
         codeDiagnostics=emptyList()
@@ -945,6 +1011,7 @@ class IdeViewModel : ViewModel() {
 
     fun updateCode(value: String) {
         code = value
+        if (projectProblems.isNotEmpty()) projectProblemsStale = true
         if (currentFileName !in unsavedTabs) unsavedTabs.add(currentFileName)
         codeDiagnostics = emptyList()
         if (currentFileName.startsWith("untitled_") && value.trim().length >= 8) {
@@ -1120,6 +1187,7 @@ class IdeViewModel : ViewModel() {
             rememberEditorLocation()
             save()
             currentFileName = file.name
+            projectProblemsStale = projectProblems.isNotEmpty()
             addOpenTab(file.name)
             code = readProjectText(file)
             codeDiagnostics = emptyList()
@@ -1217,6 +1285,9 @@ class IdeViewModel : ViewModel() {
         mainHandler.removeCallbacks(savedRefreshRunnable)
         completionTask?.cancel(true)
         completionWorker.shutdownNow()
+        projectDiagnosticsGeneration++
+        projectDiagnosticsTask?.cancel(true)
+        projectDiagnosticsWorker.shutdownNow()
         stopRequested = true
         stdin.offer(stopInputSignal)
         super.onCleared()
@@ -1757,16 +1828,18 @@ private fun AchievementNotice(
                                 Spacer(Modifier.width(9.dp))
                                 Text(vm.currentFileName,color=Color.White,fontSize=14.sp,fontWeight=FontWeight.SemiBold,
                                     maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.weight(1f,fill=false).widthIn(max=112.dp))
-                                if (vm.codeDiagnostics.isNotEmpty()) {
-                                    TextButton(
-                                        onClick={showProblems=true},
-                                        contentPadding=PaddingValues(horizontal=4.dp),
-                                        modifier=Modifier.height(34.dp)
-                                    ) {
-                                        IdeGlyph("Problems",Color(0xFFFF7B86),Modifier.size(17.dp))
-                                        Spacer(Modifier.width(3.dp))
-                                        Text(vm.codeDiagnostics.size.toString(),color=Color(0xFFFF9AA3),fontSize=10.sp)
-                                    }
+                                TextButton(
+                                    onClick={showProblems=true;vm.scanProjectProblems()},
+                                    contentPadding=PaddingValues(horizontal=4.dp),
+                                    modifier=Modifier.height(34.dp)
+                                ) {
+                                    IdeGlyph("Problems",Color(0xFFFF7B86),Modifier.size(17.dp))
+                                    Spacer(Modifier.width(3.dp))
+                                    val projectIssueCount = vm.codeDiagnostics.size +
+                                        if (!vm.projectProblemsStale && !vm.scanningProjectProblems) {
+                                            vm.projectProblems.count { it.fileName != vm.currentFileName }
+                                        } else 0
+                                    Text(projectIssueCount.toString(),color=Color(0xFFFF9AA3),fontSize=10.sp)
                                 }
                             Spacer(Modifier.width(7.dp))
                             Box(Modifier.size(6.dp).background(Color(0xFF8AB4F8),androidx.compose.foundation.shape.CircleShape))
@@ -2624,14 +2697,44 @@ private fun AchievementNotice(
     )
     if(showProblems) AlertDialog(
         onDismissRequest={showProblems=false},containerColor=Color(0xFF171A20),
-        title={Text("Problems · ${vm.currentFileName}")},
+        title={Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+            Text("Problems",modifier=Modifier.weight(1f))
+            TextButton(enabled=!vm.scanningProjectProblems,onClick=vm::scanProjectProblems) {
+                Text(if(vm.scanningProjectProblems) "Scanning…" else "Scan project",fontSize=11.sp)
+            }
+        }},
         text={Column(Modifier.heightIn(max=450.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("${vm.currentFileName} · current buffer",color=Color(0xFF8FD6FF),fontSize=12.sp,fontWeight=FontWeight.SemiBold)
             if (vm.codeDiagnostics.isEmpty()) Text("No problems in this file.",color=Color.LightGray)
             vm.codeDiagnostics.forEach { issue ->
                 TextButton(onClick={showProblems=false;selectedProblem=issue},modifier=Modifier.fillMaxWidth()) {
                     Column(Modifier.fillMaxWidth()) {
                         Text("Line ${issueLineNumber(vm.code,issue.start)} · ${issue.message}",color=if(issue.fatal) Color(0xFFFF9AA3) else Color(0xFFFFC88A),fontSize=13.sp)
                         Text(issueLineText(vm.code,issue.start).trim().take(120),color=Color.LightGray,fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=1)
+                    }
+                }
+            }
+            HorizontalDivider(color=Color.White.copy(alpha=.12f))
+            Text("Other project files",color=Color(0xFF8FD6FF),fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+            when {
+                vm.scanningProjectProblems -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                vm.projectProblemsError != null -> Text(vm.projectProblemsError.orEmpty(),color=Color(0xFFFF9AA3),fontSize=12.sp)
+                vm.projectProblemsStale -> Text("The project changed since this scan. Scan again for current results.",color=Color(0xFFFFC88A),fontSize=12.sp)
+                vm.projectProblems.isEmpty() -> Text("No problems found outside this file.",color=Color.LightGray)
+            }
+            vm.projectProblems.filter { !vm.projectProblemsStale && it.fileName != vm.currentFileName }.forEach { issue ->
+                TextButton(enabled=!vm.running,onClick={
+                    if (vm.openProjectFile(issue.fileName)) {
+                        pendingSearchLine=issue.line
+                        showProblems=false
+                        scope.launch{pager.animateScrollToPage(1)}
+                    }
+                },modifier=Modifier.fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text("${issue.fileName}:${issue.line} · ${issue.severity} · ${issue.message}",
+                            color=if(issue.fatal) Color(0xFFFF9AA3) else Color(0xFFFFC88A),fontSize=12.sp)
+                        if (issue.preview.isNotBlank()) Text(issue.preview,color=Color.LightGray,
+                            fontFamily=FontFamily.Monospace,fontSize=11.sp,maxLines=1)
                     }
                 }
             }

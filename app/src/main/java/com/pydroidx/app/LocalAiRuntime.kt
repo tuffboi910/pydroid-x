@@ -78,7 +78,7 @@ object LocalAiRuntime {
             loadedPath = path
             loadedContext = contextSize
             loadedThreads = threads
-            engine.setSystemPrompt("You are Astro, a helpful Python coding assistant. Give accurate, concise answers. When asked to change code, include a complete python fenced code block for the proposed file.")
+            engine.setSystemPrompt("You are Astro, a helpful Python coding assistant. Give accurate, concise answers. For a single file, include its complete fenced python content. For explicitly shared project files, head each changed file with File: exact/path.py and include its complete fenced python content. Only propose changes to files fully provided in the request.")
         }
         val message = buildString {
             history.takeLast(8).forEach { append(if (it.fromUser) "User: " else "Assistant: ").append(it.text.take(4000)).append("\n") }

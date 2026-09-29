@@ -316,6 +316,19 @@ class IdeViewModel : ViewModel() {
     private var autosaveJob: Job? = null
     private var namingJob: Job? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile private var aiPartialText: String? = null
+    private val aiPartialScheduled = AtomicBoolean(false)
+    private val aiPartialRunnable = Runnable {
+        aiPartialScheduled.set(false)
+        val partial = aiPartialText
+        if (partial != null && aiBusy && aiMessages.isNotEmpty()) {
+            aiMessages[aiMessages.lastIndex] = AiMessage(false, partial)
+        }
+    }
+    private fun showAiPartial(partial: String) {
+        aiPartialText = partial
+        if (aiPartialScheduled.compareAndSet(false, true)) mainHandler.postDelayed(aiPartialRunnable, 32)
+    }
     private val savedRefreshRunnable = Runnable { refreshSaved() }
     private var savedRefreshGeneration = 0L
     private var browserRefreshGeneration = 0L
@@ -928,7 +941,7 @@ class IdeViewModel : ViewModel() {
                             providerCode, historySnapshot,
                             localContextSize, localThreads, localResponseTokens,
                             onStatus={ status -> viewModelScope.launch { aiProgress="${slot.label}: $status" } },
-                            onPartial={ partial -> viewModelScope.launch { if (!testOnly && aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex] = AiMessage(false, partial) } }
+                            onPartial={ partial -> if (!testOnly) showAiPartial(partial) }
                         ) else AiClient.chat(
                             providerSetting=slot.provider,
                             endpoint=slot.endpoint,
@@ -939,13 +952,7 @@ class IdeViewModel : ViewModel() {
                             history=historySnapshot,
                             revealDelayMs=if (typingAnimation) (animationDuration / 6.7f).toLong().coerceIn(4L, 120L) else 0L,
                             onStatus={ status -> viewModelScope.launch { aiProgress="${slot.label}: $status" } }
-                        ) { partial ->
-                            viewModelScope.launch {
-                                if (!testOnly && aiMessages.isNotEmpty()) {
-                                    aiMessages[aiMessages.lastIndex] = AiMessage(false, partial)
-                                }
-                            }
-                        }
+                        ) { partial -> if (!testOnly) showAiPartial(partial) }
                         return@runCatching response to sharedSources
                     } catch (failure: Throwable) {
                         lastFailure = failure
@@ -957,6 +964,9 @@ class IdeViewModel : ViewModel() {
             val answer = result.getOrNull()?.first ?: "AI error: ${result.exceptionOrNull()?.message ?: "All three AI connections failed"}"
             val sharedSources = result.getOrNull()?.second.orEmpty()
             viewModelScope.launch {
+                aiPartialText = null
+                mainHandler.removeCallbacks(aiPartialRunnable)
+                aiPartialScheduled.set(false)
                 val cleanAnswer = answer.replace(Regex("\\s*\\[TEACH:[^]]+]",RegexOption.IGNORE_CASE),"").trimEnd()
                 if (testOnly) {
                     aiTestStatus = cleanAnswer

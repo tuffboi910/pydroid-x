@@ -284,6 +284,7 @@ class IdeViewModel : ViewModel() {
     private var autosaveJob: Job? = null
     private var namingJob: Job? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val savedRefreshRunnable = Runnable { refreshSaved() }
     private val outputBuffer = ConsoleOutputBuffer()
     private val outputFlushScheduled = AtomicBoolean(false)
     private val outputFlushRunnable = Runnable {
@@ -744,6 +745,7 @@ class IdeViewModel : ViewModel() {
 
     private fun refreshSaved() {
         if (!::projectDir.isInitialized) return
+        mainHandler.removeCallbacks(savedRefreshRunnable)
         val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }
             ?.sortedByDescending { it.lastModified() }.orEmpty()
         savedCodes.clear()
@@ -1033,7 +1035,13 @@ class IdeViewModel : ViewModel() {
                     saveError = "Couldn’t save $fileName: ${result.exceptionOrNull()?.message ?: "storage error"}"
                 } else if (::projectDir.isInitialized && projectDir == directory) {
                     saveError = null
-                    refreshSaved()
+                    // Autosave can complete repeatedly while typing. Refresh the
+                    // modified-time list after the burst, not on every small save.
+                    if (savedCodes.none { it.fileName == fileName }) refreshSaved()
+                    else {
+                        mainHandler.removeCallbacks(savedRefreshRunnable)
+                        mainHandler.postDelayed(savedRefreshRunnable, 700)
+                    }
                 }
             }
         }
@@ -1180,6 +1188,7 @@ class IdeViewModel : ViewModel() {
     }
 
     override fun onCleared() {
+        mainHandler.removeCallbacks(savedRefreshRunnable)
         completionTask?.cancel(true)
         completionWorker.shutdownNow()
         stopRequested = true

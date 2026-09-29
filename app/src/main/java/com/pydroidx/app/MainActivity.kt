@@ -845,8 +845,22 @@ class IdeViewModel : ViewModel() {
             .putString("selected_$currentProjectName",currentFileName).apply()
         ProjectFileWriter.rename(old, target) { result ->
             mainHandler.post {
-                if (result.isFailure) saveError = result.exceptionOrNull()?.message
-                else if (currentFileName == target.name && code == snapshot &&
+                if (result.isFailure) {
+                    saveError = "Couldn’t rename ${old.name}: ${result.exceptionOrNull()?.message}"
+                    if (projectDir == old.parentFile && currentFileName == target.name && old.isFile) {
+                        // The original remains authoritative if the move failed. A newer
+                        // save queued under the proposed name may also exist; retain it.
+                        currentFileName = old.name
+                        val changedTab = openTabs.indexOf(target.name)
+                        if (changedTab >= 0) openTabs[changedTab] = old.name
+                        if (unsavedTabs.remove(target.name)) unsavedTabs.add(old.name)
+                        persistTabs()
+                        settings.edit().putString("current_file",old.name)
+                            .putString("selected_$currentProjectName",old.name).apply()
+                        editorRevision++
+                        save()
+                    }
+                } else if (currentFileName == target.name && code == snapshot &&
                     pendingDocumentWrites.read(target) == null) unsavedTabs.remove(target.name)
                 if (::projectDir.isInitialized && projectDir == target.parentFile) refreshSaved()
             }

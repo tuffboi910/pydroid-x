@@ -49,6 +49,22 @@ class ProjectFileWriterTest {
         assertTrue(!original.exists())
     }
 
+    @Test fun failedRenameLeavesBothExistingFilesUntouched() {
+        val dir = Files.createTempDirectory("py4u-rename-conflict-").toFile()
+        val original = File(dir, "untitled_1.py").apply { writeText("original") }
+        val target = File(dir, "script.py").apply { writeText("existing") }
+        val finished = CountDownLatch(1)
+        var failed = false
+        ProjectFileWriter.rename(original, target) { result ->
+            failed = result.isFailure
+            finished.countDown()
+        }
+        assertTrue(finished.await(5, TimeUnit.SECONDS))
+        assertTrue(failed)
+        assertEquals("original", original.readText())
+        assertEquals("existing", target.readText())
+    }
+
     @Test fun renameCarriesExistingHistory() {
         val dir = Files.createTempDirectory("py4u-rename-history-").toFile()
         val source = File(dir, "untitled_1.py").apply { writeText("old") }

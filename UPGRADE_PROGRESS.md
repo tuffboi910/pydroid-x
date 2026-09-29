@@ -6,7 +6,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 
 - Editor: reduced typing allocations and model sync, incremental line index, worker syntax tokenization, visible-area color spans, smart typed pairs and Backspace, indentation and comment actions, in-file Find/Replace/Replace All/Go to Line, current-file Problems navigation, per-file selection/scroll restoration, and hardware shortcuts for Save, Run, Find, Replace, Undo, Redo, Quick Open, and Command Palette.
 - Console: coalesced output before UI dispatch, bounded live text layout, retained output Copy and bounded Search, selectable visible text, autoscroll control, and project-file traceback navigation. Python modules imported from one project are removed from the module cache after its run.
-- Data safety: serialized atomic writes across activity recreation, ordered automatic file rename, save on Android backgrounding, bounded local file history, deliberate restore preview, and recovery points before Astro edits/restores. Queued or failed save text stays in memory so rapid file switches read the newest version.
+- Data safety: serialized atomic writes across activity recreation, ordered automatic file rename with state rollback on failure, save on Android backgrounding, bounded local file history, deliberate restore preview, and recovery points before Astro edits/restores. Queued or failed save text stays in memory so rapid file switches read the newest version.
 - Projects: runnable Blank, Hello World, CLI, Calculator, Automation, Guessing Game, and CSV Data starters. Five nontrivial scripts passed local parse and execution checks.
 - Astro: editor-selection question handoff; bounded project names, diagnostics, and recent Console context only when code sharing is enabled; existing preview/Accept/Reject flow retained.
 - Navigation: searchable command palette, Quick Open, bounded background Find in Project with direct file/line navigation, and a horizontal open-file tab strip with close and Ctrl+W. Open tabs and selected file persist per project.
@@ -15,7 +15,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 
 - Host Python analyzer/runtime suite: 22 tests pass with declared Jedi 0.19.2 installed.
 - Android CI runs 202–206 and 208–211 passed unit tests and debug APK packaging. Run 207 exposed a mistaken Unicode-tail test assertion; the assertion was corrected and run 208 passed.
-- Runs 212 (Astro context) and 213 (project starters) passed. Run 214 caught a Kotlin scope error in history preview; run 215 carried the same error. The corrected run 230 passed. Project-search run 231 and queued-save run 232 passed Android tests and APK packaging. Run 233 caught a visibility error in editor-location API; its correction is included in the next tab checkpoint and awaits CI.
+- Runs 212 (Astro context) and 213 (project starters) passed. Run 214 caught a Kotlin scope error in history preview; run 215 carried the same error. The corrected run 230 passed. Project-search run 231 and queued-save run 232 passed Android tests and APK packaging. Run 233 caught a visibility error in editor-location API; corrected tab run 234 passed. Console run 235 is in progress at this checkpoint.
 - Git diff checks and clean local status were verified at each checkpoint. No physical Android device or emulator was attached to this Work environment.
 
 ## Incomplete or unverified

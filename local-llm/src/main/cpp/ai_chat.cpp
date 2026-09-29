@@ -329,7 +329,7 @@ static int decode_tokens_in_batches(
         const llama_tokens &tokens,
         const bool compute_last_logit = false) {
     // Process tokens in batches using the global batch
-    LOGd("%s: Decode %d tokens starting at position %d", __func__, (int) tokens.size(), start_pos);
+    LOGd("%s: Decode %d tokens starting at position %d", __func__, (int) tokens.size(), current_position);
     for (int i = 0; i < (int) tokens.size();) {
         int room = context_limit() - current_position;
         if (room <= 0) {

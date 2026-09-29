@@ -93,6 +93,8 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.text.KeyboardOptions
@@ -284,6 +286,7 @@ class IdeViewModel : ViewModel() {
     var motionStyle by mutableStateOf("Aurora glide")
     var motionIntensity by mutableFloatStateOf(0.7f)
     var motionEnabled by mutableStateOf(true)
+    var hapticsEnabled by mutableStateOf(true)
     var settingsQuery by mutableStateOf("")
     var customFontPath by mutableStateOf("")
     var fontStatus by mutableStateOf("100-font vault ready")
@@ -775,6 +778,7 @@ class IdeViewModel : ViewModel() {
         motionStyle = settings.getString("motion_style", "Aurora glide") ?: "Aurora glide"
         motionIntensity = settings.getFloat("motion_intensity", 0.7f)
         motionEnabled = settings.getBoolean("motion_enabled", true)
+        hapticsEnabled = settings.getBoolean("haptics_enabled", true)
         customFontPath = settings.getString("custom_font_path", "") ?: ""
         editorTextHex=settings.getString("editor_text_hex","#D4D4D4")?:"#D4D4D4"
         commentHex=settings.getString("comment_hex","#6A9955")?:"#6A9955"
@@ -1502,6 +1506,7 @@ class IdeViewModel : ViewModel() {
         settings.edit().putBoolean("line_numbers",lineNumbers).putBoolean("current_line",highlightCurrentLine).apply()
         settings.edit().putString("accent_hex",accentHex).putString("background_hex",backgroundHex)
             .putString("motion_style",motionStyle)
+            .putBoolean("haptics_enabled",hapticsEnabled)
             .putFloat("motion_intensity",motionIntensity).putBoolean("motion_enabled",motionEnabled).apply()
         settings.edit().putString("custom_font_path",customFontPath).apply()
         settings.edit().putString("editor_text_hex",editorTextHex).putString("comment_hex",commentHex)
@@ -1966,6 +1971,7 @@ private fun AchievementNotice(
     val pager = rememberPagerState(pageCount = { 5 })
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val aiScroll = rememberScrollState()
     val consoleScroll = rememberScrollState()
     var consoleAutoScroll by remember { mutableStateOf(true) }
@@ -2212,7 +2218,7 @@ private fun AchievementNotice(
                         }
                         if(pager.currentPage==1) {
                             Button(
-                                onClick={editorView?.flushCodeChange();if(vm.running) vm.stop() else {
+                                onClick={editorView?.flushCodeChange();if(vm.hapticsEnabled) haptic.performHapticFeedback(HapticFeedbackType.LongPress);if(vm.running) vm.stop() else {
                                     runOrigin=headerRunOrigin;runBurst++; vm.run(); scope.launch{pager.animateScrollToPage(2)}
                                 }},
                                 colors=ButtonDefaults.buttonColors(
@@ -2683,7 +2689,7 @@ private fun AchievementNotice(
                             }
                             Spacer(Modifier.width(6.dp))
                             Button(
-                                onClick={editorView?.flushCodeChange();if(vm.running) vm.stop() else {runOrigin=consoleRunOrigin;runBurst++;vm.run()}},
+                                onClick={editorView?.flushCodeChange();if(vm.hapticsEnabled) haptic.performHapticFeedback(HapticFeedbackType.LongPress);if(vm.running) vm.stop() else {runOrigin=consoleRunOrigin;runBurst++;vm.run()}},
                                 colors=ButtonDefaults.buttonColors(containerColor=Color.White,contentColor=Color.Black),
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
                                 contentPadding=PaddingValues(horizontal=18.dp,vertical=10.dp),
@@ -3201,9 +3207,10 @@ private fun AchievementNotice(
                             }}
                         }
                         }
-                        if(settingsSection=="System" || searchMatches("system","programming toolbar","page indicator","runtime","python")){
+                        if(settingsSection=="System" || searchMatches("system","programming toolbar","page indicator","runtime","python","haptics","vibration")){
                         SettingSwitch("Programming toolbar",vm.showToolbar){vm.showToolbar=it;vm.saveAppearance()}
                         SettingSwitch("Page indicator dots",vm.showPageDots){vm.showPageDots=it;vm.saveAppearance()}
+                        SettingSwitch("Action haptics",vm.hapticsEnabled){vm.hapticsEnabled=it;vm.saveAppearance()}
                         HorizontalDivider(color=Color(0xFF202020))
                         Text("Swipe left or right anywhere outside active text editing to move between pages.",color=Color.Gray,fontSize=12.sp)
                         Text("Python  ${vm.runtimeVersion.substringBefore('\n')}",color=Color.Gray,fontSize=11.sp)
@@ -3531,7 +3538,7 @@ private fun AchievementNotice(
                 Text("Files are checked for changes before any write. History keeps a recovery copy of every selected file.",color=Color.Gray,fontSize=11.sp)
             }},
             confirmButton={Button(enabled=selected.values.any { it.isNotEmpty() },
-                onClick={vm.applyProjectEdits(selected.toMap());showProjectPreview=false}) { Text("Apply selected") }},
+                onClick={if(vm.hapticsEnabled) haptic.performHapticFeedback(HapticFeedbackType.LongPress);vm.applyProjectEdits(selected.toMap());showProjectPreview=false}) { Text("Apply selected") }},
             dismissButton={TextButton(onClick={showProjectPreview=false}) { Text("Keep reviewing") }}
         )
     }
@@ -3559,7 +3566,7 @@ private fun AchievementNotice(
                 }
                 Text("Your file stays untouched until you apply the selected changes.",color=Color.Gray,fontSize=10.sp)
             }},
-            confirmButton={Button(enabled=selected.isNotEmpty(),onClick={vm.applyPendingCode(selected.toSet());showCodePreview=false}) { Text("Apply selected") }},
+            confirmButton={Button(enabled=selected.isNotEmpty(),onClick={if(vm.hapticsEnabled) haptic.performHapticFeedback(HapticFeedbackType.LongPress);vm.applyPendingCode(selected.toSet());showCodePreview=false}) { Text("Apply selected") }},
             dismissButton={TextButton(onClick={showCodePreview=false}) { Text("Keep editing") }}
         )
     }

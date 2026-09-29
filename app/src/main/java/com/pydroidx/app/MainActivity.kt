@@ -124,7 +124,7 @@ data class RuntimeIssue(
     val hint: String, val details: String, val fileName: String,
     val replaceFrom: String = "", val replaceTo: String = ""
 )
-data class SavedCode(val name: String, val modified: Long)
+data class SavedCode(val name: String, val modified: Long, val fileName: String)
 data class PendingCodeChange(val code: String, val fileName: String, val sourceSnapshot: String)
 
 private fun issueLineNumber(source: String, offset: Int): Int =
@@ -290,6 +290,32 @@ class IdeViewModel : ViewModel() {
     private lateinit var aiKeys: SecureAiKeyStore
     private lateinit var settings: android.content.SharedPreferences
     private val pendingDocumentWrites = PendingDocumentWrites()
+    var editorLocationProvider: (() -> EditorLocation?)? = null
+
+    private fun locationKey(project: String, file: String) = "$project/$file"
+
+    fun currentEditorLocation(): EditorLocation? = if (::settings.isInitialized)
+        runCatching {
+            EditorLocation.decode(JSONObject(settings.getString("editor_locations", "{}") ?: "{}")
+                .optString(locationKey(currentProjectName, currentFileName)))
+        }.getOrNull() else null
+
+    fun rememberEditorLocation() {
+        if (!::settings.isInitialized) return
+        val location = editorLocationProvider?.invoke() ?: return
+        updateEditorLocation(locationKey(currentProjectName, currentFileName), location)
+    }
+
+    private fun updateEditorLocation(key: String, location: EditorLocation) {
+        val locations = runCatching { JSONObject(settings.getString("editor_locations", "{}") ?: "{}") }
+            .getOrDefault(JSONObject())
+        locations.put(key, location.encode())
+        while (locations.length() > 80) {
+            val oldest = locations.keys().asSequence().firstOrNull() ?: break
+            locations.remove(oldest)
+        }
+        settings.edit().putString("editor_locations", locations.toString()).apply()
+    }
 
     private fun readProjectText(file: File): String = pendingDocumentWrites.read(file)
         ?: AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
@@ -673,7 +699,7 @@ class IdeViewModel : ViewModel() {
         val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }
             ?.sortedByDescending { it.lastModified() }.orEmpty()
         savedCodes.clear()
-        savedCodes.addAll(files.map { SavedCode(it.nameWithoutExtension.replace('_',' '),it.lastModified()) })
+        savedCodes.addAll(files.map { SavedCode(it.nameWithoutExtension.replace('_',' '),it.lastModified(),it.name) })
     }
 
     fun makeNewProject(template: String = "Blank") {
@@ -700,6 +726,7 @@ class IdeViewModel : ViewModel() {
         val targetDir = File(projectsRoot,safeName)
         if (!targetDir.exists() || !targetDir.isDirectory || targetDir.parentFile != projectsRoot) return
         if (targetDir == projectDir) return
+        rememberEditorLocation()
         save()
         autosaveJob?.cancel()
         namingJob?.cancel()
@@ -751,6 +778,8 @@ class IdeViewModel : ViewModel() {
         if (code != snapshot) return
         val old = File(projectDir,currentFileName)
         val target = uniqueFile(localPurposeName(snapshot))
+        rememberEditorLocation()
+        currentEditorLocation()?.let { updateEditorLocation(locationKey(currentProjectName,target.name), it) }
         autosaveJob?.cancel()
         // The writer commits the latest contents before moving the file. Future
         // autosaves use the new name, so a delayed write cannot recreate untitled.py.
@@ -767,6 +796,7 @@ class IdeViewModel : ViewModel() {
 
     fun makeNewCode() {
         if (running || !::projectDir.isInitialized) return
+        rememberEditorLocation()
         save()
         var number=1
         var file=File(projectDir,"untitled_$number.py")
@@ -795,6 +825,7 @@ class IdeViewModel : ViewModel() {
         val file = File(projectDir, fileName)
         if (file.parentFile != projectDir || !file.isFile || !file.extension.equals("py", true)) return false
         if (file.name == currentFileName) return true
+        rememberEditorLocation()
         save()
         currentFileName=file.name
         code=readProjectText(file)
@@ -969,6 +1000,7 @@ class IdeViewModel : ViewModel() {
         val file = runCatching { candidate.canonicalFile }.getOrNull() ?: return false
         if (file.parentFile != projectDir.canonicalFile || !file.isFile || !file.name.endsWith(".py", true)) return false
         if (file.name != currentFileName) {
+            rememberEditorLocation()
             save()
             currentFileName = file.name
             code = readProjectText(file)
@@ -1216,12 +1248,21 @@ private fun AchievementNotice(
     val pages = listOf("FOLDERS", "PYTHON", "CONSOLE", "HELPER", "SETTINGS")
     val pageIcons = listOf("Folders", "Python", "Console", "Helper", "Settings")
     var editorView by remember { mutableStateOf<PythonEditorView?>(null) }
+    SideEffect {
+        vm.editorLocationProvider = editorView?.let { view ->
+            { EditorLocation(view.selectionStart, view.selectionEnd, view.scrollX, view.scrollY) }
+        }
+    }
+    DisposableEffect(vm) { onDispose { vm.editorLocationProvider = null } }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, editorView) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && vm.autoSave) {
-                editorView?.flushCodeChange()
-                vm.save()
+            if (event == Lifecycle.Event.ON_STOP) {
+                vm.rememberEditorLocation()
+                if (vm.autoSave) {
+                    editorView?.flushCodeChange()
+                    vm.save()
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -1260,8 +1301,13 @@ private fun AchievementNotice(
         pendingSearchLine?.let { line ->
             withFrameNanos { }
             editorView?.let { view ->
-                view.goToLine(line)
-                pendingSearchLine = null
+                val fileKey = "${vm.currentProjectName}/${vm.currentFileName}"
+                view.post {
+                    if (fileKey == "${vm.currentProjectName}/${vm.currentFileName}" && pendingSearchLine == line) {
+                        view.goToLine(line)
+                        pendingSearchLine = null
+                    }
+                }
             }
         }
     }
@@ -1524,7 +1570,7 @@ private fun AchievementNotice(
                             ) {
                                 vm.savedCodes.forEach { saved ->
                                     Surface(
-                                        onClick={vm.openSaved(saved.name);scope.launch{pager.animateScrollToPage(1)}},
+                                        onClick={vm.openProjectFile(saved.fileName);scope.launch{pager.animateScrollToPage(1)}},
                                         color=if(vm.currentFileName.substringBeforeLast('.').replace('_',' ')==saved.name) Color.White.copy(alpha=0.15f) else Color.White.copy(alpha=0.045f),
                                         shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                                         modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.10f),androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
@@ -1632,6 +1678,7 @@ private fun AchievementNotice(
                                 view.requestSmartCompletion=vm::requestCompletion
                                 view.requestCodeDiagnostics=vm::requestDiagnostics
                                 view.setCodeIfDifferent(vm.code,revision)
+                                view.showDocument("${vm.currentProjectName}/${vm.currentFileName}") { vm.currentEditorLocation() }
                             }},
                             update={view->
                                 view.onFindRequested={ replace -> showFind=true;showReplace=replace }
@@ -1642,6 +1689,7 @@ private fun AchievementNotice(
                                 view.onDiagnosticTap={selectedProblem=it}
                                 view.setBackgroundColor(bg.toArgb())
                                 view.setCodeIfDifferent(vm.code,revision)
+                                view.showDocument("${vm.currentProjectName}/${vm.currentFileName}") { vm.currentEditorLocation() }
                                 view.applyPreferences(vm.editorFontSize,vm.wordWrap,vm.syntaxHighlighting,vm.fontName,
                                     vm.lineSpacing,vm.editorPadding,vm.highlightDelay,vm.cursorStyle,vm.autocomplete,vm.ghostBrightness,
                                     vm.lineNumbers,vm.highlightCurrentLine,vm.customFontPath,
@@ -2283,10 +2331,10 @@ private fun AchievementNotice(
                 vm.savedCodes.filter { it.name.contains(quickOpenQuery,true) }.forEach { saved ->
                     TextButton(enabled=!vm.running,onClick={
                         editorView?.flushCodeChange()
-                        vm.openSaved(saved.name)
+                        vm.openProjectFile(saved.fileName)
                         showQuickOpen=false
                         scope.launch{pager.animateScrollToPage(1)}
-                    },modifier=Modifier.fillMaxWidth()) { Text(saved.name + ".py") }
+                    },modifier=Modifier.fillMaxWidth()) { Text(saved.fileName) }
                 }
             }
         }},

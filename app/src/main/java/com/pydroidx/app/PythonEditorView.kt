@@ -41,6 +41,7 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     private var lastHistoryCaptureAt = 0L
     private var hasHistoryCapture = false
     private var loadedRevision = -1
+    private var loadedDocumentKey = ""
     private val history = EditorHistory()
     private var highlightingEnabled = true
     private var highlightGeneration = 0L
@@ -382,6 +383,20 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         setSelection(cursor)
         applyingHighlight = false
         highlightNow()
+    }
+
+    fun showDocument(key: String, savedLocation: () -> EditorLocation?) {
+        if (loadedDocumentKey == key) return
+        loadedDocumentKey = key
+        val location = savedLocation()
+        val length = text?.length ?: 0
+        setSelection(location?.start?.coerceIn(0, length) ?: 0,
+            location?.end?.coerceIn(0, length) ?: 0)
+        post {
+            if (loadedDocumentKey == key) scrollTo(
+                (location?.scrollX ?: 0).coerceAtLeast(0),
+                (location?.scrollY ?: 0).coerceAtLeast(0))
+        }
     }
 
     private fun restoreHistory(snapshot: EditorSnapshot?) {

@@ -4,7 +4,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 
 ## Implemented and checked
 
-- Editor: reduced typing allocations and model sync, incremental line index, worker syntax tokenization, visible-area color spans, smart typed pairs and Backspace, indentation and comment actions, in-file Find/Replace/Replace All/Go to Line, current-file Problems navigation, and hardware shortcuts for Save, Run, Find, Replace, Undo, Redo, Quick Open, and Command Palette.
+- Editor: reduced typing allocations and model sync, incremental line index, worker syntax tokenization, visible-area color spans, smart typed pairs and Backspace, indentation and comment actions, in-file Find/Replace/Replace All/Go to Line, current-file Problems navigation, per-file selection/scroll restoration, and hardware shortcuts for Save, Run, Find, Replace, Undo, Redo, Quick Open, and Command Palette.
 - Console: coalesced output before UI dispatch, bounded live text layout, retained output Copy, autoscroll control, and project-file traceback navigation. Python modules imported from one project are removed from the module cache after its run.
 - Data safety: serialized atomic writes across activity recreation, ordered automatic file rename, save on Android backgrounding, bounded local file history, deliberate restore preview, and recovery points before Astro edits/restores. Queued or failed save text stays in memory so rapid file switches read the newest version.
 - Projects: runnable Blank, Hello World, CLI, Calculator, Automation, Guessing Game, and CSV Data starters. Five nontrivial scripts passed local parse and execution checks.
@@ -15,13 +15,13 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 
 - Host Python analyzer/runtime suite: 22 tests pass with declared Jedi 0.19.2 installed.
 - Android CI runs 202–206 and 208–211 passed unit tests and debug APK packaging. Run 207 exposed a mistaken Unicode-tail test assertion; the assertion was corrected and run 208 passed.
-- Runs 212 (Astro context) and 213 (project starters) passed. Run 214 caught a Kotlin scope error in history preview; run 215 carried the same error. The correction was pushed in `328e371`; its CI run and the project-search build await verification.
+- Runs 212 (Astro context) and 213 (project starters) passed. Run 214 caught a Kotlin scope error in history preview; run 215 carried the same error. The corrected run 230 passed. Project-search run 231 passed Android tests and APK packaging. Run 232 checks queued-save recovery and is still in progress at this checkpoint.
 - Git diff checks and clean local status were verified at each checkpoint. No physical Android device or emulator was attached to this Work environment.
 
 ## Incomplete or unverified
 
 - Measure typing, scrolling, Console throughput, keyboard transitions, and touch accuracy on a physical high-refresh device. UI geometry, animation timing, haptics, accessibility font scaling, rotation, and process-death recovery require device checks.
-- The editor still needs project-wide Problems, robust file tabs and per-file cursor/scroll restoration, folding/sticky context if justified, and more real-world IME testing. Find in Project currently scans top-level Python files and caps results at 200. Failed writes still need on-disk recovery when storage becomes available; the in-memory pending text survives only while the process lives.
+- The editor still needs project-wide Problems, robust file tabs, folding/sticky context if justified, and more real-world IME testing. Find in Project currently scans top-level Python files and caps results at 200. Failed writes still need on-disk recovery when storage becomes available; the in-memory pending text survives only while the process lives.
 - Project actions still lack rename/duplicate/move/delete/recovery UI and folder navigation. History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots.
 - Astro lacks per-hunk acceptance and constrained project-agent operations. Live provider and offline-model behavior need configured credentials/models and device testing.
 - Android runtime package installation is not implemented. The terminal truthfully reports this; installed-package listing already works. Do not advertise unsupported wheels as installable.

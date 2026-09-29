@@ -93,6 +93,18 @@ class PythonEditorViewTest {
         assertTrue(updates.isEmpty())
     }
 
+    @Test fun fileSwitchRestoresUtf16CaretAndDoesNotReuseOtherFilesCaret() {
+        editor.setCodeIfDifferent("🐍abc\nline", revision = 31)
+        editor.showDocument("project/a.py") { EditorLocation(3, 3, 0, 0) }
+        assertEquals(3, editor.selectionStart)
+        editor.setCodeIfDifferent("short", revision = 32)
+        editor.showDocument("project/b.py") { null }
+        assertEquals(0, editor.selectionStart)
+        editor.setCodeIfDifferent("🐍abc\nline", revision = 33)
+        editor.showDocument("project/a.py") { EditorLocation(3, 3, 0, 0) }
+        assertEquals(3, editor.selectionStart)
+    }
+
     @Test fun undoGroupsRapidCharacterTyping() {
         editor.setCodeIfDifferent("", revision = 2)
         editor.text.append("a")

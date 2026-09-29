@@ -2093,7 +2093,9 @@ private fun AchievementNotice(
                                 if (motionAllowed && pressed) 0.83f else if(active && motionAllowed) 1.13f else 1f,
                                 animationSpec=spring(dampingRatio=Spring.DampingRatioMediumBouncy,stiffness=Spring.StiffnessMedium), label="tab icon")
                             Column(
-                                Modifier.weight(1f).fillMaxHeight().clickable(interactionSource=tabInteraction,indication=null) {
+                                Modifier.weight(1f).fillMaxHeight().semantics {
+                                    contentDescription="$label page${if (active) ", selected" else ""}"
+                                }.clickable(interactionSource=tabInteraction,indication=null) {
                                     scope.launch { pager.animateScrollToPage(index) }
                                 }.padding(top=8.dp),
                                 horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally,
@@ -2103,7 +2105,7 @@ private fun AchievementNotice(
                                     Modifier.size(22.dp).graphicsLayer { scaleX=iconScale;scaleY=iconScale })
                                 else IdeGlyph(pageIcons[index], tint,
                                     Modifier.graphicsLayer { scaleX=iconScale;scaleY=iconScale })
-                                Text(label, color=tint, fontSize=7.sp, maxLines=1, softWrap=false)
+                                Text(label, color=tint, fontSize=10.sp, maxLines=1, softWrap=false)
                                 Spacer(Modifier.height(2.dp))
                             }
                         }
@@ -2124,8 +2126,8 @@ private fun AchievementNotice(
                             ) {
                                 AnimatedContent(targetState=vm.running, label="run button",
                                     transitionSpec={
-                                        (slideInVertically(tween(180)){it/2}+fadeIn(tween(180))) togetherWith
-                                            (slideOutVertically(tween(180)){-it/2}+fadeOut(tween(180)))
+                                        (slideInVertically(tween(if(motionAllowed) 180 else 0)){it/2}+fadeIn(tween(if(motionAllowed) 180 else 0))) togetherWith
+                                            (slideOutVertically(tween(if(motionAllowed) 180 else 0)){-it/2}+fadeOut(tween(if(motionAllowed) 180 else 0)))
                                     }) { running ->
                                     Text(if(running) "■ Stop" else "▶ Start",fontSize=12.sp,
                                         fontWeight=FontWeight.Bold,maxLines=1)
@@ -2215,7 +2217,9 @@ private fun AchievementNotice(
                         HorizontalDivider(color=Color.White.copy(alpha=0.12f))
                         Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
                             if (vm.currentFolder.isNotEmpty()) {
-                                IconButton(onClick=vm::navigateUpFolder,modifier=Modifier.size(40.dp)) {
+                                IconButton(onClick=vm::navigateUpFolder,modifier=Modifier.size(40.dp).semantics {
+                                    contentDescription="Go to parent folder"
+                                }) {
                                     IdeGlyph("Back",Color.White,Modifier.size(18.dp))
                                 }
                             }
@@ -2348,16 +2352,22 @@ private fun AchievementNotice(
                             TextButton(onClick={showFind=true},modifier=Modifier.width(42.dp)) {
                                 Text("Find",fontSize=11.sp)
                             }
-                            IconButton(onClick={editorView?.undoCode()},modifier=Modifier.size(34.dp)) {
+                            IconButton(onClick={editorView?.undoCode()},modifier=Modifier.size(34.dp).semantics {
+                                contentDescription="Undo code edit"
+                            }) {
                                 IdeGlyph("Undo",Color(0xFFD8D9E0))
                             }
-                            IconButton(onClick={editorView?.redoCode()},modifier=Modifier.size(34.dp)) {
+                            IconButton(onClick={editorView?.redoCode()},modifier=Modifier.size(34.dp).semantics {
+                                contentDescription="Redo code edit"
+                            }) {
                                 IdeGlyph("Redo",Color(0xFFD8D9E0))
                             }
                             Spacer(Modifier.weight(0.1f))
                             TextButton(
                                 onClick={scope.launch{pager.animateScrollToPage(0)}},
-                                contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp)
+                                contentPadding=PaddingValues(6.dp),modifier=Modifier.size(36.dp).semantics {
+                                    contentDescription="Open project browser"
+                                }
                             ){IdeGlyph("Close",Color(0xFF8C8C94))}
                         }
                         }
@@ -2611,8 +2621,8 @@ private fun AchievementNotice(
                             Column(Modifier.fillMaxSize().padding(10.dp)){
                                 Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                                     AnimatedContent(targetState=vm.consoleMode,label="console prompt",
-                                        transitionSpec={ (slideInVertically(tween(180)){it/2}+fadeIn(tween(180))) togetherWith
-                                            (slideOutVertically(tween(140)){-it/2}+fadeOut(tween(140))) }) { currentMode ->
+                                        transitionSpec={ (slideInVertically(tween(if(motionAllowed) 180 else 0)){it/2}+fadeIn(tween(if(motionAllowed) 180 else 0))) togetherWith
+                                            (slideOutVertically(tween(if(motionAllowed) 140 else 0)){-it/2}+fadeOut(tween(if(motionAllowed) 140 else 0))) }) { currentMode ->
                                         Text(if(currentMode=="Terminal") "$" else ">>>",color=Color(0xFFB8B8BE),fontFamily=FontFamily.Monospace,fontSize=12.sp)
                                     }
                                     Spacer(Modifier.width(8.dp))
@@ -2950,14 +2960,14 @@ private fun AchievementNotice(
                         fun searchMatches(vararg terms:String):Boolean =
                             settingsSearch.isNotBlank() && terms.any { it.contains(settingsSearch,true) || settingsSearch.contains(it,true) }
                         if(settingsSection=="Overview" && settingsSearch.isBlank()){
-                            SettingsCategory("Appearance","Theme, accents and component colors",accent){settingsSection="Appearance"}
-                            SettingsCategory("Editor","Text, cursor, autocomplete and saving",accent){settingsSection="Editor"}
-                            SettingsCategory("Fonts","100 downloadable typefaces",accent){settingsSection="Fonts"}
-                            SettingsCategory("Motion","13 quiet interface animations",accent){settingsSection="Motion"}
-                            SettingsCategory("Layout","Header, tabs, toolbar and spacing",accent){settingsSection="Layout"}
-                            SettingsCategory("Console & Helper","Output and chat appearance",accent){settingsSection="Console & Helper"}
-                            SettingsCategory("AI","API keys, offline GGUF models and fallback",accent){settingsSection="AI"}
-                            SettingsCategory("System","Runtime and interface switches",accent){settingsSection="System"}
+                            SettingsCategory("Appearance","Theme, accents and component colors",accent,motionAllowed){settingsSection="Appearance"}
+                            SettingsCategory("Editor","Text, cursor, autocomplete and saving",accent,motionAllowed){settingsSection="Editor"}
+                            SettingsCategory("Fonts","100 downloadable typefaces",accent,motionAllowed){settingsSection="Fonts"}
+                            SettingsCategory("Motion","13 quiet interface animations",accent,motionAllowed){settingsSection="Motion"}
+                            SettingsCategory("Layout","Header, tabs, toolbar and spacing",accent,motionAllowed){settingsSection="Layout"}
+                            SettingsCategory("Console & Helper","Output and chat appearance",accent,motionAllowed){settingsSection="Console & Helper"}
+                            SettingsCategory("AI","API keys, offline GGUF models and fallback",accent,motionAllowed){settingsSection="AI"}
+                            SettingsCategory("System","Runtime and interface switches",accent,motionAllowed){settingsSection="System"}
                         }
                         if(settingsSection=="AI" || searchMatches("ai", "api key", "offline model", "gguf")) {
                             Text("ASTRO AI", color=accent, fontSize=12.sp, fontWeight=FontWeight.Bold)
@@ -3556,14 +3566,15 @@ private fun AchievementNotice(
     }
 }
 
-@Composable private fun SettingsCategory(title:String,subtitle:String,accent:Color,onClick:()->Unit){
+@Composable private fun SettingsCategory(title:String,subtitle:String,accent:Color,motionAllowed:Boolean,onClick:()->Unit){
     val shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if(pressed) .975f else 1f,
-        animationSpec=spring(dampingRatio=Spring.DampingRatioMediumBouncy),label="setting press")
+    val scale by animateFloatAsState(if(pressed && motionAllowed) .975f else 1f,
+        animationSpec=if(motionAllowed) spring(dampingRatio=Spring.DampingRatioMediumBouncy) else tween(0),label="setting press")
     val surfaceColor by androidx.compose.animation.animateColorAsState(
-        if(pressed) accent.copy(alpha=.14f) else Color.White.copy(alpha=.06f),label="setting glow")
+        if(pressed) accent.copy(alpha=.14f) else Color.White.copy(alpha=.06f),
+        animationSpec=tween(if(motionAllowed) 150 else 0),label="setting glow")
     Surface(
         color=surfaceColor,
         shape=shape,

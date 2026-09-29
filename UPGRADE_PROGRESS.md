@@ -22,7 +22,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Git diff checks and clean local status were verified at each checkpoint. No physical Android device or emulator was attached to this Work environment.
 - The nested project/browser batch passes 24 host Python tests with Jedi 0.19.2 and `git diff --check`; Android CI run 241 passed unit tests and debug APK packaging.
 - Tab controls passed 24 host Python tests and Android CI run 242, including unit tests and debug APK packaging.
-- Documentation-only run 243 passed. Pure-wheel installer host suite: 27 Python tests pass, including synthetic install/import and rejected traversal/checksum cases; Android CI pending.
+- Documentation-only run 243 passed. Pure-wheel installer host suite: 27 Python tests pass, including synthetic install/import and rejected traversal/checksum cases. Run 244 stopped in the host test setup because CI installed Jedi but omitted the already bundled `packaging` library; the workflow dependency has been corrected and the Android build is pending.
 
 ## Incomplete or unverified
 

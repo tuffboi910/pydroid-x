@@ -12,35 +12,39 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Navigation: searchable command palette, Quick Open, bounded background Find in Project with direct file/line navigation, and a horizontal open-file tab strip with close and Ctrl+W. Open tabs and selected file persist per project.
 - Project browser: nested folder navigation and creation; bounded recursive Python file listing; user-driven rename, move, and recoverable delete; recovery notice restored after process restart; nested paths across saved files, tabs, project search, diagnostics, traceback navigation, and file history. Android CI passed; physical-device verification remains.
 - Tabs: the strip now allows moving a tab left or right and reopening the last closed file. Android CI passed; physical-device verification remains.
-- Runtime packages: terminal `pip install PACKAGE` resolves dependencies from PyPI and installs compatible pure-Python wheels into app-private storage with hash checks, bounded downloads/extraction, path validation, and atomic per-distribution replacement. Native wheels, scripts, extras, direct URLs, and unsupported install layouts report an error. This batch awaits Android CI and device verification.
-- Astro edits: preview now separates independent line changes and allows accepting any selected subset after a recovery checkpoint. Diff work is bounded for large files and the original snapshot is checked again before applying. This batch awaits Android CI and device verification.
-- Console ANSI: bounded visible output interprets basic foreground, bright, bold, and RGB SGR colors while suppressing escape controls. Copy, search, and Astro context use readable text. This batch awaits Android CI and device verification.
-- Lifecycle: retained ViewModel initialization is idempotent across activity recreation, so rotation does not reload the on-disk file over a live editor buffer. This batch awaits Android CI and device verification.
-- Console search: tapping a retained-output hit opens a bounded readable window starting at that line, pauses live tail updates, and Auto on resumes the latest output. This batch awaits Android CI and device verification.
-- Astro project context: an explicit sharing chip can include live current code and bounded nested Python sources in a question. File IO runs on the AI worker; hidden/history folders and oversized sources are skipped. Proposed edits still target only the current file. This batch awaits Android CI and device verification.
-- Runtime package hardening: redirects outside PyPI, oversized metadata, and native libraries hidden in universal-tagged wheels are rejected. Host tests now total 28; Android CI pending.
-- Astro project context is now budgeted per file so a long active buffer does not crowd out the rest of the project; on-device models receive a smaller context based on their configured token window. Android CI pending.
-- Project-context replies are analysis-only in the IDE: fenced code from that mode cannot become an Apply action because the shared active file may be truncated. Current-file sharing retains guarded edit previews. Android CI pending.
-- Runtime package downloads and extraction now check the existing Stop signal between bounded chunks and clean staging on cancellation. Host Python suite totals 29 tests; Android CI pending.
+- Runtime packages: terminal `pip install PACKAGE` resolves dependencies from PyPI and installs compatible pure-Python wheels into app-private storage with hash checks, bounded downloads/extraction, path validation, and atomic per-distribution replacement. Native wheels, scripts, extras, direct URLs, and unsupported install layouts report an error. Android CI passed; device verification remains.
+- Astro edits: preview now separates independent line changes and allows accepting any selected subset after a recovery checkpoint. Diff work is bounded for large files and the original snapshot is checked again before applying. Android CI passed; device verification remains.
+- Console ANSI: bounded visible output interprets basic foreground, bright, bold, and RGB SGR colors while suppressing escape controls. Copy, search, and Astro context use readable text. Android CI passed; device verification remains.
+- Lifecycle: retained ViewModel initialization is idempotent across activity recreation, so rotation does not reload the on-disk file over a live editor buffer. Android CI passed; device verification remains.
+- Console search: tapping a retained-output hit opens a bounded readable window starting at that line, pauses live tail updates, and Auto on resumes the latest output. Android CI passed; device verification remains.
+- Astro project context: an explicit sharing chip can include live current code and bounded nested Python sources in a question. File IO runs on the AI worker; hidden/history folders and oversized sources are skipped. This mode is analysis-only. Android CI passed; device verification remains.
+- Runtime package hardening: redirects outside PyPI, oversized metadata, and native libraries hidden in universal-tagged wheels are rejected. Android CI passed.
+- Astro project context is budgeted per file so a long active buffer does not crowd out the rest of the project; on-device models receive a smaller context based on their configured token window. Android CI passed.
+- Project-context replies are analysis-only in the IDE: fenced code from that mode cannot become an Apply action because the shared active file may be truncated. Current-file sharing retains guarded edit previews. Android CI passed.
+- Runtime package downloads and extraction check the existing Stop signal between bounded chunks and clean staging on cancellation. Android CI passed.
 
 ## Verification
 
-- Host Python analyzer/runtime suite: 24 tests pass with declared Jedi 0.19.2 installed, including live-buffer project diagnostics, file/line/severity reporting, file-size bounds, and UTF-16 offsets.
+- Host Python analyzer/runtime suite: 29 tests pass with declared Jedi 0.19.2 and packaging 25.0 installed, including live-buffer project diagnostics, pure-wheel install/import, hostile wheel rejection, cancellation, file/line/severity reporting, file-size bounds, and UTF-16 offsets.
 - Android CI runs 202–206 and 208–211 passed unit tests and debug APK packaging. Run 207 exposed a mistaken Unicode-tail test assertion; the assertion was corrected and run 208 passed.
 - Runs 212 (Astro context) and 213 (project starters) passed. Run 214 caught a Kotlin scope error in history preview; run 215 carried the same error. Corrected run 230, project-search run 231, queued-save run 232, corrected tab run 234, Console run 235, rename recovery run 236, autosave refresh run 237, duplication run 238, and the final guard run 239 passed Android tests and APK packaging. Run 233 caught an editor-location visibility issue and was fixed in 234. Project-wide Problems source tests pass locally; its Android CI run is pending.
 - Git diff checks and clean local status were verified at each checkpoint. No physical Android device or emulator was attached to this Work environment.
 - The nested project/browser batch passes 24 host Python tests with Jedi 0.19.2 and `git diff --check`; Android CI run 241 passed unit tests and debug APK packaging.
 - Tab controls passed 24 host Python tests and Android CI run 242, including unit tests and debug APK packaging.
-- Documentation-only run 243 passed. Pure-wheel installer host suite: 27 Python tests pass, including synthetic install/import and rejected traversal/checksum cases. Run 244 stopped in the host test setup because CI installed Jedi but omitted the already bundled `packaging` library; the workflow dependency has been corrected and the Android build is pending.
-- Corrected installer run 245 passed Python tests, Android unit tests, and debug APK packaging. Astro hunk run 246 and Console ANSI run 247 are pending.
+- Documentation-only run 243 passed. Run 244 stopped in host test setup because CI omitted the bundled `packaging` dependency; run 245 corrected the workflow and passed.
+- Corrected installer runs 245 and 246–254 passed Python tests, Android unit tests, and debug APK packaging. Run 244 failed because the host CI environment lacked the bundled packaging dependency; workflow setup was corrected in 245. The latest code run is 254.
 
-## Incomplete or unverified
+## Remaining source work
 
-- Measure typing, scrolling, Console throughput, keyboard transitions, and touch accuracy on a physical high-refresh device. UI geometry, animation timing, haptics, accessibility font scaling, rotation, and process-death recovery require device checks.
 - The editor still needs tab pinning, persistence for recently closed recovery, folding/sticky context if justified, and more real-world IME testing. Find in Project scans nested Python files and caps results at 200. Project Problems scans nested Python files, caps at 300 files and 8 MB total, skips files above 1 MB, and requires an explicit scan. Failed writes still need on-disk recovery when storage becomes available; the in-memory pending text survives only while the process lives.
-- Project browser/action behavior needs physical-device testing, including folder navigation, file moves, and delete recovery across process death. History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots.
-- Astro still lacks constrained multi-file edit proposals and agent operations. Project context is read-only input; per-hunk preview/selection and sharing controls need device verification. Live provider and offline-model behavior need configured credentials/models and device testing.
-- Runtime installation currently supports compatible pure-Python wheels only; native Android wheels, package extras, and wheel script/data layouts need separate implementation. Validate network installs, dependency graphs, storage failure, and imports on an Android device.
-- Full terminal cursor-motion/progress controls and interaction beyond the retained output window remain. Broad UI/motion polish and first-run/accessibility passes remain.
+- History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots. Recovery needs a durable journal for unsaved buffers and failed writes across process death.
+- Astro still lacks constrained multi-file edit proposals and agent operations. Project context is read-only input.
+- Runtime installation currently supports compatible pure-Python wheels only; native Android wheels, package extras, and wheel script/data layouts need separate implementation. Dependency conflict resolution and upgrades of already imported modules need more work.
+- Full terminal cursor-motion/progress controls and interaction beyond the retained output window remain. Broader UI/motion polish, accessibility, and performance profiling remain.
+
+## Physical-device checks
+
+- Measure typing, scrolling, Console throughput, keyboard transitions, and touch accuracy on a high-refresh Android device. Check UI geometry, animation timing, haptics, accessibility font scaling, rotation, and process-death restoration.
+- Exercise folder moves/delete recovery, Astro preview and sharing, on-device/online AI with configured models or credentials, and real PyPI downloads/imports under network and storage failure conditions.
 
 The older `b119229` checkout was left intact. The previously lost `f386e22` object was not recovered; this branch reconstructs new work from the valid `a86c076` remote base.

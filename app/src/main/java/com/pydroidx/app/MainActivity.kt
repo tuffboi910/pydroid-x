@@ -849,7 +849,7 @@ class IdeViewModel : ViewModel() {
                             .append(": ").append(issue.message.take(150))
                     }
                 }
-                val consoleContext = outputBuffer.visibleTail(1600)
+                val consoleContext = ConsoleAnsi.parse(outputBuffer.visibleTail(1600)).joinToString("") { it.text }
                 if (consoleContext.isNotBlank()) append("\nRecent Console output:\n").append(consoleContext)
             }
             if (!attachmentTextSnapshot.isNullOrBlank()) {
@@ -1456,7 +1456,7 @@ class IdeViewModel : ViewModel() {
         output = ""
         runtimeIssue = null
     }
-    fun fullOutput(): String = outputBuffer.snapshot()
+    fun fullOutput(): String = ConsoleAnsi.parse(outputBuffer.snapshot()).joinToString("") { it.text }
 
     fun applyRuntimeFix() {
         val issue = runtimeIssue ?: return
@@ -2492,8 +2492,21 @@ private fun AchievementNotice(
                                 }
                                 Spacer(Modifier.height(12.dp))
                                 Box(Modifier.weight(1f).fillMaxWidth()) {
+                                    val styledOutput = remember(vm.output) {
+                                        buildAnnotatedString {
+                                            ConsoleAnsi.parse(vm.output).forEach { segment ->
+                                                if (segment.foreground != null || segment.bold) {
+                                                    withStyle(SpanStyle(
+                                                        color=segment.foreground?.let { Color(it) } ?: Color.Unspecified,
+                                                        fontWeight=if (segment.bold) FontWeight.Bold else FontWeight.Normal
+                                                    )) { append(segment.text) }
+                                                } else append(segment.text)
+                                            }
+                                        }
+                                    }
                                     SelectionContainer {
-                                        Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
+                                        Text(if(vm.output.isEmpty()) AnnotatedString("Ready") else styledOutput,
+                                            color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
                                             fontFamily=FontFamily.Monospace,fontSize=vm.terminalFontSize.sp,
                                             lineHeight=(vm.terminalFontSize+6).sp,
                                             modifier=Modifier.fillMaxSize().verticalScroll(consoleScroll).padding(bottom=if(vm.runtimeIssue!=null)180.dp else 8.dp))

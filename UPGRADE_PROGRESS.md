@@ -5,7 +5,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 ## Implemented and checked
 
 - Editor: reduced typing allocations and model sync, incremental line index, worker syntax tokenization, visible-area color spans, smart typed pairs and Backspace, indentation and comment actions, in-file Find/Replace/Replace All/Go to Line, current-file Problems navigation, per-file selection/scroll restoration, and hardware shortcuts for Save, Run, Find, Replace, Undo, Redo, Quick Open, and Command Palette.
-- Console: coalesced output before UI dispatch, bounded live text layout, retained output Copy, autoscroll control, and project-file traceback navigation. Python modules imported from one project are removed from the module cache after its run.
+- Console: coalesced output before UI dispatch, bounded live text layout, retained output Copy and bounded Search, selectable visible text, autoscroll control, and project-file traceback navigation. Python modules imported from one project are removed from the module cache after its run.
 - Data safety: serialized atomic writes across activity recreation, ordered automatic file rename, save on Android backgrounding, bounded local file history, deliberate restore preview, and recovery points before Astro edits/restores. Queued or failed save text stays in memory so rapid file switches read the newest version.
 - Projects: runnable Blank, Hello World, CLI, Calculator, Automation, Guessing Game, and CSV Data starters. Five nontrivial scripts passed local parse and execution checks.
 - Astro: editor-selection question handoff; bounded project names, diagnostics, and recent Console context only when code sharing is enabled; existing preview/Accept/Reject flow retained.
@@ -25,6 +25,6 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Project actions still lack rename/duplicate/move/delete/recovery UI and folder navigation. History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots.
 - Astro lacks per-hunk acceptance and constrained project-agent operations. Live provider and offline-model behavior need configured credentials/models and device testing.
 - Android runtime package installation is not implemented. The terminal truthfully reports this; installed-package listing already works. Do not advertise unsupported wheels as installable.
-- Console search, richer ANSI rendering, and large-output interaction beyond the retained window remain. Broad UI/motion polish and first-run/accessibility passes remain.
+- Console search results do not yet jump to the corresponding live-output scroll position; richer ANSI rendering and large-output interaction beyond the retained window remain. Broad UI/motion polish and first-run/accessibility passes remain.
 
 The older `b119229` checkout was left intact. The previously lost `f386e22` object was not recovered; this branch reconstructs new work from the valid `a86c076` remote base.

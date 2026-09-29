@@ -33,6 +33,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -1313,6 +1314,24 @@ private fun AchievementNotice(
     val aiScroll = rememberScrollState()
     val consoleScroll = rememberScrollState()
     var consoleAutoScroll by remember { mutableStateOf(true) }
+    var showConsoleSearch by remember { mutableStateOf(false) }
+    var consoleSearchQuery by remember { mutableStateOf("") }
+    var consoleSearchHits by remember { mutableStateOf<List<ConsoleSearchHit>>(emptyList()) }
+    var consoleSearchBusy by remember { mutableStateOf(false) }
+    LaunchedEffect(showConsoleSearch, consoleSearchQuery) {
+        consoleSearchHits = emptyList()
+        if (!showConsoleSearch || consoleSearchQuery.isBlank()) {
+            consoleSearchBusy = false
+            return@LaunchedEffect
+        }
+        consoleSearchBusy = true
+        delay(180)
+        val outputSnapshot = vm.fullOutput()
+        consoleSearchHits = withContext(Dispatchers.Default) {
+            ConsoleSearch.find(outputSnapshot, consoleSearchQuery)
+        }
+        consoleSearchBusy = false
+    }
     val consoleInputFocus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val pages = listOf("FOLDERS", "PYTHON", "CONSOLE", "HELPER", "SETTINGS")
@@ -1901,7 +1920,8 @@ private fun AchievementNotice(
                             ){Text(if(vm.running)"■ Stop" else "▶ Start",fontWeight=FontWeight.Bold)}
                         }
                         Spacer(Modifier.height(14.dp))
-                        Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                        Row(Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                             listOf("Python","Terminal").forEach { mode ->
                                 val selected=vm.consoleMode==mode
                                 val modeColor by androidx.compose.animation.animateColorAsState(
@@ -1918,6 +1938,7 @@ private fun AchievementNotice(
                             TextButton(onClick={consoleAutoScroll=!consoleAutoScroll}) {
                                 Text(if(consoleAutoScroll) "Auto on" else "Auto off",fontSize=11.sp)
                             }
+                            TextButton(onClick={showConsoleSearch=true}) { Text("Search",fontSize=11.sp) }
                             TextButton(onClick={
                                 val clipboard=context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                 clipboard.setPrimaryClip(ClipData.newPlainText("PY4U Console",vm.fullOutput()))
@@ -1945,10 +1966,12 @@ private fun AchievementNotice(
                                 }
                                 Spacer(Modifier.height(12.dp))
                                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                                    Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
-                                        fontFamily=FontFamily.Monospace,fontSize=vm.terminalFontSize.sp,
-                                        lineHeight=(vm.terminalFontSize+6).sp,
-                                        modifier=Modifier.fillMaxSize().verticalScroll(consoleScroll).padding(bottom=if(vm.runtimeIssue!=null)180.dp else 8.dp))
+                                    SelectionContainer {
+                                        Text(vm.output.ifEmpty{"Ready"},color=safeColor(vm.consoleTextHex,0xFFE8E8EC),
+                                            fontFamily=FontFamily.Monospace,fontSize=vm.terminalFontSize.sp,
+                                            lineHeight=(vm.terminalFontSize+6).sp,
+                                            modifier=Modifier.fillMaxSize().verticalScroll(consoleScroll).padding(bottom=if(vm.runtimeIssue!=null)180.dp else 8.dp))
+                                    }
                                     vm.runtimeIssue?.let { issue ->
                                         var showDetails by remember(issue.details) { mutableStateOf(false) }
                                         Surface(color=Color(0xFF151316),shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
@@ -2481,6 +2504,27 @@ private fun AchievementNotice(
             if(vm.running) Text("Stop the program to open a search result.",color=Color.LightGray)
         }},
         confirmButton={TextButton(onClick={showProjectSearch=false}) { Text("Close") }}
+    )
+    if(showConsoleSearch) AlertDialog(
+        onDismissRequest={showConsoleSearch=false},containerColor=Color(0xFF171A20),
+        title={Text("Search Console")},
+        text={Column(Modifier.heightIn(max=470.dp)) {
+            OutlinedTextField(consoleSearchQuery,{consoleSearchQuery=it},label={Text("Output text")},
+                singleLine=true,modifier=Modifier.fillMaxWidth())
+            if (consoleSearchBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            else if (consoleSearchQuery.isNotBlank() && consoleSearchHits.isEmpty())
+                Text("No matches in retained output",color=Color.LightGray,modifier=Modifier.padding(12.dp))
+            SelectionContainer {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    consoleSearchHits.forEach { hit ->
+                        Text("${hit.line}  ${hit.preview}",color=Color.LightGray,
+                            fontFamily=FontFamily.Monospace,fontSize=12.sp,
+                            modifier=Modifier.fillMaxWidth().padding(vertical=6.dp))
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={showConsoleSearch=false}) { Text("Close") }}
     )
     if(showHistory) AlertDialog(
         onDismissRequest={showHistory=false},containerColor=Color(0xFF171A20),

@@ -289,9 +289,10 @@ class IdeViewModel : ViewModel() {
     private lateinit var projectsRoot: File
     private lateinit var aiKeys: SecureAiKeyStore
     private lateinit var settings: android.content.SharedPreferences
+    private val pendingDocumentWrites = PendingDocumentWrites()
 
-    private fun readProjectText(file: File): String = AtomicFile(file).openRead()
-        .bufferedReader(Charsets.UTF_8).use { it.readText() }
+    private fun readProjectText(file: File): String = pendingDocumentWrites.read(file)
+        ?: AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
@@ -909,8 +910,11 @@ class IdeViewModel : ViewModel() {
         }
     }
     private fun persistCode(directory: File, fileName: String, snapshot: String) {
-        ProjectFileWriter.enqueue(File(directory, fileName), snapshot) { result ->
+        val file = File(directory, fileName)
+        pendingDocumentWrites.mark(file, snapshot)
+        ProjectFileWriter.enqueue(file, snapshot) { result ->
             mainHandler.post {
+                pendingDocumentWrites.completed(file, snapshot, result.isSuccess)
                 if (result.isFailure) {
                     saveError = "Couldn’t save $fileName: ${result.exceptionOrNull()?.message ?: "storage error"}"
                 } else if (::projectDir.isInitialized && projectDir == directory) {

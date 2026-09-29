@@ -186,6 +186,7 @@ class IdeViewModel : ViewModel() {
     @Volatile var code = "print(\"Hello world!\")\n"
     var currentFileName by mutableStateOf("main.py")
     val openTabs = mutableStateListOf<String>()
+    val pinnedTabs = mutableStateListOf<String>()
     val unsavedTabs = mutableStateListOf<String>()
     var recentlyClosedTab by mutableStateOf<String?>(null)
         private set
@@ -526,6 +527,8 @@ class IdeViewModel : ViewModel() {
         }
         val tabIndex = openTabs.indexOf(oldPath)
         if (tabIndex >= 0) openTabs[tabIndex] = newPath
+        if (pinnedTabs.remove(oldPath)) pinnedTabs.add(newPath)
+        if (recentlyClosedTab == oldPath) recentlyClosedTab = newPath
         if (unsavedTabs.remove(oldPath)) unsavedTabs.add(newPath)
         persistTabs()
         if (wasCurrent) editorRevision++
@@ -561,6 +564,8 @@ class IdeViewModel : ViewModel() {
                     if (projectDir == directory) {
                         tabRestoreGeneration++
                         openTabs.remove(sourceName)
+                        pinnedTabs.remove(sourceName)
+                        if (recentlyClosedTab == sourceName) recentlyClosedTab = null
                         unsavedTabs.remove(sourceName)
                         persistTabs()
                         projectProblemsStale = projectProblems.isNotEmpty()
@@ -613,8 +618,10 @@ class IdeViewModel : ViewModel() {
     }
 
     private fun persistTabs() {
-        if (::settings.isInitialized) settings.edit().putString("tabs_$currentProjectName",
-            JSONArray(openTabs).toString()).apply()
+        if (::settings.isInitialized) settings.edit()
+            .putString("tabs_$currentProjectName", JSONArray(openTabs).toString())
+            .putString("pinned_tabs_$currentProjectName", JSONArray(pinnedTabs).toString())
+            .putString("closed_tab_$currentProjectName", recentlyClosedTab).apply()
     }
 
     private fun restoreTabs() {
@@ -624,6 +631,10 @@ class IdeViewModel : ViewModel() {
         val saved = runCatching { JSONArray(settings.getString("tabs_$currentProjectName", "[]") ?: "[]") }
             .getOrDefault(JSONArray())
         val candidates = (0 until saved.length()).map { saved.optString(it) }.distinct().take(12)
+        val savedPins = runCatching { JSONArray(settings.getString("pinned_tabs_$currentProjectName", "[]") ?: "[]") }
+            .getOrDefault(JSONArray())
+        val pins = (0 until savedPins.length()).map { savedPins.optString(it) }.distinct().take(11)
+        val closed = settings.getString("closed_tab_$currentProjectName", null)
         viewModelScope.launch {
             val names = withContext(Dispatchers.IO) {
                 candidates.filter { name ->
@@ -634,11 +645,14 @@ class IdeViewModel : ViewModel() {
             }
             if (generation != tabRestoreGeneration || projectDir != directory || currentFileName != selectedFile) return@launch
             if (selectedFile !in names) {
-                if (names.size >= 12) names.removeAt(0)
+                if (names.size >= 12) TabCapacity.eviction(names, pins, selectedFile)?.let { names.remove(it) }
                 names.add(selectedFile)
             }
             openTabs.clear()
             openTabs.addAll(names)
+            pinnedTabs.clear()
+            pinnedTabs.addAll(pins.filter { it in names })
+            recentlyClosedTab = closed?.takeIf { it !in names && ProjectWorkspace.resolvePath(directory, it)?.isFile == true }
             unsavedTabs.clear()
             unsavedTabs.addAll(names.filter { pendingDocumentWrites.read(File(projectDir, it)) != null })
             persistTabs()
@@ -648,7 +662,14 @@ class IdeViewModel : ViewModel() {
     private fun addOpenTab(fileName: String) {
         tabRestoreGeneration++
         if (fileName !in openTabs) {
-            if (openTabs.size >= 12) openTabs.remove(openTabs.first { it != currentFileName })
+            if (openTabs.size >= 12) {
+                val evicted = TabCapacity.eviction(openTabs, pinnedTabs, currentFileName)
+                if (evicted == null) {
+                    saveError = "Unpin a tab before opening another file."
+                    return
+                }
+                openTabs.remove(evicted)
+            }
             openTabs.add(fileName)
         }
         persistTabs()
@@ -663,6 +684,7 @@ class IdeViewModel : ViewModel() {
         }
         tabRestoreGeneration++
         openTabs.remove(fileName)
+        pinnedTabs.remove(fileName)
         recentlyClosedTab = fileName
         persistTabs()
     }
@@ -671,10 +693,20 @@ class IdeViewModel : ViewModel() {
         val fileName = recentlyClosedTab ?: return false
         if (!openProjectFile(fileName)) {
             recentlyClosedTab = null
+            persistTabs()
             return false
         }
         recentlyClosedTab = null
+        persistTabs()
         return true
+    }
+
+    fun togglePinnedTab(fileName: String) {
+        if (fileName !in openTabs) return
+        if (fileName in pinnedTabs) pinnedTabs.remove(fileName)
+        else if (pinnedTabs.size >= 11) saveError = "At most 11 tabs can be pinned."
+        else pinnedTabs.add(fileName)
+        persistTabs()
     }
 
     fun moveTab(fileName: String, direction: Int) {
@@ -1234,6 +1266,7 @@ class IdeViewModel : ViewModel() {
         projectDir = targetDir
         currentProjectName = safeName
         recentlyClosedTab = null
+        pinnedTabs.clear()
         val selectedName = settings.getString("selected_$safeName", null)
         var current = selectedName?.let { ProjectWorkspace.resolvePath(projectDir, it) }
             ?.takeIf { it.isFile && it.extension.equals("py", true) }
@@ -2391,9 +2424,16 @@ private fun AchievementNotice(
                                         TextButton(enabled=!vm.running,onClick={
                                             editorView?.flushCodeChange()
                                             vm.openProjectFile(fileName)
-                                        },contentPadding=PaddingValues(start=10.dp,end=3.dp)) {
+                                        },contentPadding=PaddingValues(start=10.dp,end=3.dp),
+                                            modifier=Modifier.semantics {
+                                                contentDescription="Open $fileName${if (fileName in vm.pinnedTabs) ", pinned" else ""}"
+                                            }) {
                                             Text(fileName,color=if(selected) Color.White else Color.LightGray,
                                                 maxLines=1,fontSize=12.sp)
+                                            if (fileName in vm.pinnedTabs) {
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("◆",color=accent,fontSize=10.sp)
+                                            }
                                             if (fileName in vm.unsavedTabs) {
                                                 Spacer(Modifier.width(5.dp))
                                                 Text("●",color=Color(0xFFFFC88A),fontSize=9.sp)
@@ -2411,6 +2451,8 @@ private fun AchievementNotice(
                                                 contentDescription="Tab actions for $fileName"
                                             }) { IdeGlyph("More",Color.LightGray,Modifier.size(14.dp)) }
                                             DropdownMenu(expanded=tabMenuExpanded,onDismissRequest={tabMenuExpanded=false}) {
+                                                DropdownMenuItem(text={Text(if(fileName in vm.pinnedTabs) "Unpin tab" else "Pin tab")},
+                                                    onClick={vm.togglePinnedTab(fileName);tabMenuExpanded=false})
                                                 DropdownMenuItem(text={Text("Move tab left")},enabled=vm.openTabs.indexOf(fileName)>0,
                                                     onClick={vm.moveTab(fileName,-1);tabMenuExpanded=false})
                                                 DropdownMenuItem(text={Text("Move tab right")},enabled=vm.openTabs.indexOf(fileName)<vm.openTabs.lastIndex,

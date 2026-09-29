@@ -29,6 +29,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Both online and on-device Astro instructions now describe the exact project proposal format. Streaming partial replies are coalesced onto one UI update per frame instead of dispatching a coroutine/recomposition for every chunk. Android CI run 260 passed tests and debug APK packaging.
 - Main page navigation and previously unlabeled editor/folder actions now have explicit accessibility descriptions, and navigation labels use readable 10sp text. Run/Stop, Console prompt, and Settings category transitions honor the reduced-motion/system animator setting. Android CI pending.
 - Console ANSI rendering now keeps a bounded cursor over visible text so carriage returns, backspaces, line erasure, and basic CSI cursor moves update existing output instead of concatenating progress frames. Style runs are rebuilt from the resulting text; copy and search share the same readable rendering. Robolectric regression tests cover progress and prior-line corrections. Android CI pending.
+- Tabs can be pinned, preserve pin state per project, and evict only unpinned background tabs at the 12-tab cap. The last closed path persists per project and is validated on restoration; rename/delete remap or clear related tab state. Android CI pending.
 
 ## Verification
 
@@ -43,7 +44,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 
 ## Remaining source work
 
-- The editor still needs tab pinning, persistence for recently closed recovery, folding/sticky context if justified, and more real-world IME testing. Find in Project scans nested Python files and caps results at 200. Project Problems scans nested Python files, caps at 300 files and 8 MB total, skips files above 1 MB, and requires an explicit scan. Failed writes still need on-disk recovery when storage becomes available; the in-memory pending text survives only while the process lives.
+- The editor still needs folding/sticky context if justified and more real-world IME testing. Find in Project scans nested Python files and caps results at 200. Project Problems scans nested Python files, caps at 300 files and 8 MB total, skips files above 1 MB, and requires an explicit scan. Failed writes have an on-disk draft journal for buffers up to 2 MB; explicit storage-error recovery and device process-death checks remain.
 - History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots. Drafts larger than 2 MB and unavailable storage need an explicit recovery/error path; the new draft journal needs Android CI and device process-death validation.
 - Astro has constrained multi-file proposals, but lacks multi-step agent operations, cross-request planning, and device-tested provider output reliability.
 - Runtime installation currently supports compatible pure-Python wheels only; native Android wheels, package extras, and wheel script/data layouts need separate implementation. Dependency conflict resolution and upgrades of already imported modules need more work.

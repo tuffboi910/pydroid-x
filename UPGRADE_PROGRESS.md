@@ -15,6 +15,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Runtime packages: terminal `pip install PACKAGE` resolves dependencies from PyPI and installs compatible pure-Python wheels into app-private storage with hash checks, bounded downloads/extraction, path validation, and atomic per-distribution replacement. Native wheels, scripts, extras, direct URLs, and unsupported install layouts report an error. This batch awaits Android CI and device verification.
 - Astro edits: preview now separates independent line changes and allows accepting any selected subset after a recovery checkpoint. Diff work is bounded for large files and the original snapshot is checked again before applying. This batch awaits Android CI and device verification.
 - Console ANSI: bounded visible output interprets basic foreground, bright, bold, and RGB SGR colors while suppressing escape controls. Copy, search, and Astro context use readable text. This batch awaits Android CI and device verification.
+- Lifecycle: retained ViewModel initialization is idempotent across activity recreation, so rotation does not reload the on-disk file over a live editor buffer. This batch awaits Android CI and device verification.
 
 ## Verification
 
@@ -25,6 +26,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - The nested project/browser batch passes 24 host Python tests with Jedi 0.19.2 and `git diff --check`; Android CI run 241 passed unit tests and debug APK packaging.
 - Tab controls passed 24 host Python tests and Android CI run 242, including unit tests and debug APK packaging.
 - Documentation-only run 243 passed. Pure-wheel installer host suite: 27 Python tests pass, including synthetic install/import and rejected traversal/checksum cases. Run 244 stopped in the host test setup because CI installed Jedi but omitted the already bundled `packaging` library; the workflow dependency has been corrected and the Android build is pending.
+- Corrected installer run 245 passed Python tests, Android unit tests, and debug APK packaging. Astro hunk run 246 and Console ANSI run 247 are pending.
 
 ## Incomplete or unverified
 

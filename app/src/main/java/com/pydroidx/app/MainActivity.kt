@@ -182,6 +182,7 @@ Plus Jakarta Sans|plusjakartasans,Prompt|prompt,Public Sans|publicsans,Quicksand
 }
 
 class IdeViewModel : ViewModel() {
+    private var initialized = false
     @Volatile var code = "print(\"Hello world!\")\n"
     var currentFileName by mutableStateOf("main.py")
     val openTabs = mutableStateListOf<String>()
@@ -649,6 +650,7 @@ class IdeViewModel : ViewModel() {
     }
 
     fun initialize(context: Context) {
+        if (initialized) return
         appContext = context.applicationContext
         aiKeys = SecureAiKeyStore(context.applicationContext)
         settings = context.getSharedPreferences("ide_settings", Context.MODE_PRIVATE)
@@ -747,6 +749,7 @@ class IdeViewModel : ViewModel() {
         refreshBrowserEntries()
         restoreTabs()
         editorRevision++
+        initialized = true
         thread {
             val version = runCatching { Python.getInstance().getModule("runner").callAttr("version").toString() }
                 .getOrDefault("Python unavailable")

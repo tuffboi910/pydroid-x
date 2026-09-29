@@ -241,6 +241,9 @@ class IdeViewModel : ViewModel() {
     var showCodeNotice by mutableStateOf(false)
     var showTeachingNotice by mutableStateOf(false)
     private var assistantReplyCount = 0
+    @Volatile private var aiGeneration = 0L
+    @Volatile private var aiThread: Thread? = null
+    private var aiReplyIndex: Int? = null
     var localContextSize by mutableIntStateOf(4096)
     var localThreads by mutableIntStateOf(4)
     var localResponseTokens by mutableIntStateOf(1024)
@@ -900,6 +903,7 @@ class IdeViewModel : ViewModel() {
 
     fun askAi(testOnly: Boolean = false, preferredSlot: Int? = null) {
         if (aiBusy) return
+        val generation = ++aiGeneration
         if (!testOnly) { showCodeNotice=false; showTeachingNotice=false }
         if (!testOnly) pendingProjectEdits = emptyList()
         aiProgress=null
@@ -948,11 +952,13 @@ class IdeViewModel : ViewModel() {
             clearAttachment()
             aiMessages.add(AiMessage(false, ""))
             trimAiMessages()
+            aiReplyIndex = aiMessages.lastIndex
         } else {
+            aiReplyIndex = null
             aiTestStatus = "Testing connection…"
         }
         aiBusy = true
-        thread(name = "PY4U-AI") {
+        aiThread = thread(name = "PY4U-AI") {
             val historySnapshot = if (!testOnly) aiMessages.dropLast(2).toList() else emptyList()
             val result = runCatching {
                 val projectSources = if (shareProjectSnapshot) ProjectAiContext.editableSources(
@@ -962,6 +968,8 @@ class IdeViewModel : ViewModel() {
                         maxCharacters=(localContextSize * 2).coerceIn(1_500, 8_000)) else emptyMap()
                 var lastFailure: Throwable? = null
                 slots.forEachIndexed { index, slot ->
+                    if (generation != aiGeneration || Thread.currentThread().isInterrupted)
+                        throw InterruptedException("Astro request stopped")
                     try {
                         val sharedSources = if (slot.provider == "On-device") localSources else projectSources
                         val providerQuestion = if (sharedSources.isNotEmpty()) question +
@@ -969,6 +977,7 @@ class IdeViewModel : ViewModel() {
                             sharedSources.entries.joinToString("\n") { (path, source) -> "File: $path\n```python\n$source\n```" } else question
                         val providerCode = if (shareCodeSnapshot && sharedSources.isEmpty()) codeSnapshot else null
                         if (index > 0) viewModelScope.launch {
+                            if (generation != aiGeneration) return@launch
                             val message = "${slots[index-1].label} AI unavailable • switching to ${slot.label} AI"
                             aiProgress = message
                             if ((assistantReplyCount+1) % 3 == 0) aiFallbackNotice = message
@@ -977,8 +986,8 @@ class IdeViewModel : ViewModel() {
                             appContext, localModelForSlot(slot.index), providerQuestion,
                             providerCode, historySnapshot,
                             localContextSize, localThreads, localResponseTokens,
-                            onStatus={ status -> viewModelScope.launch { aiProgress="${slot.label}: $status" } },
-                            onPartial={ partial -> if (!testOnly) showAiPartial(partial) }
+                            onStatus={ status -> viewModelScope.launch { if (generation == aiGeneration) aiProgress="${slot.label}: $status" } },
+                            onPartial={ partial -> if (!testOnly && generation == aiGeneration) showAiPartial(partial) }
                         ) else AiClient.chat(
                             providerSetting=slot.provider,
                             endpoint=slot.endpoint,
@@ -988,10 +997,12 @@ class IdeViewModel : ViewModel() {
                             code=providerCode,
                             history=historySnapshot,
                             revealDelayMs=if (typingAnimation) (animationDuration / 6.7f).toLong().coerceIn(4L, 120L) else 0L,
-                            onStatus={ status -> viewModelScope.launch { aiProgress="${slot.label}: $status" } }
-                        ) { partial -> if (!testOnly) showAiPartial(partial) }
+                            onStatus={ status -> viewModelScope.launch { if (generation == aiGeneration) aiProgress="${slot.label}: $status" } }
+                        ) { partial -> if (!testOnly && generation == aiGeneration) showAiPartial(partial) }
                         return@runCatching response to sharedSources
                     } catch (failure: Throwable) {
+                        if (generation != aiGeneration || failure is InterruptedException || Thread.currentThread().isInterrupted)
+                            throw failure
                         lastFailure = failure
                     }
                 }
@@ -1001,6 +1012,8 @@ class IdeViewModel : ViewModel() {
             val answer = result.getOrNull()?.first ?: "AI error: ${result.exceptionOrNull()?.message ?: "All three AI connections failed"}"
             val sharedSources = result.getOrNull()?.second.orEmpty()
             viewModelScope.launch {
+                if (generation != aiGeneration) return@launch
+                aiThread = null
                 aiPartialText = null
                 mainHandler.removeCallbacks(aiPartialRunnable)
                 aiPartialScheduled.set(false)
@@ -1030,8 +1043,24 @@ class IdeViewModel : ViewModel() {
                 }
                 aiBusy=false
                 aiProgress=null
+                aiReplyIndex=null
             }
         }
+    }
+
+    fun cancelAi() {
+        if (!aiBusy) return
+        aiGeneration++
+        aiThread?.interrupt()
+        aiThread = null
+        aiPartialText = null
+        mainHandler.removeCallbacks(aiPartialRunnable)
+        aiPartialScheduled.set(false)
+        if (aiReplyIndex == null) aiTestStatus = "Test stopped"
+        aiReplyIndex?.takeIf { it in aiMessages.indices }?.let { aiMessages[it] = AiMessage(false, "Astro stopped.") }
+        aiReplyIndex = null
+        aiBusy = false
+        aiProgress = null
     }
 
     private fun extractPythonFile(answer: String): String? {
@@ -1266,6 +1295,7 @@ class IdeViewModel : ViewModel() {
         val targetDir = File(projectsRoot,safeName)
         if (!targetDir.exists() || !targetDir.isDirectory || targetDir.parentFile != projectsRoot) return
         if (targetDir == projectDir) return
+        cancelAi()
         projectDiagnosticsGeneration++
         projectDiagnosticsTask?.cancel(false)
         projectProblems = emptyList()
@@ -1382,6 +1412,7 @@ class IdeViewModel : ViewModel() {
 
     fun makeNewCode() {
         if (running || !::projectDir.isInitialized) return
+        cancelAi()
         rememberEditorLocation()
         save()
         val parent = ProjectWorkspace.resolvePath(projectDir, currentFolder)?.takeIf { it.isDirectory } ?: projectDir
@@ -1442,6 +1473,7 @@ class IdeViewModel : ViewModel() {
             ?.takeIf { it.isFile && it.extension.equals("py", true) } ?: return false
         val relativeName = ProjectWorkspace.relativePath(projectDir, file) ?: return false
         if (relativeName == currentFileName) return true
+        cancelAi()
         rememberEditorLocation()
         save()
         currentFileName=relativeName
@@ -1818,6 +1850,7 @@ class IdeViewModel : ViewModel() {
     }
 
     override fun onCleared() {
+        cancelAi()
         mainHandler.removeCallbacks(savedRefreshRunnable)
         completionTask?.cancel(true)
         completionWorker.shutdownNow()
@@ -2938,7 +2971,11 @@ private fun AchievementNotice(
                                     }
                                 }
                             }
-                            if(vm.aiBusy && vm.aiMessages.isNotEmpty()) Text(vm.aiProgress ?: "Astro is writing…",color=Color(0xFF8D929A),fontSize=11.sp)
+                            if(vm.aiBusy && vm.aiMessages.isNotEmpty()) Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                Text(vm.aiProgress ?: "Astro is writing…",color=Color(0xFF8D929A),fontSize=11.sp,
+                                    modifier=Modifier.weight(1f))
+                                TextButton(onClick=vm::cancelAi) { Text("Stop Astro") }
+                            }
                         }
                         vm.aiFallbackNotice?.let { status ->
                             SwitchingModelNotice(status=status,accent=accent,onFinished={vm.aiFallbackNotice=null})

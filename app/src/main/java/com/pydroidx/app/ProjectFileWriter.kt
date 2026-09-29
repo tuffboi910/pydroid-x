@@ -51,6 +51,24 @@ internal object ProjectFileWriter {
         }
     }
 
+    fun duplicate(source: File, target: File, complete: (Result<Unit>) -> Unit) {
+        executor.execute {
+            complete(runCatching {
+                if (target.exists() || !source.isFile) throw IOException("Could not copy ${source.name}")
+                val bytes = AtomicFile(source).openRead().use { it.readBytes() }
+                val atomic = AtomicFile(target)
+                val stream = atomic.startWrite()
+                try {
+                    stream.write(bytes)
+                    atomic.finishWrite(stream)
+                } catch (error: Throwable) {
+                    atomic.failWrite(stream)
+                    throw error
+                }
+            })
+        }
+    }
+
     fun checkpoint(file: File, content: String, complete: (Result<Unit>) -> Unit) {
         executor.execute {
             complete(runCatching {

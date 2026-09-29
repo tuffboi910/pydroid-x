@@ -296,6 +296,7 @@ class IdeViewModel : ViewModel() {
     private lateinit var aiKeys: SecureAiKeyStore
     private lateinit var settings: android.content.SharedPreferences
     private val pendingDocumentWrites = PendingDocumentWrites()
+    private val pendingDuplicates = mutableSetOf<String>()
     internal var editorLocationProvider: (() -> EditorLocation?)? = null
 
     private fun locationKey(project: String, file: String) = "$project/$file"
@@ -887,6 +888,32 @@ class IdeViewModel : ViewModel() {
             .putString("selected_$currentProjectName",currentFileName).apply()
         refreshSaved()
         editorRevision++
+    }
+
+    fun duplicateFile(fileName: String, onCreated: () -> Unit = {}) {
+        if (running || !::projectDir.isInitialized) return
+        val directory = projectDir
+        val source = File(directory, fileName)
+        if (source.parentFile != directory || !source.isFile || !source.extension.equals("py", true)) return
+        if (fileName == currentFileName) save()
+        val stem = source.nameWithoutExtension
+        var target = File(directory, "${stem}_copy.py")
+        var suffix = 2
+        while (target.exists() || target.absolutePath in pendingDuplicates)
+            target = File(directory, "${stem}_copy_${suffix++}.py")
+        pendingDuplicates.add(target.absolutePath)
+        ProjectFileWriter.duplicate(source, target) { result ->
+            mainHandler.post {
+                pendingDuplicates.remove(target.absolutePath)
+                result.onSuccess {
+                    if (projectDir == directory) {
+                        refreshSaved()
+                        openProjectFile(target.name)
+                        onCreated()
+                    }
+                }.onFailure { saveError = "Couldn’t duplicate $fileName: ${it.message}" }
+            }
+        }
     }
 
     fun openSaved(displayName: String) {
@@ -1682,17 +1709,30 @@ private fun AchievementNotice(
                             ) {
                                 vm.savedCodes.forEach { saved ->
                                     Surface(
-                                        onClick={vm.openProjectFile(saved.fileName);scope.launch{pager.animateScrollToPage(1)}},
                                         color=if(vm.currentFileName.substringBeforeLast('.').replace('_',' ')==saved.name) Color.White.copy(alpha=0.15f) else Color.White.copy(alpha=0.045f),
                                         shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                                         modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.10f),androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
                                     ) {
                                         Row(Modifier.padding(horizontal=15.dp,vertical=14.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
-                                            Text("⌘",color=Color.White,fontSize=18.sp)
-                                            Spacer(Modifier.width(12.dp))
-                                            Column(Modifier.weight(1f)) {
-                                                Text(saved.name,color=Color.White,fontSize=15.sp,fontWeight=FontWeight.SemiBold)
-                                                Text(".py  •  auto-saved",color=Color.Gray,fontSize=10.sp)
+                                            Row(Modifier.weight(1f).clickable(enabled=!vm.running) {
+                                                editorView?.flushCodeChange()
+                                                if (vm.openProjectFile(saved.fileName)) scope.launch{pager.animateScrollToPage(1)}
+                                            },verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                                Text("⌘",color=Color.White,fontSize=18.sp)
+                                                Spacer(Modifier.width(12.dp))
+                                                Column {
+                                                    Text(saved.name,color=Color.White,fontSize=15.sp,fontWeight=FontWeight.SemiBold)
+                                                    Text(".py  •  auto-saved",color=Color.Gray,fontSize=10.sp)
+                                                }
+                                            }
+                                            IconButton(enabled=!vm.running,
+                                                onClick={editorView?.flushCodeChange();vm.duplicateFile(saved.fileName) {
+                                                    scope.launch{pager.animateScrollToPage(1)}
+                                                }},
+                                                modifier=Modifier.size(40.dp).semantics {
+                                                    contentDescription="Duplicate ${saved.fileName}"
+                                                }) {
+                                                IdeGlyph("Copy",Color.LightGray,Modifier.size(17.dp))
                                             }
                                             Text("›",color=Color.Gray,fontSize=24.sp)
                                         }

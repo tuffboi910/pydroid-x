@@ -65,6 +65,23 @@ class ProjectFileWriterTest {
         assertEquals("existing", target.readText())
     }
 
+    @Test fun duplicateCopiesLatestQueuedTextWithoutChangingOriginal() {
+        val dir = Files.createTempDirectory("py4u-copy-").toFile()
+        val source = File(dir, "main.py")
+        val copy = File(dir, "main_copy.py")
+        val finished = CountDownLatch(2)
+        var copied = false
+        ProjectFileWriter.enqueue(source, "print('🐍')") { finished.countDown() }
+        ProjectFileWriter.duplicate(source, copy) { result ->
+            copied = result.isSuccess
+            finished.countDown()
+        }
+        assertTrue(finished.await(5, TimeUnit.SECONDS))
+        assertTrue(copied)
+        assertEquals("print('🐍')", source.readText())
+        assertEquals(source.readText(), copy.readText())
+    }
+
     @Test fun renameCarriesExistingHistory() {
         val dir = Files.createTempDirectory("py4u-rename-history-").toFile()
         val source = File(dir, "untitled_1.py").apply { writeText("old") }

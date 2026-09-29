@@ -314,6 +314,7 @@ class IdeViewModel : ViewModel() {
     private val stopInputSignal = "\u0000PYDROIDX_STOP\u0000"
     @Volatile private var worker: Thread? = null
     @Volatile private var stopRequested = false
+    private var runGeneration = 0L
     private var autosaveJob: Job? = null
     private var namingJob: Job? = null
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -1563,7 +1564,8 @@ class IdeViewModel : ViewModel() {
             }.onFailure { saveError = "Couldn’t restore ${version.name}: ${it.message}" }
         }
     }
-    private fun persistCode(directory: File, fileName: String, snapshot: String) {
+    private fun persistCode(directory: File, fileName: String, snapshot: String,
+                            complete: ((Result<Unit>) -> Unit)? = null) {
         val file = File(directory, fileName)
         pendingDocumentWrites.mark(file, snapshot)
         ProjectFileWriter.enqueue(file, snapshot) { result ->
@@ -1587,6 +1589,7 @@ class IdeViewModel : ViewModel() {
                         mainHandler.postDelayed(savedRefreshRunnable, 700)
                     }
                 }
+                complete?.invoke(result)
             }
         }
     }
@@ -1689,23 +1692,39 @@ class IdeViewModel : ViewModel() {
             })
             return
         }
-        save()
+        autosaveJob?.cancel()
         val sourceSnapshot = code
         val fileSnapshot = currentFileName
+        val directory = projectDir
         stdin.clear()
         input = ""
         waitingInput = false
         stopRequested = false
+        val generation = ++runGeneration
+        worker = null
         clearOutput()
         running = true
-        worker = thread(name = "PY4U-Python") {
-            runCatching {
-                Python.getInstance().getModule("runner").callAttr("run_code", sourceSnapshot, fileSnapshot, projectDir.absolutePath, Bridge())
-            }.onFailure { failure ->
-                mainHandler.post {
-                    appendOutput("\nRuntime error: ${failure.message ?: "Python stopped unexpectedly"}\n")
-                    running = false
-                    waitingInput = false
+        persistCode(directory, fileSnapshot, sourceSnapshot) { saved ->
+            if (generation != runGeneration || !running || stopRequested || projectDir != directory) {
+                if (generation != runGeneration) return@persistCode
+                running = false
+                return@persistCode
+            }
+            if (saved.isFailure || pendingDocumentWrites.hasPendingIn(directory)) {
+                appendOutput("Save project files before running; a pending write could make imports stale.\n")
+                running = false
+                return@persistCode
+            }
+            worker = thread(name = "PY4U-Python") {
+                runCatching {
+                    Python.getInstance().getModule("runner").callAttr("run_code", sourceSnapshot, fileSnapshot, directory.absolutePath, Bridge())
+                }.onFailure { failure ->
+                    mainHandler.post {
+                        appendOutput("\nRuntime error: ${failure.message ?: "Python stopped unexpectedly"}\n")
+                        running = false
+                        waitingInput = false
+                        worker = null
+                    }
                 }
             }
         }
@@ -1718,18 +1737,47 @@ class IdeViewModel : ViewModel() {
         inputHistory.record(command)
         input = ""
         if (command == "clear") { clearOutput(); return }
+        stopRequested = false
+        stdin.clear()
+        waitingInput = false
+        worker = null
         running = true
-        worker = thread(name = "PY4U-Terminal") {
-            runCatching { Python.getInstance().getModule("runner").callAttr("run_terminal_command", command, projectDir.absolutePath, Bridge()) }
-                .onFailure { failure -> mainHandler.post { appendOutput("Terminal error: ${failure.message ?: "command failed"}\n"); running = false } }
+        val directory = projectDir
+        val generation = ++runGeneration
+        fun launchCommand() {
+            if (generation != runGeneration || !running || stopRequested) return
+            worker = thread(name = "PY4U-Terminal") {
+                runCatching { Python.getInstance().getModule("runner").callAttr("run_terminal_command", command, directory.absolutePath, Bridge()) }
+                    .onFailure { failure -> mainHandler.post {
+                        appendOutput("Terminal error: ${failure.message ?: "command failed"}\n")
+                        running = false
+                        worker = null
+                    } }
+            }
         }
+        if (command.substringBefore(' ').lowercase() in listOf("python", "py")) {
+            save()
+            ProjectFileWriter.afterQueuedWrites {
+                mainHandler.post {
+                    if (generation != runGeneration) return@post
+                    if (pendingDocumentWrites.hasPendingIn(directory)) {
+                        appendOutput("Save project files before running; a pending write could make imports stale.\n")
+                        running = false
+                    } else launchCommand()
+                }
+            }
+        } else launchCommand()
     }
     fun stop() {
         if (!running) return
         stopRequested = true
+        runGeneration++
         stdin.clear()
         stdin.offer(stopInputSignal)
-        appendOutput("\n[Stopping program…]\n")
+        if (worker == null) {
+            appendOutput("\n[Run cancelled before start]\n")
+            running = false
+        } else appendOutput("\n[Stopping program…]\n")
         input = ""
         waitingInput = false
     }
@@ -1763,7 +1811,9 @@ class IdeViewModel : ViewModel() {
         projectDiagnosticsGeneration++
         projectDiagnosticsTask?.cancel(true)
         projectDiagnosticsWorker.shutdownNow()
+        runGeneration++
         stopRequested = true
+        running = false
         stdin.offer(stopInputSignal)
         super.onCleared()
     }
@@ -2511,7 +2561,7 @@ private fun AchievementNotice(
                                 editorView=view
                                 view.onFindRequested={ replace -> showFind=true;showReplace=replace }
                                 view.onSaveRequested=vm::save
-                                view.onRunRequested={if (!vm.running) { vm.run();scope.launch{pager.animateScrollToPage(2)} }}
+                                view.onRunRequested={if (!vm.running) { view.flushCodeChange();vm.run();scope.launch{pager.animateScrollToPage(2)} }}
                                 view.onPaletteRequested={showPalette=true}
                                 view.onQuickOpenRequested={showQuickOpen=true}
                                 view.onCloseTabRequested={vm.closeTab(vm.currentFileName)}
@@ -2525,7 +2575,7 @@ private fun AchievementNotice(
                             update={view->
                                 view.onFindRequested={ replace -> showFind=true;showReplace=replace }
                                 view.onSaveRequested=vm::save
-                                view.onRunRequested={if (!vm.running) { vm.run();scope.launch{pager.animateScrollToPage(2)} }}
+                                view.onRunRequested={if (!vm.running) { view.flushCodeChange();vm.run();scope.launch{pager.animateScrollToPage(2)} }}
                                 view.onPaletteRequested={showPalette=true}
                                 view.onQuickOpenRequested={showQuickOpen=true}
                                 view.onCloseTabRequested={vm.closeTab(vm.currentFileName)}

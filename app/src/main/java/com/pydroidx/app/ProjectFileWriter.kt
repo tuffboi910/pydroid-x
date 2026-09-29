@@ -105,6 +105,8 @@ internal object ProjectFileWriter {
         }
     }
 
+    fun afterQueuedWrites(complete: () -> Unit) { executor.execute(complete) }
+
     fun rename(source: File, target: File, complete: (Result<Unit>) -> Unit) {
         relocate(source, target, "rename", complete)
     }

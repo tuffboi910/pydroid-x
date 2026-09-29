@@ -11,6 +11,11 @@ internal class PendingDocumentWrites {
 
     fun read(file: File): String? = pending[file.absolutePath]
 
+    fun hasPendingIn(root: File): Boolean {
+        val prefix = root.absolutePath + File.separator
+        return pending.keys.any { it.startsWith(prefix) }
+    }
+
     fun completed(file: File, source: String, succeeded: Boolean) {
         if (succeeded) pending.remove(file.absolutePath, source)
     }

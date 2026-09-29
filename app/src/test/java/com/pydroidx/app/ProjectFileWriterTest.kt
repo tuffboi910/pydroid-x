@@ -16,6 +16,17 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[28], application=Application::class)
 class ProjectFileWriterTest {
+    @Test fun terminalBarrierObservesAllPreviouslyQueuedSaves() {
+        val root = Files.createTempDirectory("py4u-terminal-barrier-").toFile()
+        val file = File(root, "helper.py")
+        val done = CountDownLatch(1)
+        var observed = ""
+        ProjectFileWriter.enqueue(file, "latest") { }
+        ProjectFileWriter.afterQueuedWrites { observed = file.readText(); done.countDown() }
+        assertTrue(done.await(5, TimeUnit.SECONDS))
+        assertEquals("latest", observed)
+    }
+
     @Test fun oversizedDraftReportsThatRecoveryCannotBeGuaranteed() {
         val root = Files.createTempDirectory("py4u-draft-limit-").toFile()
         val file = File(root, "main.py").apply { writeText("saved") }

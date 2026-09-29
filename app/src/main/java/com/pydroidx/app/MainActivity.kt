@@ -944,7 +944,7 @@ class IdeViewModel : ViewModel() {
     private fun extractTeachingOffer(answer: String): String? =
         Regex("\\[TEACH:([^]]+)]", RegexOption.IGNORE_CASE).find(answer)?.groupValues?.get(1)?.trim()
 
-    fun applyPendingCode() {
+    fun applyPendingCode(selectedHunks: Set<Int>? = null) {
         val change = pendingCode ?: return
         if (currentFileName != change.fileName || code != change.sourceSnapshot) {
             pendingCode = null
@@ -953,13 +953,16 @@ class IdeViewModel : ViewModel() {
         }
         val directory = projectDir
         val target = ProjectWorkspace.resolvePath(directory, currentFileName) ?: return
+        val hunks = CodeHunks.between(change.sourceSnapshot, change.code)
+        val chosen = selectedHunks ?: hunks.indices.toSet()
+        if (chosen.isEmpty() || chosen.any { it !in hunks.indices }) return
+        val replacement = CodeHunks.apply(change.sourceSnapshot, hunks, chosen)
         ProjectFileWriter.checkpoint(target, change.sourceSnapshot) { result ->
             mainHandler.post {
                 if (result.isFailure) {
                     aiMessages.add(AiMessage(false, "Couldn’t protect the current file: ${result.exceptionOrNull()?.message}"))
                 } else if (pendingCode == change && projectDir == directory &&
                     currentFileName == change.fileName && code == change.sourceSnapshot) {
-                    val replacement = change.code
                     code = replacement + if (replacement.endsWith("\n")) "" else "\n"
                     editorRevision++
                     save()
@@ -3206,21 +3209,30 @@ private fun AchievementNotice(
         )
     }
     if(showCodePreview) vm.pendingCode?.let { change ->
-        val preview = remember(change) { codeChangePreview(change.sourceSnapshot, change.code) }
+        val hunks = remember(change) { CodeHunks.between(change.sourceSnapshot, change.code) }
+        val selected = remember(change) { mutableStateListOf<Int>().apply { addAll(hunks.indices.toList()) } }
         AlertDialog(
             onDismissRequest={showCodePreview=false},containerColor=Color(0xFF171A20),
             title={Text("Review edit · ${change.fileName}",fontSize=17.sp)},
             text={Column(Modifier.heightIn(max=450.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                Text(preview.summary,color=accent,fontSize=12.sp)
-                Text("BEFORE",color=Color(0xFFFF8895),fontSize=10.sp,fontWeight=FontWeight.Bold)
-                Text(preview.before,color=Color(0xFFFFC0C7),fontFamily=FontFamily.Monospace,fontSize=12.sp,
-                    modifier=Modifier.fillMaxWidth().background(Color(0xFF292126)).padding(10.dp))
-                Text("AFTER",color=Color(0xFF81DDAF),fontSize=10.sp,fontWeight=FontWeight.Bold)
-                Text(preview.after,color=Color(0xFFB7F5D4),fontFamily=FontFamily.Monospace,fontSize=12.sp,
-                    modifier=Modifier.fillMaxWidth().background(Color(0xFF1E2B25)).padding(10.dp))
-                Text("Only changed lines shown. Your file stays untouched until you tap Apply.",color=Color.Gray,fontSize=10.sp)
+                Text("${hunks.size} change${if (hunks.size == 1) "" else "s"} · select what to apply",color=accent,fontSize=12.sp)
+                hunks.forEachIndexed { index, hunk ->
+                    Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                        Checkbox(checked=index in selected,onCheckedChange={ checked ->
+                            if (checked) selected.add(index) else selected.remove(index)
+                        })
+                        Text("Change ${index + 1} · line ${hunk.from + 1}",color=Color.White,fontSize=12.sp)
+                    }
+                    Text(if (hunk.before.isEmpty()) "(no lines)" else hunk.before.take(50).joinToString("\n"),
+                        color=Color(0xFFFFC0C7),fontFamily=FontFamily.Monospace,fontSize=12.sp,
+                        modifier=Modifier.fillMaxWidth().background(Color(0xFF292126)).padding(10.dp))
+                    Text(if (hunk.replacement.isEmpty()) "(no lines)" else hunk.replacement.take(50).joinToString("\n"),
+                        color=Color(0xFFB7F5D4),fontFamily=FontFamily.Monospace,fontSize=12.sp,
+                        modifier=Modifier.fillMaxWidth().background(Color(0xFF1E2B25)).padding(10.dp))
+                }
+                Text("Your file stays untouched until you apply the selected changes.",color=Color.Gray,fontSize=10.sp)
             }},
-            confirmButton={Button(onClick={vm.applyPendingCode();showCodePreview=false}) { Text("Apply edit") }},
+            confirmButton={Button(enabled=selected.isNotEmpty(),onClick={vm.applyPendingCode(selected.toSet());showCodePreview=false}) { Text("Apply selected") }},
             dismissButton={TextButton(onClick={showCodePreview=false}) { Text("Keep editing") }}
         )
     }
@@ -3328,23 +3340,6 @@ private fun AchievementNotice(
         dismissButton={TextButton(onClick={showAiSettings=false}){Text("Cancel")}}
     )
     }
-}
-
-private data class CodeChangePreview(val summary: String, val before: String, val after: String)
-
-private fun codeChangePreview(original: String, proposed: String): CodeChangePreview {
-    val oldLines = original.lines()
-    val newLines = proposed.lines()
-    val prefix = oldLines.zip(newLines).takeWhile { (a,b) -> a==b }.size
-    var suffix = 0
-    while (suffix < oldLines.size-prefix && suffix < newLines.size-prefix &&
-        oldLines[oldLines.lastIndex-suffix] == newLines[newLines.lastIndex-suffix]) suffix++
-    val removed = oldLines.subList(prefix,oldLines.size-suffix)
-    val added = newLines.subList(prefix,newLines.size-suffix)
-    fun render(lines: List<String>): String = if (lines.isEmpty()) "(no lines)" else
-        lines.take(80).mapIndexed { index,line -> "${prefix+index+1}: $line" }.joinToString("\n") +
-            if (lines.size>80) "\n… ${lines.size-80} more lines" else ""
-    return CodeChangePreview("Line ${prefix+1} · ${removed.size} removed, ${added.size} added",render(removed),render(added))
 }
 
 @Composable private fun SettingSwitch(label:String,checked:Boolean,onChange:(Boolean)->Unit){

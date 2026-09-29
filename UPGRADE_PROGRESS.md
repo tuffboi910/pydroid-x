@@ -11,7 +11,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Astro: editor-selection question handoff; bounded project names, diagnostics, and recent Console context only when code sharing is enabled; existing preview/Accept/Reject flow retained.
 - Navigation: searchable command palette, Quick Open, bounded background Find in Project with direct file/line navigation, and a horizontal open-file tab strip with close and Ctrl+W. Open tabs and selected file persist per project.
 - Project browser: nested folder navigation and creation; bounded recursive Python file listing; user-driven rename, move, and recoverable delete; recovery notice restored after process restart; nested paths across saved files, tabs, project search, diagnostics, traceback navigation, and file history. Android CI passed; physical-device verification remains.
-- Tabs: the strip now allows moving a tab left or right and reopening the last closed file. This follow-up awaits Android CI and device verification.
+- Tabs: the strip now allows moving a tab left or right and reopening the last closed file. Android CI passed; physical-device verification remains.
 
 ## Verification
 
@@ -20,6 +20,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Runs 212 (Astro context) and 213 (project starters) passed. Run 214 caught a Kotlin scope error in history preview; run 215 carried the same error. Corrected run 230, project-search run 231, queued-save run 232, corrected tab run 234, Console run 235, rename recovery run 236, autosave refresh run 237, duplication run 238, and the final guard run 239 passed Android tests and APK packaging. Run 233 caught an editor-location visibility issue and was fixed in 234. Project-wide Problems source tests pass locally; its Android CI run is pending.
 - Git diff checks and clean local status were verified at each checkpoint. No physical Android device or emulator was attached to this Work environment.
 - The nested project/browser batch passes 24 host Python tests with Jedi 0.19.2 and `git diff --check`; Android CI run 241 passed unit tests and debug APK packaging.
+- Tab controls passed 24 host Python tests and Android CI run 242, including unit tests and debug APK packaging.
 
 ## Incomplete or unverified
 

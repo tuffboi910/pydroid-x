@@ -40,6 +40,39 @@ class FakeIndex:
 
 
 class RuntimePackageTests(unittest.TestCase):
+    def test_pure_wheel_extra_installs_declared_optional_dependency(self):
+        def make_wheel(name, metadata):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w") as wheel:
+                wheel.writestr(name + "/__init__.py", "value = 1\n")
+                wheel.writestr(name + "-1.0.dist-info/METADATA", metadata)
+                wheel.writestr(name + "-1.0.dist-info/WHEEL", "Root-Is-Purelib: true\n")
+            return buffer.getvalue()
+        parent = make_wheel("py4usample", "Name: py4usample\nVersion: 1.0\nProvides-Extra: feature\n"
+                            "Requires-Dist: py4uoptional==1.0; extra == 'feature'\n")
+        optional = make_wheel("py4uoptional", "Name: py4uoptional\nVersion: 1.0\n")
+        class ExtrasIndex:
+            def __call__(self, url, timeout):
+                name = "py4uoptional" if "py4uoptional" in url else "py4usample"
+                wheel = optional if name == "py4uoptional" else parent
+                if url.startswith("https://pypi.org/"):
+                    filename = name + "-1.0-py3-none-any.whl"
+                    release = {"filename": filename, "packagetype": "bdist_wheel",
+                               "size": len(wheel), "url": "https://files.pythonhosted.org/" + filename,
+                               "digests": {"sha256": hashlib.sha256(wheel).hexdigest()}}
+                    return io.BytesIO(json.dumps({"releases": {"1.0": [release]}}).encode())
+                return io.BytesIO(wheel)
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            self.assertEqual(["py4uoptional 1.0", "py4usample 1.0"], runtime_packages.install(
+                ["py4usample[feature]"], root, lambda _: None, ExtrasIndex()))
+            self.assertTrue((pathlib.Path(root) / "py4uoptional").exists())
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            self.assertEqual(["py4uoptional 1.0", "py4usample 1.0"], runtime_packages.install(
+                ["py4usample", "py4usample[feature]"], root, lambda _: None, ExtrasIndex()))
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            with self.assertRaisesRegex(ValueError, "Unsupported extras"):
+                runtime_packages.install(["py4usample[typo]"], root, lambda _: None, ExtrasIndex())
+
     def test_conflicting_requests_do_not_partially_install(self):
         with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
             with self.assertRaisesRegex(ValueError, "Conflicting dependency constraints"):

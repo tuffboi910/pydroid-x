@@ -172,36 +172,64 @@ def install(requirements, root, output, opener=urllib.request.urlopen, cancelled
     visiting = set()
     constraints = {}
     planned = {}
+    expanded_extras = {}
     order = []
     download_bytes = 0
     installed = []
 
-    def resolve(raw, depth):
+    def resolve(raw, depth, marker_extra=""):
         nonlocal download_bytes
         if cancelled():
             raise InterruptedError("Package installation stopped")
         if depth > 24 or len(constraints) > 24:
             raise ValueError("Package dependency graph is too large")
         req = Requirement(raw)
-        if req.url or req.extras:
-            raise ValueError("URLs and package extras are not supported")
-        if req.marker and not req.marker.evaluate():
+        if req.url:
+            raise ValueError("Direct package URLs are not supported")
+        if req.marker and not req.marker.evaluate({"extra": marker_extra}):
             return
         name = canonicalize_name(req.name)
+        extras = set(req.extras)
+        def check_extras(metadata):
+            offered = {canonicalize_name(item) for item in metadata.get_all("Provides-Extra", [])}
+            unknown = extras - offered
+            if unknown:
+                raise ValueError("Unsupported extras for %s: %s" % (name, ", ".join(sorted(unknown))))
         constraints.setdefault(name, []).append(req)
         specifiers = [str(item.specifier) for item in constraints[name] if str(item.specifier)]
         combined = Requirement(name + (",".join(specifiers) if specifiers else ""))
         if name in visiting:
             raise ValueError("Circular dependency: " + name)
         if name in planned:
-            if combined.specifier.contains(planned[name][0]):
-                return
-            raise ValueError("Conflicting dependency constraints for " + name)
+            if not combined.specifier.contains(planned[name][0]):
+                raise ValueError("Conflicting dependency constraints for " + name)
+            check_extras(planned[name][3])
+            new_extras = extras - expanded_extras.get(name, set())
+            if new_extras:
+                visiting.add(name)
+                expanded_extras.setdefault(name, set()).update(new_extras)
+                for dependency in planned[name][3].get_all("Requires-Dist", []):
+                    for extra in new_extras:
+                        resolve(dependency, depth + 1, extra)
+                visiting.remove(name)
+                order.remove(name)
+                order.append(name)
+            return
         try:
             current = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
             current = None
         if current and combined.specifier.contains(current):
+            distribution = importlib.metadata.distribution(name)
+            check_extras(distribution.metadata)
+            new_extras = extras - expanded_extras.get(name, set())
+            if new_extras:
+                visiting.add(name)
+                expanded_extras.setdefault(name, set()).update(new_extras)
+                for dependency in distribution.requires or []:
+                    for extra in new_extras:
+                        resolve(dependency, depth + 1, extra)
+                visiting.remove(name)
             return
         if current and not os.path.isdir(os.path.join(root, name)):
             raise ValueError("Bundled %s %s conflicts with %s" % (name, current, raw))
@@ -215,10 +243,13 @@ def install(requirements, root, output, opener=urllib.request.urlopen, cancelled
         if hashlib.sha256(data).hexdigest() != release["digests"]["sha256"]:
             raise ValueError("Wheel checksum mismatch")
         contents, metadata = _wheel_contents(data, name, version)
+        check_extras(metadata)
+        expanded_extras[name] = extras
         for dependency in metadata.get_all("Requires-Dist", []):
-            resolve(dependency, depth + 1)
+            for extra in {""} | extras:
+                resolve(dependency, depth + 1, extra)
         visiting.remove(name)
-        planned[name] = (version, data, contents)
+        planned[name] = (version, data, contents, metadata)
         order.append(name)
 
     for raw in requirements:
@@ -226,7 +257,7 @@ def install(requirements, root, output, opener=urllib.request.urlopen, cancelled
     for name in order:
         if cancelled():
             raise InterruptedError("Package installation stopped")
-        version, data, contents = planned[name]
+        version, data, contents, _ = planned[name]
         stage = tempfile.mkdtemp(prefix=".install-", dir=root)
         target = os.path.join(root, name)
         backup = target + ".previous"

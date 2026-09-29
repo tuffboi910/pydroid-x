@@ -12,7 +12,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parents[2] / "main" / "python"))
 import runtime_packages
 
 
-def wheel_bytes(malicious=False):
+def wheel_bytes(malicious=False, native=False):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as wheel:
         wheel.writestr("py4usample/__init__.py", "value = 42\n")
@@ -20,6 +20,8 @@ def wheel_bytes(malicious=False):
         wheel.writestr("py4usample-1.0.dist-info/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\n")
         if malicious:
             wheel.writestr("../escaped.txt", "bad")
+        if native:
+            wheel.writestr("py4usample/native.so", b"native")
     return buffer.getvalue()
 
 
@@ -63,3 +65,9 @@ class RuntimePackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
             with self.assertRaisesRegex(ValueError, "checksum"):
                 runtime_packages.install(["py4usample"], root, lambda _: None, index)
+
+    def test_native_payload_rejected_despite_universal_filename(self):
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            with self.assertRaisesRegex(ValueError, "native code"):
+                runtime_packages.install(["py4usample"], root, lambda _: None,
+                                         FakeIndex(wheel_bytes(native=True)))

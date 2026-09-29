@@ -46,6 +46,10 @@ def _download(url, maximum, opener):
             "pypi.org", "files.pythonhosted.org"):
         raise ValueError("Package download must come from PyPI")
     with opener(url, timeout=25) as response:
+        final_url = response.geturl() if hasattr(response, "geturl") else url
+        if (urllib.parse.urlsplit(final_url).scheme != "https" or
+                urllib.parse.urlsplit(final_url).hostname not in ("pypi.org", "files.pythonhosted.org")):
+            raise ValueError("Package download redirected outside PyPI")
         data = response.read(maximum + 1)
     if len(data) > maximum:
         raise ValueError("Package download exceeds the size limit")
@@ -108,6 +112,8 @@ def _wheel_contents(data, expected_name):
                 raise ValueError("Wheel contains a symbolic link")
             if item.is_dir():
                 continue
+            if path.lower().endswith((".so", ".pyd", ".dll", ".dylib")):
+                raise ValueError("Wheel contains unsupported native code")
             total += item.file_size
             if total > MAX_EXPANDED:
                 raise ValueError("Wheel expands beyond the size limit")
@@ -117,9 +123,13 @@ def _wheel_contents(data, expected_name):
                     raise ValueError("Wheel needs unsupported installation paths")
                 path = rest[len("purelib/"):]
             if path.endswith(".dist-info/WHEEL"):
+                if item.file_size > 100_000:
+                    raise ValueError("Wheel metadata is too large")
                 wheel_info = email.message_from_bytes(archive.read(item))
                 wheel_is_pure = wheel_info.get("Root-Is-Purelib", "").lower() == "true"
             if path.endswith(".dist-info/METADATA"):
+                if item.file_size > 1_000_000:
+                    raise ValueError("Wheel metadata is too large")
                 metadata = email.message_from_bytes(archive.read(item))
             result.append((item, path))
         if not wheel_is_pure:

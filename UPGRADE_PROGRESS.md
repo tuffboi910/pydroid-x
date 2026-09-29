@@ -18,6 +18,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Lifecycle: retained ViewModel initialization is idempotent across activity recreation, so rotation does not reload the on-disk file over a live editor buffer. This batch awaits Android CI and device verification.
 - Console search: tapping a retained-output hit opens a bounded readable window starting at that line, pauses live tail updates, and Auto on resumes the latest output. This batch awaits Android CI and device verification.
 - Astro project context: an explicit sharing chip can include live current code and bounded nested Python sources in a question. File IO runs on the AI worker; hidden/history folders and oversized sources are skipped. Proposed edits still target only the current file. This batch awaits Android CI and device verification.
+- Runtime package hardening: redirects outside PyPI, oversized metadata, and native libraries hidden in universal-tagged wheels are rejected. Host tests now total 28; Android CI pending.
 
 ## Verification
 

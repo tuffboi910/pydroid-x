@@ -186,6 +186,8 @@ class IdeViewModel : ViewModel() {
     var currentFileName by mutableStateOf("main.py")
     val openTabs = mutableStateListOf<String>()
     val unsavedTabs = mutableStateListOf<String>()
+    var recentlyClosedTab by mutableStateOf<String?>(null)
+        private set
     val savedCodes = mutableStateListOf<SavedCode>()
     val browserEntries = mutableStateListOf<ProjectBrowserEntry>()
     val projectFolders = mutableStateListOf<String>()
@@ -622,6 +624,27 @@ class IdeViewModel : ViewModel() {
         }
         tabRestoreGeneration++
         openTabs.remove(fileName)
+        recentlyClosedTab = fileName
+        persistTabs()
+    }
+
+    fun reopenLastClosedTab(): Boolean {
+        val fileName = recentlyClosedTab ?: return false
+        if (!openProjectFile(fileName)) {
+            recentlyClosedTab = null
+            return false
+        }
+        recentlyClosedTab = null
+        return true
+    }
+
+    fun moveTab(fileName: String, direction: Int) {
+        val index = openTabs.indexOf(fileName)
+        val destination = index + direction
+        if (index < 0 || destination !in openTabs.indices) return
+        tabRestoreGeneration++
+        openTabs.removeAt(index)
+        openTabs.add(destination, fileName)
         persistTabs()
     }
 
@@ -1107,6 +1130,7 @@ class IdeViewModel : ViewModel() {
         namingJob?.cancel()
         projectDir = targetDir
         currentProjectName = safeName
+        recentlyClosedTab = null
         val selectedName = settings.getString("selected_$safeName", null)
         var current = selectedName?.let { ProjectWorkspace.resolvePath(projectDir, it) }
             ?.takeIf { it.isFile && it.extension.equals("py", true) }
@@ -2216,6 +2240,7 @@ private fun AchievementNotice(
                         ) {
                             vm.openTabs.forEach { fileName ->
                                 val selected = fileName == vm.currentFileName
+                                var tabMenuExpanded by remember(fileName) { mutableStateOf(false) }
                                 Surface(
                                     color=if (selected) Color.White.copy(alpha=.14f) else Color.White.copy(alpha=.045f),
                                     shape=androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
@@ -2240,8 +2265,25 @@ private fun AchievementNotice(
                                             }) {
                                             IdeGlyph("Close",Color.LightGray,Modifier.size(14.dp))
                                         }
+                                        Box {
+                                            IconButton(onClick={tabMenuExpanded=true},modifier=Modifier.size(40.dp).semantics {
+                                                contentDescription="Tab actions for $fileName"
+                                            }) { IdeGlyph("More",Color.LightGray,Modifier.size(14.dp)) }
+                                            DropdownMenu(expanded=tabMenuExpanded,onDismissRequest={tabMenuExpanded=false}) {
+                                                DropdownMenuItem(text={Text("Move tab left")},enabled=vm.openTabs.indexOf(fileName)>0,
+                                                    onClick={vm.moveTab(fileName,-1);tabMenuExpanded=false})
+                                                DropdownMenuItem(text={Text("Move tab right")},enabled=vm.openTabs.indexOf(fileName)<vm.openTabs.lastIndex,
+                                                    onClick={vm.moveTab(fileName,1);tabMenuExpanded=false})
+                                            }
+                                        }
                                     }
                                 }
+                            }
+                            if (vm.recentlyClosedTab != null) {
+                                TextButton(enabled=!vm.running,onClick={
+                                    editorView?.flushCodeChange()
+                                    vm.reopenLastClosedTab()
+                                }) { Text("↶ Reopen",fontSize=11.sp) }
                             }
                         }
                         if (showFind) {

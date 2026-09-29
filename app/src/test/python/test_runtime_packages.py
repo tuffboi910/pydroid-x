@@ -40,6 +40,27 @@ class FakeIndex:
 
 
 class RuntimePackageTests(unittest.TestCase):
+    def test_normalized_release_key_is_used_without_key_error(self):
+        index = FakeIndex(wheel_bytes())
+        class NormalizedIndex:
+            def __call__(self, url, timeout):
+                if url.startswith("https://pypi.org/"):
+                    return io.BytesIO(json.dumps({"releases": {"v1.0": [index.release]}}).encode())
+                return io.BytesIO(index.wheel)
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            self.assertEqual(["py4usample 1.0"], runtime_packages.install(
+                ["py4usample==1.0"], root, lambda _: None, NormalizedIndex()))
+
+    def test_mismatched_internal_metadata_is_rejected(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as wheel:
+            wheel.writestr("py4usample/__init__.py", "value = 1")
+            wheel.writestr("wrong-1.0.dist-info/METADATA", "Name: py4usample\nVersion: 1.0\n")
+            wheel.writestr("wrong-1.0.dist-info/WHEEL", "Root-Is-Purelib: true\n")
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            with self.assertRaisesRegex(ValueError, "metadata directory"):
+                runtime_packages.install(["py4usample"], root, lambda _: None, FakeIndex(buffer.getvalue()))
+
     def tearDown(self):
         sys.modules.pop("py4usample", None)
         sys.path[:] = [path for path in sys.path if "py4u-package-test" not in path]

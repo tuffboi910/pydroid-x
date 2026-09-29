@@ -76,12 +76,12 @@ def _candidate(requirement, opener, cancelled):
         except ValueError:
             continue
         if version in requirement.specifier:
-            versions.append(version)
-    versions.sort(reverse=True)
-    for version in versions:
+            versions.append((version, raw_version))
+    versions.sort(key=lambda item: item[0], reverse=True)
+    for version, raw_version in versions:
         if version.is_prerelease and not requirement.specifier.prereleases:
             continue
-        for release in releases[str(version)]:
+        for release in releases[raw_version]:
             if release.get("yanked") or release.get("packagetype") != "bdist_wheel":
                 continue
             if release.get("size", MAX_WHEEL + 1) > MAX_WHEEL:
@@ -100,11 +100,13 @@ def _candidate(requirement, opener, cancelled):
                      (project, ".".join(map(str, sys.version_info[:2]))))
 
 
-def _wheel_contents(data, expected_name):
+def _wheel_contents(data, expected_name, expected_version):
     result = []
     total = 0
     metadata = None
     wheel_is_pure = False
+    metadata_paths = set()
+    destinations = set()
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         entries = archive.infolist()
         if len(entries) > MAX_FILES:
@@ -129,19 +131,36 @@ def _wheel_contents(data, expected_name):
                 if not prefix or not rest.startswith("purelib/"):
                     raise ValueError("Wheel needs unsupported installation paths")
                 path = rest[len("purelib/"):]
+            if path in destinations:
+                raise ValueError("Wheel contains duplicate installation paths")
+            destinations.add(path)
             if path.endswith(".dist-info/WHEEL"):
                 if item.file_size > 100_000:
                     raise ValueError("Wheel metadata is too large")
                 wheel_info = email.message_from_bytes(archive.read(item))
                 wheel_is_pure = wheel_info.get("Root-Is-Purelib", "").lower() == "true"
+                metadata_paths.add(path.split("/", 1)[0])
             if path.endswith(".dist-info/METADATA"):
                 if item.file_size > 1_000_000:
                     raise ValueError("Wheel metadata is too large")
                 metadata = email.message_from_bytes(archive.read(item))
+                metadata_paths.add(path.split("/", 1)[0])
             result.append((item, path))
         if not wheel_is_pure:
             raise ValueError("Wheel is not pure Python")
-        if metadata is None or canonicalize_name(metadata.get("Name", "")) != expected_name:
+        if len(metadata_paths) != 1:
+            raise ValueError("Wheel metadata directory does not match the requested release")
+        info_dir = next(iter(metadata_paths))
+        try:
+            info_name, info_version = info_dir.removesuffix(".dist-info").rsplit("-", 1)
+            valid_info = (canonicalize_name(info_name) == expected_name and
+                          Version(info_version) == expected_version)
+        except (ValueError, TypeError):
+            valid_info = False
+        if not valid_info:
+            raise ValueError("Wheel metadata directory does not match the requested release")
+        if (metadata is None or canonicalize_name(metadata.get("Name", "")) != expected_name or
+                Version(metadata.get("Version", "0")) != expected_version):
             raise ValueError("Wheel metadata does not match the requested package")
     return result, metadata
 
@@ -180,7 +199,7 @@ def install(requirements, root, output, opener=urllib.request.urlopen, cancelled
         data = _download(release["url"], MAX_WHEEL, opener, cancelled)
         if hashlib.sha256(data).hexdigest() != release["digests"]["sha256"]:
             raise ValueError("Wheel checksum mismatch")
-        contents, metadata = _wheel_contents(data, name)
+        contents, metadata = _wheel_contents(data, name, version)
         for dependency in metadata.get_all("Requires-Dist", []):
             resolve(dependency, depth + 1)
         stage = tempfile.mkdtemp(prefix=".install-", dir=root)

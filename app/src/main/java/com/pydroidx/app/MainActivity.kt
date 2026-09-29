@@ -232,7 +232,7 @@ class IdeViewModel : ViewModel() {
     var aiFallbackNotice by mutableStateOf<String?>(null)
     var aiProgress by mutableStateOf<String?>(null)
     var pendingCode by mutableStateOf<PendingCodeChange?>(null)
-    var pendingProjectEdits by mutableStateOf<List<ProjectEdit>>(emptyList())
+    internal var pendingProjectEdits by mutableStateOf<List<ProjectEdit>>(emptyList())
         private set
     var teachingOffer by mutableStateOf<String?>(null)
     var showCodeNotice by mutableStateOf(false)

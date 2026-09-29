@@ -169,13 +169,18 @@ def install(requirements, root, output, opener=urllib.request.urlopen, cancelled
     """Install requested names and dependencies, rejecting incompatible wheels."""
     os.makedirs(root, exist_ok=True)
     activate(root)
-    visited = set()
+    visiting = set()
+    constraints = {}
+    planned = {}
+    order = []
+    download_bytes = 0
     installed = []
 
     def resolve(raw, depth):
+        nonlocal download_bytes
         if cancelled():
             raise InterruptedError("Package installation stopped")
-        if depth > 24 or len(visited) > 60:
+        if depth > 24 or len(constraints) > 24:
             raise ValueError("Package dependency graph is too large")
         req = Requirement(raw)
         if req.url or req.extras:
@@ -183,25 +188,45 @@ def install(requirements, root, output, opener=urllib.request.urlopen, cancelled
         if req.marker and not req.marker.evaluate():
             return
         name = canonicalize_name(req.name)
+        constraints.setdefault(name, []).append(req)
+        specifiers = [str(item.specifier) for item in constraints[name] if str(item.specifier)]
+        combined = Requirement(name + (",".join(specifiers) if specifiers else ""))
+        if name in visiting:
+            raise ValueError("Circular dependency: " + name)
+        if name in planned:
+            if combined.specifier.contains(planned[name][0]):
+                return
+            raise ValueError("Conflicting dependency constraints for " + name)
         try:
             current = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
             current = None
-        if current and req.specifier.contains(current):
+        if current and combined.specifier.contains(current):
             return
         if current and not os.path.isdir(os.path.join(root, name)):
             raise ValueError("Bundled %s %s conflicts with %s" % (name, current, raw))
-        if name in visited:
-            raise ValueError("Circular or conflicting dependency: " + name)
-        visited.add(name)
-        version, release = _candidate(req, opener, cancelled)
+        visiting.add(name)
+        version, release = _candidate(combined, opener, cancelled)
         output("Downloading %s %s…\n" % (name, version))
         data = _download(release["url"], MAX_WHEEL, opener, cancelled)
+        download_bytes += len(data)
+        if download_bytes > MAX_EXPANDED:
+            raise ValueError("Package dependency downloads exceed the size limit")
         if hashlib.sha256(data).hexdigest() != release["digests"]["sha256"]:
             raise ValueError("Wheel checksum mismatch")
         contents, metadata = _wheel_contents(data, name, version)
         for dependency in metadata.get_all("Requires-Dist", []):
             resolve(dependency, depth + 1)
+        visiting.remove(name)
+        planned[name] = (version, data, contents)
+        order.append(name)
+
+    for raw in requirements:
+        resolve(raw, 0)
+    for name in order:
+        if cancelled():
+            raise InterruptedError("Package installation stopped")
+        version, data, contents = planned[name]
         stage = tempfile.mkdtemp(prefix=".install-", dir=root)
         target = os.path.join(root, name)
         backup = target + ".previous"
@@ -239,6 +264,4 @@ def install(requirements, root, output, opener=urllib.request.urlopen, cancelled
         installed.append("%s %s" % (name, version))
         output("Installed %s %s\n" % (name, version))
 
-    for raw in requirements:
-        resolve(raw, 0)
     return installed

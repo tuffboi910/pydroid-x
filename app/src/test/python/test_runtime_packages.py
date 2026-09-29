@@ -40,6 +40,26 @@ class FakeIndex:
 
 
 class RuntimePackageTests(unittest.TestCase):
+    def test_conflicting_requests_do_not_partially_install(self):
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            with self.assertRaisesRegex(ValueError, "Conflicting dependency constraints"):
+                runtime_packages.install(["py4usample==1.0", "py4usample==2.0"], root,
+                                         lambda _: None, FakeIndex(wheel_bytes()))
+            self.assertFalse((pathlib.Path(root) / "py4usample").exists())
+
+    def test_unavailable_dependency_does_not_install_parent(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as wheel:
+            wheel.writestr("py4usample/__init__.py", "value = 1")
+            wheel.writestr("py4usample-1.0.dist-info/METADATA",
+                           "Name: py4usample\nVersion: 1.0\nRequires-Dist: missing-package==1\n")
+            wheel.writestr("py4usample-1.0.dist-info/WHEEL", "Root-Is-Purelib: true\n")
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            with self.assertRaises(ValueError):
+                runtime_packages.install(["py4usample"], root, lambda _: None,
+                                         FakeIndex(buffer.getvalue()))
+            self.assertFalse((pathlib.Path(root) / "py4usample").exists())
+
     def test_normalized_release_key_is_used_without_key_error(self):
         index = FakeIndex(wheel_bytes())
         class NormalizedIndex:

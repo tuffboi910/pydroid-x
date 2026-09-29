@@ -17,6 +17,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Console ANSI: bounded visible output interprets basic foreground, bright, bold, and RGB SGR colors while suppressing escape controls. Copy, search, and Astro context use readable text. This batch awaits Android CI and device verification.
 - Lifecycle: retained ViewModel initialization is idempotent across activity recreation, so rotation does not reload the on-disk file over a live editor buffer. This batch awaits Android CI and device verification.
 - Console search: tapping a retained-output hit opens a bounded readable window starting at that line, pauses live tail updates, and Auto on resumes the latest output. This batch awaits Android CI and device verification.
+- Astro project context: an explicit sharing chip can include live current code and bounded nested Python sources in a question. File IO runs on the AI worker; hidden/history folders and oversized sources are skipped. Proposed edits still target only the current file. This batch awaits Android CI and device verification.
 
 ## Verification
 
@@ -34,7 +35,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Measure typing, scrolling, Console throughput, keyboard transitions, and touch accuracy on a physical high-refresh device. UI geometry, animation timing, haptics, accessibility font scaling, rotation, and process-death recovery require device checks.
 - The editor still needs tab pinning, persistence for recently closed recovery, folding/sticky context if justified, and more real-world IME testing. Find in Project scans nested Python files and caps results at 200. Project Problems scans nested Python files, caps at 300 files and 8 MB total, skips files above 1 MB, and requires an explicit scan. Failed writes still need on-disk recovery when storage becomes available; the in-memory pending text survives only while the process lives.
 - Project browser/action behavior needs physical-device testing, including folder navigation, file moves, and delete recovery across process death. History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots.
-- Astro still lacks constrained project-agent operations. Per-hunk preview/selection needs Android CI and device verification; live provider and offline-model behavior need configured credentials/models and device testing.
+- Astro still lacks constrained multi-file edit proposals and agent operations. Project context is read-only input; per-hunk preview/selection and sharing controls need device verification. Live provider and offline-model behavior need configured credentials/models and device testing.
 - Runtime installation currently supports compatible pure-Python wheels only; native Android wheels, package extras, and wheel script/data layouts need separate implementation. Validate network installs, dependency graphs, storage failure, and imports on an Android device.
 - Full terminal cursor-motion/progress controls and interaction beyond the retained output window remain. Broad UI/motion polish and first-run/accessibility passes remain.
 

@@ -252,6 +252,7 @@ class IdeViewModel : ViewModel() {
     var ai3Model by mutableStateOf("")
     var ai3Provider by mutableStateOf("Auto")
     var shareCode by mutableStateOf(false)
+    var shareProjectCode by mutableStateOf(false)
     var editorFontSize by mutableFloatStateOf(16f)
     var tabWidth by mutableIntStateOf(4)
     var terminalFontSize by mutableFloatStateOf(13f)
@@ -840,9 +841,12 @@ class IdeViewModel : ViewModel() {
         val attachmentTextSnapshot = attachedFileText
         val fileNameSnapshot = currentFileName
         val codeSnapshot = code
+        val directorySnapshot = projectDir
+        val shareCodeSnapshot = shareCode && !testOnly
+        val shareProjectSnapshot = shareProjectCode && shareCodeSnapshot
         val question = if (testOnly) typedQuestion else buildString {
             append(typedQuestion.ifBlank { "Review the attached file" })
-            if (shareCode) {
+            if (shareCodeSnapshot) {
                 append("\n\nIDE context — current file: ").append(fileNameSnapshot)
                 append("\nProject files: ")
                 append(savedCodes.asSequence().map { it.fileName }.take(40).joinToString(", "))
@@ -876,6 +880,11 @@ class IdeViewModel : ViewModel() {
         thread(name = "PY4U-AI") {
             val historySnapshot = if (!testOnly) aiMessages.dropLast(2).toList() else emptyList()
             val result = runCatching {
+                val projectContext = if (shareProjectSnapshot) ProjectAiContext.build(
+                    directorySnapshot, fileNameSnapshot, codeSnapshot) else null
+                val providerQuestion = if (projectContext != null) question +
+                    "\n\nExplicitly shared project Python sources (propose edits to the current file only):" + projectContext else question
+                val providerCode = if (shareCodeSnapshot && projectContext == null) codeSnapshot else null
                 var lastFailure: Throwable? = null
                 slots.forEachIndexed { index, slot ->
                     try {
@@ -885,8 +894,8 @@ class IdeViewModel : ViewModel() {
                             if ((assistantReplyCount+1) % 3 == 0) aiFallbackNotice = message
                         }
                         return@runCatching if (slot.provider == "On-device") LocalAiRuntime.chat(
-                            appContext, localModelForSlot(slot.index), question,
-                            if (!testOnly && shareCode) codeSnapshot else null, historySnapshot,
+                            appContext, localModelForSlot(slot.index), providerQuestion,
+                            providerCode, historySnapshot,
                             localContextSize, localThreads, localResponseTokens,
                             onStatus={ status -> viewModelScope.launch { aiProgress="${slot.label}: $status" } },
                             onPartial={ partial -> viewModelScope.launch { if (!testOnly && aiMessages.isNotEmpty()) aiMessages[aiMessages.lastIndex] = AiMessage(false, partial) } }
@@ -895,8 +904,8 @@ class IdeViewModel : ViewModel() {
                             endpoint=slot.endpoint,
                             apiKey=slot.key,
                             modelSetting=slot.model,
-                            prompt=question,
-                            code=if (!testOnly && shareCode) codeSnapshot else null,
+                            prompt=providerQuestion,
+                            code=providerCode,
                             history=historySnapshot,
                             revealDelayMs=if (typingAnimation) (animationDuration / 6.7f).toLong().coerceIn(4L, 120L) else 0L,
                             onStatus={ status -> viewModelScope.launch { aiProgress="${slot.label}: $status" } }
@@ -1149,6 +1158,7 @@ class IdeViewModel : ViewModel() {
         codeDiagnostics = emptyList()
         pendingCode = null
         shareCode = false
+        shareProjectCode = false
         clearAttachment()
         settings.edit().putString("current_project",currentProjectName).putString("current_file",currentFileName)
             .putString("selected_$currentProjectName",currentFileName).apply()
@@ -1251,6 +1261,7 @@ class IdeViewModel : ViewModel() {
         codeDiagnostics=emptyList()
         pendingCode=null
         shareCode=false
+        shareProjectCode=false
         settings.edit().putString("current_file",currentFileName)
             .putString("selected_$currentProjectName",currentFileName).apply()
         refreshSaved()
@@ -1305,6 +1316,7 @@ class IdeViewModel : ViewModel() {
         codeDiagnostics=emptyList()
         pendingCode=null
         shareCode=false
+        shareProjectCode=false
         settings.edit().putString("current_file",currentFileName)
             .putString("selected_$currentProjectName",currentFileName).apply()
         editorRevision++
@@ -2767,9 +2779,15 @@ private fun AchievementNotice(
                                     )
                                 }
                                 if(vm.shareCode) AssistChip(
-                                    onClick={vm.shareCode=false},
+                                    onClick={vm.shareCode=false;vm.shareProjectCode=false},
                                     label={Text("Sharing  ${vm.currentFileName}  ×")},
                                     colors=AssistChipDefaults.assistChipColors(labelColor=Color.White,containerColor=Color(0xFF202124))
+                                )
+                                if(vm.shareCode) AssistChip(
+                                    onClick={vm.shareProjectCode=!vm.shareProjectCode},
+                                    label={Text(if(vm.shareProjectCode) "Project sources on" else "Include project sources")},
+                                    colors=AssistChipDefaults.assistChipColors(labelColor=Color.White,
+                                        containerColor=if(vm.shareProjectCode) Color(0xFF205047) else Color(0xFF202124))
                                 )
                             }
                         }
@@ -2801,7 +2819,7 @@ private fun AchievementNotice(
                                     )
                                 )
                                 TextButton(
-                                    onClick={vm.shareCode=!vm.shareCode},
+                                    onClick={vm.shareCode=!vm.shareCode;if(!vm.shareCode) vm.shareProjectCode=false},
                                     contentPadding=PaddingValues(5.dp),
                                     modifier=Modifier.size(37.dp)
                                 ){Text("</>",color=if(vm.shareCode) Color.White else Color(0xFF777B84),fontSize=10.sp,fontWeight=FontWeight.Bold)}

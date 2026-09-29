@@ -18,12 +18,15 @@ internal object ProjectFileWriter {
     private fun draftFile(root: File, file: File): File? {
         val path = ProjectWorkspace.relativePath(root, file) ?: return null
         if (!path.endsWith(".py", ignoreCase = true)) return null
-        return File(root, ".recovery/drafts/$path.draft")
+        return ProjectWorkspace.resolvePath(root, ".recovery/drafts/$path.draft")
     }
 
     /** Coalesces rapid edits; the latest snapshot is journaled on the file worker. */
-    fun journalDraft(root: File, file: File, content: String) {
-        val draft = draftFile(root, file) ?: return
+    fun journalDraft(root: File, file: File, content: String, failed: (String) -> Unit = {}) {
+        val draft = draftFile(root, file) ?: run {
+            failed("Draft location is outside the project")
+            return
+        }
         val key = draft.absolutePath
         draftSnapshots[key] = content
         if (!draftScheduled.add(key)) return
@@ -35,6 +38,7 @@ internal object ProjectFileWriter {
                     val bytes = snapshot.toByteArray(StandardCharsets.UTF_8)
                     if (bytes.size > 2_000_000) {
                         draftSnapshots.remove(key, snapshot)
+                        failed("Draft exceeds the 2 MB recovery limit")
                         break
                     }
                     if (!draft.parentFile.isDirectory && !draft.parentFile.mkdirs()) {
@@ -47,11 +51,12 @@ internal object ProjectFileWriter {
                     draftSnapshots.remove(key, snapshot)
                 }
                 completed = true
-            } catch (_: IOException) {
+            } catch (error: Exception) {
                 // Keep the previous atomic draft and retry on the next edit.
+                failed(error.message ?: "Draft storage is unavailable")
             } finally {
                 draftScheduled.remove(key)
-                if (completed) draftSnapshots[key]?.let { journalDraft(root, file, it) }
+                if (completed) draftSnapshots[key]?.let { journalDraft(root, file, it, failed) }
             }
         }
     }

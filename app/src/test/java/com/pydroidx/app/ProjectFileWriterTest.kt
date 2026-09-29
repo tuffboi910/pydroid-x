@@ -16,6 +16,30 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[28], application=Application::class)
 class ProjectFileWriterTest {
+    @Test fun oversizedDraftReportsThatRecoveryCannotBeGuaranteed() {
+        val root = Files.createTempDirectory("py4u-draft-limit-").toFile()
+        val file = File(root, "main.py").apply { writeText("saved") }
+        val failure = CountDownLatch(1)
+        var message: String? = null
+        ProjectFileWriter.journalDraft(root, file, "x".repeat(2_000_001)) {
+            message = it; failure.countDown()
+        }
+        assertTrue(failure.await(5, TimeUnit.SECONDS))
+        assertTrue(message?.contains("2 MB") == true)
+        assertEquals(null, ProjectFileWriter.recoverDraft(root, file))
+    }
+
+    @Test fun draftJournalRejectsRecoverySymlinkOutsideProject() {
+        val root = Files.createTempDirectory("py4u-draft-root-").toFile()
+        val outside = Files.createTempDirectory("py4u-draft-outside-").toFile()
+        Files.createSymbolicLink(File(root, ".recovery").toPath(), outside.toPath())
+        val file = File(root, "main.py").apply { writeText("saved") }
+        var message: String? = null
+        ProjectFileWriter.journalDraft(root, file, "unsaved") { message = it }
+        assertTrue(message?.contains("outside") == true)
+        assertTrue(outside.listFiles().isNullOrEmpty())
+    }
+
     @Test fun projectEditRejectsStaleFileBeforeWritingAnyTarget() {
         val root = Files.createTempDirectory("py4u-project-edit-").toFile()
         val first = File(root, "first.py").apply { writeText("first\n") }

@@ -1449,8 +1449,15 @@ class IdeViewModel : ViewModel() {
 
     fun updateCode(value: String) {
         code = value
-        ProjectWorkspace.resolvePath(projectDir, currentFileName)?.let {
-            ProjectFileWriter.journalDraft(projectDir, it, value)
+        ProjectWorkspace.resolvePath(projectDir, currentFileName)?.let { file ->
+            val directory = projectDir
+            val path = currentFileName
+            ProjectFileWriter.journalDraft(directory, file, value) { reason ->
+                mainHandler.post {
+                    if (projectDir == directory && currentFileName == path)
+                        saveError = "Couldn’t protect unsaved $path: $reason"
+                }
+            }
         }
         if (projectProblems.isNotEmpty()) projectProblemsStale = true
         if (currentFileName !in unsavedTabs) unsavedTabs.add(currentFileName)
@@ -2093,7 +2100,8 @@ private fun AchievementNotice(
         Box(Modifier.fillMaxSize().background(bg)) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             vm.saveError?.let { error ->
-                val retryable = error.startsWith("Couldn’t save ") || error.startsWith("Couldn’t protect current code")
+                val retryable = error.startsWith("Couldn’t save ") || error.startsWith("Couldn’t protect current code") ||
+                    error.startsWith("Couldn’t protect unsaved ")
                 Text(if(retryable) "$error · Tap to retry" else error, color=Color.White, fontSize=12.sp,
                     modifier=Modifier.fillMaxWidth().background(Color(0xFF8B2835))
                         .then(if(retryable) Modifier.clickable { editorView?.flushCodeChange(); vm.save() } else Modifier)

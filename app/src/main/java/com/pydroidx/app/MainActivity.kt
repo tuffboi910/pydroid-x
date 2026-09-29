@@ -1116,11 +1116,18 @@ class IdeViewModel : ViewModel() {
     }
     fun rejectTeaching() { teachingOffer = null; showTeachingNotice=false }
     private val completionWorker = java.util.concurrent.ThreadPoolExecutor(
-        1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS, LinkedBlockingQueue()
+        1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS, LinkedBlockingQueue<Runnable>(1),
+        java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy()
     )
     private var completionTask: java.util.concurrent.Future<*>? = null
+    private val diagnosticsWorker = java.util.concurrent.ThreadPoolExecutor(
+        1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS, LinkedBlockingQueue<Runnable>(1),
+        java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy()
+    )
+    private var diagnosticsTask: java.util.concurrent.Future<*>? = null
     private val projectDiagnosticsWorker = java.util.concurrent.ThreadPoolExecutor(
-        1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS, LinkedBlockingQueue()
+        1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS, LinkedBlockingQueue<Runnable>(1),
+        java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy()
     )
     private var projectDiagnosticsTask: java.util.concurrent.Future<*>? = null
     private var projectDiagnosticsGeneration = 0L
@@ -1146,7 +1153,8 @@ class IdeViewModel : ViewModel() {
         }
     }
     fun requestDiagnostics(source: String, deliver: (List<CodeDiagnostic>) -> Unit) {
-        thread(name="PY4U-Diagnostics") {
+        diagnosticsTask?.cancel(false)
+        diagnosticsTask = diagnosticsWorker.submit {
             val diagnostics = runCatching {
                 val raw = Python.getInstance().getModule("runner").callAttr("diagnose", source).toString()
                 val values = JSONArray(raw)
@@ -1808,6 +1816,8 @@ class IdeViewModel : ViewModel() {
         mainHandler.removeCallbacks(savedRefreshRunnable)
         completionTask?.cancel(true)
         completionWorker.shutdownNow()
+        diagnosticsTask?.cancel(true)
+        diagnosticsWorker.shutdownNow()
         projectDiagnosticsGeneration++
         projectDiagnosticsTask?.cancel(true)
         projectDiagnosticsWorker.shutdownNow()

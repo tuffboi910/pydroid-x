@@ -1061,8 +1061,9 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         const val HISTORY_CAPTURE_INTERVAL_MS = 400L
         const val CODE_SYNC_DELAY_MS = 120L
         val SYNTAX_EXECUTOR = ThreadPoolExecutor(
-            1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue(),
-            { task -> Thread(task, "PY4U-Syntax").apply { isDaemon = true; priority = Thread.NORM_PRIORITY - 1 } }
+            1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue<Runnable>(1),
+            { task -> Thread(task, "PY4U-Syntax").apply { isDaemon = true; priority = Thread.NORM_PRIORITY - 1 } },
+            ThreadPoolExecutor.DiscardOldestPolicy()
         )
         val PAIRS = mapOf('(' to ')', '[' to ']', '{' to '}', '"' to '"', '\'' to '\'')
         val CLOSING_CHARACTERS = setOf(')', ']', '}', '"', '\'')

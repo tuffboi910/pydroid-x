@@ -938,7 +938,10 @@ class IdeViewModel : ViewModel() {
                     if (succeeded) {
                         assistantReplyCount++
                         extractPythonFile(answer)?.let { proposed ->
-                            if (currentFileName == fileNameSnapshot && code == codeSnapshot) {
+                            if (shareProjectSnapshot) {
+                                aiMessages.add(AiMessage(false,
+                                    "Project context is for analysis. Share only the current file when you want Astro to propose an edit."))
+                            } else if (currentFileName == fileNameSnapshot && code == codeSnapshot) {
                                 pendingCode = PendingCodeChange(proposed, fileNameSnapshot, codeSnapshot)
                                 showCodeNotice = assistantReplyCount % 3 == 0
                             } else {

@@ -28,6 +28,7 @@ class ProjectAiContextTest {
             root.resolve("other.py").writeText("x".repeat(1000))
             val context = ProjectAiContext.build(root, "main.py", "y".repeat(1000), maxCharacters = 120)
             assertTrue(context.length <= 120)
+            assertTrue(context.contains("# File: other.py"))
         } finally { root.deleteRecursively() }
     }
 }

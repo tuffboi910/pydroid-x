@@ -11,20 +11,20 @@ internal object ProjectAiContext {
             .sortedBy { it.first }
         val budget = maxCharacters.coerceIn(1, 50_000)
         val output = StringBuilder()
-        fun append(path: String, source: String) {
+        fun append(path: String, source: String, fileLimit: Int) {
             if (output.length >= budget) return
             val header = "\n\n# File: $path\n"
             val available = budget - output.length - header.length
             if (available <= 0) return
-            output.append(header).append(source.take(available))
+            output.append(header).append(source.take(minOf(available, fileLimit)))
         }
-        append(currentPath, currentText)
+        append(currentPath, currentText, maxOf(1, budget / 2))
         var count = 1
         for ((path, file) in files) {
             if (path == currentPath || count >= maxFiles || output.length >= budget) continue
             if (file.length() > 100_000L) continue
             val source = runCatching { file.bufferedReader(Charsets.UTF_8).use { it.readText() } }.getOrNull() ?: continue
-            append(path, source)
+            append(path, source, 6_000)
             count++
         }
         return output.toString()

@@ -19,6 +19,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Console search: tapping a retained-output hit opens a bounded readable window starting at that line, pauses live tail updates, and Auto on resumes the latest output. This batch awaits Android CI and device verification.
 - Astro project context: an explicit sharing chip can include live current code and bounded nested Python sources in a question. File IO runs on the AI worker; hidden/history folders and oversized sources are skipped. Proposed edits still target only the current file. This batch awaits Android CI and device verification.
 - Runtime package hardening: redirects outside PyPI, oversized metadata, and native libraries hidden in universal-tagged wheels are rejected. Host tests now total 28; Android CI pending.
+- Astro project context is now budgeted per file so a long active buffer does not crowd out the rest of the project; on-device models receive a smaller context based on their configured token window. Android CI pending.
 
 ## Verification
 

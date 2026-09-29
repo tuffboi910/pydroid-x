@@ -882,12 +882,17 @@ class IdeViewModel : ViewModel() {
             val result = runCatching {
                 val projectContext = if (shareProjectSnapshot) ProjectAiContext.build(
                     directorySnapshot, fileNameSnapshot, codeSnapshot) else null
-                val providerQuestion = if (projectContext != null) question +
-                    "\n\nExplicitly shared project Python sources (propose edits to the current file only):" + projectContext else question
-                val providerCode = if (shareCodeSnapshot && projectContext == null) codeSnapshot else null
+                val localProjectContext = if (shareProjectSnapshot && slots.any { it.provider == "On-device" }) {
+                    ProjectAiContext.build(directorySnapshot, fileNameSnapshot, codeSnapshot,
+                        maxCharacters=(localContextSize * 2).coerceIn(1_500, 8_000))
+                } else null
                 var lastFailure: Throwable? = null
                 slots.forEachIndexed { index, slot ->
                     try {
+                        val sharedContext = if (slot.provider == "On-device") localProjectContext else projectContext
+                        val providerQuestion = if (sharedContext != null) question +
+                            "\n\nExplicitly shared project Python sources (propose edits to the current file only):" + sharedContext else question
+                        val providerCode = if (shareCodeSnapshot && sharedContext == null) codeSnapshot else null
                         if (index > 0) viewModelScope.launch {
                             val message = "${slots[index-1].label} AI unavailable • switching to ${slot.label} AI"
                             aiProgress = message

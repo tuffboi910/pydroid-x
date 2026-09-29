@@ -70,9 +70,14 @@ object LocalAiRuntime {
         require(path.endsWith(".gguf", true) && File(path).isFile) { "Choose an imported GGUF model in AI settings" }
         val engine = AiChat.getInferenceEngine(context)
         engine.state.first { it !is InferenceEngine.State.Initializing && it !is InferenceEngine.State.Uninitialized }
-        if (engine.state.value is InferenceEngine.State.Error) throw IllegalStateException("On-device runtime could not start")
+        if (engine.state.value is InferenceEngine.State.Error) {
+            engine.cleanUp()
+            loadedPath = null
+            loadedContext = 0
+            loadedThreads = 0
+        }
         if (loadedPath != path || loadedContext != contextSize || loadedThreads != threads || !engine.state.value.isModelLoaded) {
-            if (engine.state.value.isModelLoaded || engine.state.value is InferenceEngine.State.Error) engine.cleanUp()
+            if (engine.state.value.isModelLoaded) engine.cleanUp()
             onStatus("Loading on-device model…")
             engine.loadModel(path, contextSize, threads)
             loadedPath = path

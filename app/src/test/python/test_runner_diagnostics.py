@@ -1,10 +1,12 @@
 import importlib.util
 import json
 import pathlib
+import sys
 import tempfile
 import unittest
 
 RUNNER_PATH = pathlib.Path(__file__).parents[2] / "main" / "python" / "runner.py"
+sys.path.insert(0, str(RUNNER_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("py4u_runner", RUNNER_PATH)
 runner = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runner)

@@ -12,6 +12,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Navigation: searchable command palette, Quick Open, bounded background Find in Project with direct file/line navigation, and a horizontal open-file tab strip with close and Ctrl+W. Open tabs and selected file persist per project.
 - Project browser: nested folder navigation and creation; bounded recursive Python file listing; user-driven rename, move, and recoverable delete; recovery notice restored after process restart; nested paths across saved files, tabs, project search, diagnostics, traceback navigation, and file history. Android CI passed; physical-device verification remains.
 - Tabs: the strip now allows moving a tab left or right and reopening the last closed file. Android CI passed; physical-device verification remains.
+- Runtime packages: terminal `pip install PACKAGE` resolves dependencies from PyPI and installs compatible pure-Python wheels into app-private storage with hash checks, bounded downloads/extraction, path validation, and atomic per-distribution replacement. Native wheels, scripts, extras, direct URLs, and unsupported install layouts report an error. This batch awaits Android CI and device verification.
 
 ## Verification
 
@@ -21,6 +22,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Git diff checks and clean local status were verified at each checkpoint. No physical Android device or emulator was attached to this Work environment.
 - The nested project/browser batch passes 24 host Python tests with Jedi 0.19.2 and `git diff --check`; Android CI run 241 passed unit tests and debug APK packaging.
 - Tab controls passed 24 host Python tests and Android CI run 242, including unit tests and debug APK packaging.
+- Documentation-only run 243 passed. Pure-wheel installer host suite: 27 Python tests pass, including synthetic install/import and rejected traversal/checksum cases; Android CI pending.
 
 ## Incomplete or unverified
 
@@ -28,7 +30,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - The editor still needs tab pinning, persistence for recently closed recovery, folding/sticky context if justified, and more real-world IME testing. Find in Project scans nested Python files and caps results at 200. Project Problems scans nested Python files, caps at 300 files and 8 MB total, skips files above 1 MB, and requires an explicit scan. Failed writes still need on-disk recovery when storage becomes available; the in-memory pending text survives only while the process lives.
 - Project browser/action behavior needs physical-device testing, including folder navigation, file moves, and delete recovery across process death. History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots.
 - Astro lacks per-hunk acceptance and constrained project-agent operations. Live provider and offline-model behavior need configured credentials/models and device testing.
-- Android runtime package installation is not implemented. The terminal truthfully reports this; installed-package listing already works. Do not advertise unsupported wheels as installable.
+- Runtime installation currently supports compatible pure-Python wheels only; native Android wheels, package extras, and wheel script/data layouts need separate implementation. Validate network installs, dependency graphs, storage failure, and imports on an Android device.
 - Console search results do not yet jump to the corresponding live-output scroll position; richer ANSI rendering and large-output interaction beyond the retained window remain. Broad UI/motion polish and first-run/accessibility passes remain.
 
 The older `b119229` checkout was left intact. The previously lost `f386e22` object was not recovered; this branch reconstructs new work from the valid `a86c076` remote base.

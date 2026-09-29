@@ -1,0 +1,65 @@
+import hashlib
+import importlib
+import io
+import json
+import pathlib
+import sys
+import tempfile
+import unittest
+import zipfile
+
+sys.path.insert(0, str(pathlib.Path(__file__).parents[2] / "main" / "python"))
+import runtime_packages
+
+
+def wheel_bytes(malicious=False):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as wheel:
+        wheel.writestr("py4usample/__init__.py", "value = 42\n")
+        wheel.writestr("py4usample-1.0.dist-info/METADATA", "Name: py4usample\nVersion: 1.0\n")
+        wheel.writestr("py4usample-1.0.dist-info/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\n")
+        if malicious:
+            wheel.writestr("../escaped.txt", "bad")
+    return buffer.getvalue()
+
+
+class FakeIndex:
+    def __init__(self, wheel):
+        self.wheel = wheel
+        self.filename = "py4usample-1.0-py3-none-any.whl"
+        self.release = {"filename": self.filename, "packagetype": "bdist_wheel",
+                        "size": len(wheel), "url": "https://files.pythonhosted.org/" + self.filename,
+                        "digests": {"sha256": hashlib.sha256(wheel).hexdigest()}}
+
+    def __call__(self, url, timeout):
+        if url.startswith("https://pypi.org/"):
+            return io.BytesIO(json.dumps({"releases": {"1.0": [self.release]}}).encode())
+        return io.BytesIO(self.wheel)
+
+
+class RuntimePackageTests(unittest.TestCase):
+    def tearDown(self):
+        sys.modules.pop("py4usample", None)
+        sys.path[:] = [path for path in sys.path if "py4u-package-test" not in path]
+
+    def test_installed_pure_wheel_imports(self):
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            messages = []
+            self.assertEqual(["py4usample 1.0"], runtime_packages.install(
+                ["py4usample==1.0"], root, messages.append, FakeIndex(wheel_bytes())))
+            self.assertEqual(42, importlib.import_module("py4usample").value)
+            self.assertIn("Installed py4usample 1.0\n", messages)
+
+    def test_traversal_wheel_rejected_without_install(self):
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            with self.assertRaisesRegex(ValueError, "unsafe path"):
+                runtime_packages.install(["py4usample"], root, lambda _: None,
+                                         FakeIndex(wheel_bytes(malicious=True)))
+            self.assertFalse((pathlib.Path(root) / "py4usample").exists())
+
+    def test_checksum_mismatch_rejected(self):
+        index = FakeIndex(wheel_bytes())
+        index.release["digests"]["sha256"] = "0" * 64
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                runtime_packages.install(["py4usample"], root, lambda _: None, index)

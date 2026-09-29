@@ -12,6 +12,11 @@ import traceback
 import difflib
 import shlex
 import importlib.metadata
+import runtime_packages
+
+
+def _package_root(project_dir):
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(project_dir))), "runtime-packages")
 
 
 class _Scope:
@@ -531,6 +536,7 @@ def run_code(source, filename, project_dir, bridge):
         _purge_project_modules(project_dir)
         if project_dir not in sys.path:
             sys.path.insert(0, project_dir)
+        runtime_packages.activate(_package_root(project_dir))
         builtins.input = android_input
         sys.dont_write_bytecode = True
         scope = {"__name__": "__main__", "__file__": filename}
@@ -620,6 +626,7 @@ def run_terminal_command(command, project_dir, bridge):
             return
         name, args = parts[0].lower(), parts[1:]
         root = os.path.realpath(project_dir)
+        runtime_packages.activate(_package_root(root))
 
         def project_path(value):
             path = os.path.realpath(os.path.join(root, value))
@@ -628,7 +635,7 @@ def run_terminal_command(command, project_dir, bridge):
             return path
 
         if name == "help":
-            out.write("Commands: help, pwd, ls, cat FILE, python FILE.py, packages, mkdir DIR, touch FILE, clear\n")
+            out.write("Commands: help, pwd, ls, cat FILE, python FILE.py, packages, pip install NAME, mkdir DIR, touch FILE, clear\n")
         elif name == "pwd":
             out.write(root + "\n")
         elif name in ("ls", "dir"):
@@ -657,7 +664,9 @@ def run_terminal_command(command, project_dir, bridge):
                     run_code(handle.read(), filename, root, bridge)
                 return
         elif name == "pip" and args and args[0] == "install":
-            raise ValueError("Only Android-compatible packages can be installed; the full installer is not ready yet")
+            if len(args) < 2:
+                raise ValueError("Usage: pip install PACKAGE[==VERSION] (pure-Python wheels only)")
+            runtime_packages.install(args[1:], _package_root(root), out.write)
         else:
             raise ValueError("Unknown command: %s. Type help." % name)
         bridge.exited(0)

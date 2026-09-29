@@ -187,6 +187,18 @@ class IdeViewModel : ViewModel() {
     val openTabs = mutableStateListOf<String>()
     val unsavedTabs = mutableStateListOf<String>()
     val savedCodes = mutableStateListOf<SavedCode>()
+    val browserEntries = mutableStateListOf<ProjectBrowserEntry>()
+    val projectFolders = mutableStateListOf<String>()
+    var currentFolder by mutableStateOf("")
+        private set
+    var loadingBrowserEntries by mutableStateOf(false)
+        private set
+    var recoverableDeletedPath by mutableStateOf<String?>(null)
+        private set
+    var recoverableDeletedProject by mutableStateOf<String?>(null)
+        private set
+    private var recoverableDeletedFile: File? = null
+    private var recoverableDeletedRecoveryPath: String? = null
     val projectNames = mutableStateListOf<String>()
     var currentProjectName by mutableStateOf("default")
     var editorRevision by mutableIntStateOf(0)
@@ -297,6 +309,9 @@ class IdeViewModel : ViewModel() {
     private var namingJob: Job? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val savedRefreshRunnable = Runnable { refreshSaved() }
+    private var savedRefreshGeneration = 0L
+    private var browserRefreshGeneration = 0L
+    private var tabRestoreGeneration = 0L
     private val outputBuffer = ConsoleOutputBuffer()
     private val outputFlushScheduled = AtomicBoolean(false)
     private val outputFlushRunnable = Runnable {
@@ -339,30 +354,258 @@ class IdeViewModel : ViewModel() {
     private fun readProjectText(file: File): String = pendingDocumentWrites.read(file)
         ?: AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
 
+    fun refreshBrowserEntries() {
+        if (!::projectDir.isInitialized) return
+        val directory = projectDir
+        val folder = currentFolder
+        val generation = ++browserRefreshGeneration
+        loadingBrowserEntries = true
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    ProjectWorkspace.entries(directory, folder) to ProjectWorkspace.folders(directory)
+                }.getOrDefault(emptyList<ProjectBrowserEntry>() to listOf(""))
+            }
+            if (generation == browserRefreshGeneration && projectDir == directory && currentFolder == folder) {
+                browserEntries.clear()
+                browserEntries.addAll(result.first)
+                projectFolders.clear()
+                projectFolders.addAll(result.second)
+                loadingBrowserEntries = false
+            }
+        }
+    }
+
+    fun navigateToFolder(folder: String): Boolean {
+        if (!::projectDir.isInitialized) return false
+        val directory = ProjectWorkspace.resolvePath(projectDir, folder)?.takeIf { it.isDirectory } ?: return false
+        val relative = ProjectWorkspace.relativePath(projectDir, directory).orEmpty()
+        currentFolder = relative
+        settings.edit().putString("folder_$currentProjectName", relative).apply()
+        refreshBrowserEntries()
+        return true
+    }
+
+    fun navigateUpFolder() {
+        navigateToFolder(currentFolder.substringBeforeLast('/', ""))
+    }
+
+    fun createFolder(name: String) {
+        if (running || !::projectDir.isInitialized) return
+        val clean = name.trim()
+        if (clean.isEmpty() || clean == "." || clean == ".." || clean.startsWith('.') ||
+            clean.contains('/') || clean.contains('\\') || ProjectWorkspace.normalizePath(clean) != clean) {
+            saveError = "Choose a simple folder name without path separators."
+            return
+        }
+        val directory = projectDir
+        val parent = ProjectWorkspace.resolvePath(directory, currentFolder)?.takeIf { it.isDirectory } ?: return
+        val target = File(parent, clean)
+        viewModelScope.launch {
+            val created = withContext(Dispatchers.IO) {
+                runCatching {
+                    if (target.exists() || !target.mkdir()) error("A folder with that name already exists")
+                }
+            }
+            if (projectDir != directory) return@launch
+            created.onSuccess {
+                saveError = null
+                refreshBrowserEntries()
+            }.onFailure { saveError = "Couldn’t create folder: ${it.message}" }
+        }
+    }
+
+    fun renameProjectFile(fileName: String, requestedName: String) {
+        if (running || !::projectDir.isInitialized) return
+        val sourceName = ProjectWorkspace.normalizePath(fileName) ?: return
+        val clean = requestedName.trim().let { if (it.endsWith(".py", true)) it else "$it.py" }
+        if (clean.isBlank() || clean.startsWith('.') || ProjectWorkspace.normalizePath(clean) != clean ||
+            clean.contains('/')) {
+            saveError = "Choose a valid Python file name."
+            return
+        }
+        val directory = projectDir
+        val source = ProjectWorkspace.resolvePath(directory, sourceName)
+            ?.takeIf { it.isFile && it.extension.equals("py", true) } ?: return
+        val target = File(source.parentFile, clean)
+        val targetName = ProjectWorkspace.relativePath(directory, target) ?: return
+        if (sourceName == targetName) return
+        if (currentFileName == sourceName) {
+            rememberEditorLocation()
+            save()
+        }
+        ProjectFileWriter.rename(source, target) { result ->
+            mainHandler.post {
+                if (projectDir != directory) return@post
+                result.onSuccess {
+                    remapOpenFile(sourceName, targetName)
+                    saveError = null
+                    refreshSaved()
+                    refreshBrowserEntries()
+                }.onFailure { saveError = "Couldn’t rename ${source.name}: ${it.message}" }
+            }
+        }
+    }
+
+    fun moveProjectFile(fileName: String, folder: String) {
+        if (running || !::projectDir.isInitialized) return
+        val sourceName = ProjectWorkspace.normalizePath(fileName) ?: return
+        val directory = projectDir
+        val source = ProjectWorkspace.resolvePath(directory, sourceName)
+            ?.takeIf { it.isFile && it.extension.equals("py", true) } ?: return
+        val destination = ProjectWorkspace.resolvePath(directory, folder)?.takeIf { it.isDirectory } ?: return
+        val target = File(destination, source.name)
+        val targetName = ProjectWorkspace.relativePath(directory, target) ?: return
+        if (sourceName == targetName) return
+        if (currentFileName == sourceName) {
+            rememberEditorLocation()
+            save()
+        }
+        ProjectFileWriter.move(source, target) { result ->
+            mainHandler.post {
+                if (projectDir != directory) return@post
+                result.onSuccess {
+                    remapOpenFile(sourceName, targetName)
+                    saveError = null
+                    refreshSaved()
+                    refreshBrowserEntries()
+                }.onFailure { saveError = "Couldn’t move ${source.name}: ${it.message}" }
+            }
+        }
+    }
+
+    private fun remapOpenFile(oldPath: String, newPath: String) {
+        tabRestoreGeneration++
+        val wasCurrent = currentFileName == oldPath
+        if (wasCurrent) {
+            currentEditorLocation()?.let { updateEditorLocation(locationKey(currentProjectName, newPath), it) }
+            currentFileName = newPath
+            settings.edit().putString("current_file", newPath)
+                .putString("selected_$currentProjectName", newPath).apply()
+        }
+        val tabIndex = openTabs.indexOf(oldPath)
+        if (tabIndex >= 0) openTabs[tabIndex] = newPath
+        if (unsavedTabs.remove(oldPath)) unsavedTabs.add(newPath)
+        persistTabs()
+        if (wasCurrent) editorRevision++
+        projectProblemsStale = projectProblems.isNotEmpty()
+    }
+
+    fun deleteProjectFile(fileName: String) {
+        if (running || !::projectDir.isInitialized) return
+        val sourceName = ProjectWorkspace.normalizePath(fileName) ?: return
+        if (savedCodes.size <= 1) {
+            saveError = "Keep at least one Python file in the project."
+            return
+        }
+        val directory = projectDir
+        val projectName = currentProjectName
+        val source = ProjectWorkspace.resolvePath(directory, sourceName)
+            ?.takeIf { it.isFile && it.extension.equals("py", true) } ?: return
+        if (currentFileName == sourceName) {
+            val fallback = savedCodes.firstOrNull { it.fileName != sourceName }?.fileName ?: return
+            if (!openProjectFile(fallback)) return
+        }
+        ProjectFileWriter.moveToRecovery(source, directory) { result ->
+            mainHandler.post {
+                result.onSuccess { recoveryFile ->
+                    val recoveryPath = ProjectWorkspace.relativePath(directory, recoveryFile) ?: return@onSuccess
+                    recoverableDeletedFile = recoveryFile
+                    recoverableDeletedPath = sourceName
+                    recoverableDeletedProject = projectName
+                    recoverableDeletedRecoveryPath = recoveryPath
+                    settings.edit().putString("last_deleted_project", projectName)
+                        .putString("last_deleted_path", sourceName)
+                        .putString("last_deleted_recovery", recoveryPath).apply()
+                    if (projectDir == directory) {
+                        tabRestoreGeneration++
+                        openTabs.remove(sourceName)
+                        unsavedTabs.remove(sourceName)
+                        persistTabs()
+                        projectProblemsStale = projectProblems.isNotEmpty()
+                        refreshSaved()
+                        refreshBrowserEntries()
+                        saveError = null
+                    }
+                }.onFailure { if (projectDir == directory) saveError = "Couldn’t delete ${source.name}: ${it.message}" }
+            }
+        }
+    }
+
+    fun undoLastProjectDelete() {
+        val recovery = recoverableDeletedFile ?: return
+        if (running || !::projectDir.isInitialized) return
+        if (currentProjectName != recoverableDeletedProject) return
+        val directory = projectDir
+        val relative = recoverableDeletedPath ?: return
+        val target = ProjectWorkspace.resolvePath(directory, relative) ?: return
+        ProjectFileWriter.move(recovery, target) { result ->
+            mainHandler.post {
+                if (projectDir != directory) return@post
+                result.onSuccess {
+                    recoverableDeletedFile = null
+                    recoverableDeletedPath = null
+                    recoverableDeletedProject = null
+                    recoverableDeletedRecoveryPath = null
+                    settings.edit().remove("last_deleted_project").remove("last_deleted_path")
+                        .remove("last_deleted_recovery").apply()
+                    refreshSaved()
+                    refreshBrowserEntries()
+                    saveError = null
+                }.onFailure { saveError = "Couldn’t restore ${target.name}: ${it.message}" }
+            }
+        }
+    }
+
+    private fun restoreDeleteRecoveryNotice() {
+        if (!::projectsRoot.isInitialized || !::settings.isInitialized) return
+        val project = settings.getString("last_deleted_project", null) ?: return
+        val originalPath = ProjectWorkspace.normalizePath(settings.getString("last_deleted_path", "") ?: "") ?: return
+        val recoveryPath = settings.getString("last_deleted_recovery", null) ?: return
+        if (!recoveryPath.startsWith(".recovery/deleted/")) return
+        val directory = File(projectsRoot, ProjectWorkspace.safeName(project))
+        val recovered = ProjectWorkspace.resolvePath(directory, recoveryPath)?.takeIf { it.isFile } ?: return
+        recoverableDeletedProject = project
+        recoverableDeletedPath = originalPath
+        recoverableDeletedRecoveryPath = recoveryPath
+        recoverableDeletedFile = recovered
+    }
+
     private fun persistTabs() {
         if (::settings.isInitialized) settings.edit().putString("tabs_$currentProjectName",
             JSONArray(openTabs).toString()).apply()
     }
 
     private fun restoreTabs() {
-        val valid = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py", true) }
-            ?.map { it.name }?.toSet().orEmpty()
+        val directory = projectDir
+        val selectedFile = currentFileName
+        val generation = ++tabRestoreGeneration
         val saved = runCatching { JSONArray(settings.getString("tabs_$currentProjectName", "[]") ?: "[]") }
             .getOrDefault(JSONArray())
-        val names = (0 until saved.length()).mapNotNull { saved.optString(it).takeIf(valid::contains) }
-            .distinct().take(12).toMutableList()
-        if (currentFileName !in names) {
-            if (names.size >= 12) names.removeAt(0)
-            names.add(currentFileName)
+        val candidates = (0 until saved.length()).map { saved.optString(it) }.distinct().take(12)
+        viewModelScope.launch {
+            val names = withContext(Dispatchers.IO) {
+                candidates.filter { name ->
+                    ProjectWorkspace.resolvePath(directory, name)?.let {
+                        it.isFile && it.extension.equals("py", true)
+                    } == true
+                }.toMutableList()
+            }
+            if (generation != tabRestoreGeneration || projectDir != directory || currentFileName != selectedFile) return@launch
+            if (selectedFile !in names) {
+                if (names.size >= 12) names.removeAt(0)
+                names.add(selectedFile)
+            }
+            openTabs.clear()
+            openTabs.addAll(names)
+            unsavedTabs.clear()
+            unsavedTabs.addAll(names.filter { pendingDocumentWrites.read(File(projectDir, it)) != null })
+            persistTabs()
         }
-        openTabs.clear()
-        openTabs.addAll(names)
-        unsavedTabs.clear()
-        unsavedTabs.addAll(names.filter { pendingDocumentWrites.read(File(projectDir, it)) != null })
-        persistTabs()
     }
 
     private fun addOpenTab(fileName: String) {
+        tabRestoreGeneration++
         if (fileName !in openTabs) {
             if (openTabs.size >= 12) openTabs.remove(openTabs.first { it != currentFileName })
             openTabs.add(fileName)
@@ -377,6 +620,7 @@ class IdeViewModel : ViewModel() {
             val next = openTabs[if (index > 0) index - 1 else 1]
             if (!openProjectFile(next)) return
         }
+        tabRestoreGeneration++
         openTabs.remove(fileName)
         persistTabs()
     }
@@ -459,12 +703,13 @@ class IdeViewModel : ViewModel() {
         currentProjectName = ProjectWorkspace.safeName(settings.getString("current_project","default") ?: "default")
         projectDir = File(projectsRoot,currentProjectName).apply { mkdirs() }
         val legacyStarter = "print(\"Hello Andrew\")\nname = input(\"What is your name? \")\nprint(\"Hello\", name)\n"
-        val existing = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
         currentFileName = settings.getString("current_file","main.py") ?: "main.py"
-        var current = File(projectDir,currentFileName)
-        if (!current.exists()) current = existing.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
+        var current = ProjectWorkspace.resolvePath(projectDir, currentFileName)
+            ?.takeIf { it.isFile && it.extension.equals("py", true) }
+            ?: projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py", true) }
+                ?.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
         if (!current.exists() && !File(current.path + ".bak").exists()) current.writeText(code)
-        currentFileName = current.name
+        currentFileName = ProjectWorkspace.relativePath(projectDir, current) ?: "main.py"
         code = readProjectText(current)
         if (code == legacyStarter) {
             code = "print(\"Hello world!\")\n"
@@ -473,6 +718,10 @@ class IdeViewModel : ViewModel() {
         settings.edit().putString("current_file",currentFileName).putString("current_project",currentProjectName).apply()
         refreshProjects()
         refreshSaved()
+        restoreDeleteRecoveryNotice()
+        currentFolder = settings.getString("folder_$currentProjectName", "") ?: ""
+        if (ProjectWorkspace.resolvePath(projectDir, currentFolder)?.isDirectory != true) currentFolder = ""
+        refreshBrowserEntries()
         restoreTabs()
         editorRevision++
         thread {
@@ -569,8 +818,7 @@ class IdeViewModel : ViewModel() {
             if (shareCode) {
                 append("\n\nIDE context — current file: ").append(fileNameSnapshot)
                 append("\nProject files: ")
-                append(projectDir.listFiles()?.asSequence()?.filter { it.isFile && it.extension.equals("py",true) }
-                    ?.map { it.name }?.take(40)?.joinToString(", ").orEmpty())
+                append(savedCodes.asSequence().map { it.fileName }.take(40).joinToString(", "))
                 if (codeDiagnostics.isNotEmpty()) {
                     append("\nProblems: ")
                     codeDiagnostics.take(8).forEach { issue ->
@@ -680,12 +928,13 @@ class IdeViewModel : ViewModel() {
             aiMessages.add(AiMessage(false, "That edit is stale because the file changed. Ask Astro again before applying it."))
             return
         }
-        val target = File(projectDir, currentFileName)
+        val directory = projectDir
+        val target = ProjectWorkspace.resolvePath(directory, currentFileName) ?: return
         ProjectFileWriter.checkpoint(target, change.sourceSnapshot) { result ->
             mainHandler.post {
                 if (result.isFailure) {
                     aiMessages.add(AiMessage(false, "Couldn’t protect the current file: ${result.exceptionOrNull()?.message}"))
-                } else if (pendingCode == change && projectDir == target.parentFile &&
+                } else if (pendingCode == change && projectDir == directory &&
                     currentFileName == change.fileName && code == change.sourceSnapshot) {
                     val replacement = change.code
                     code = replacement + if (replacement.endsWith("\n")) "" else "\n"
@@ -805,10 +1054,21 @@ class IdeViewModel : ViewModel() {
     private fun refreshSaved() {
         if (!::projectDir.isInitialized) return
         mainHandler.removeCallbacks(savedRefreshRunnable)
-        val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }
-            ?.sortedByDescending { it.lastModified() }.orEmpty()
-        savedCodes.clear()
-        savedCodes.addAll(files.map { SavedCode(it.nameWithoutExtension.replace('_',' '),it.lastModified(),it.name) })
+        val directory = projectDir
+        val generation = ++savedRefreshGeneration
+        viewModelScope.launch {
+            val files = withContext(Dispatchers.IO) {
+                ProjectWorkspace.pythonFiles(directory).mapNotNull { file ->
+                    ProjectWorkspace.relativePath(directory, file)?.let { it to file.lastModified() }
+                }.sortedByDescending { it.second }
+            }
+            if (generation == savedRefreshGeneration && projectDir == directory) {
+                savedCodes.clear()
+                savedCodes.addAll(files.map { (path, modified) ->
+                    SavedCode(path.substringBeforeLast(".py", path).replace('_', ' '), modified, path)
+                })
+            }
+        }
     }
 
     fun makeNewProject(template: String = "Blank") {
@@ -847,12 +1107,13 @@ class IdeViewModel : ViewModel() {
         namingJob?.cancel()
         projectDir = targetDir
         currentProjectName = safeName
-        val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
         val selectedName = settings.getString("selected_$safeName", null)
-        var current = files.firstOrNull { it.name == selectedName }
-            ?: files.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
+        var current = selectedName?.let { ProjectWorkspace.resolvePath(projectDir, it) }
+            ?.takeIf { it.isFile && it.extension.equals("py", true) }
+            ?: projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py", true) }
+                ?.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
         if (!current.exists() && !File(current.path + ".bak").exists()) current.writeText("print(\"Hello world!\")\n")
-        currentFileName = current.name
+        currentFileName = ProjectWorkspace.relativePath(projectDir, current) ?: "main.py"
         code = readProjectText(current)
         codeDiagnostics = emptyList()
         pendingCode = null
@@ -862,15 +1123,18 @@ class IdeViewModel : ViewModel() {
             .putString("selected_$currentProjectName",currentFileName).apply()
         refreshProjects()
         refreshSaved()
+        currentFolder = settings.getString("folder_$currentProjectName", "") ?: ""
+        if (ProjectWorkspace.resolvePath(projectDir, currentFolder)?.isDirectory != true) currentFolder = ""
+        refreshBrowserEntries()
         restoreTabs()
         editorRevision++
     }
 
-    private fun uniqueFile(base: String): File {
+    private fun uniqueFile(base: String, parent: File = projectDir): File {
         val clean = base.lowercase().replace(Regex("[^a-z0-9]+"),"_").trim('_').take(36).ifBlank { "new_code" }
-        var candidate = File(projectDir,"${clean}.py")
+        var candidate = File(parent,"${clean}.py")
         var number = 2
-        while(candidate.exists() && candidate.name != currentFileName) candidate=File(projectDir,"${clean}_${number++}.py")
+        while(candidate.exists()) candidate=File(parent,"${clean}_${number++}.py")
         return candidate
     }
 
@@ -893,20 +1157,23 @@ class IdeViewModel : ViewModel() {
     }
 
     private fun renameCurrentByPurpose(snapshot: String) {
-        if (!currentFileName.startsWith("untitled_") || snapshot.isBlank()) return
+        if (!currentFileName.substringAfterLast('/').startsWith("untitled_") || snapshot.isBlank()) return
         if (code != snapshot) return
-        val old = File(projectDir,currentFileName)
-        val target = uniqueFile(localPurposeName(snapshot))
+        val directory = projectDir
+        val oldName = currentFileName
+        val old = ProjectWorkspace.resolvePath(directory, oldName) ?: return
+        val target = uniqueFile(localPurposeName(snapshot), old.parentFile)
+        val targetName = ProjectWorkspace.relativePath(directory, target) ?: return
         rememberEditorLocation()
-        currentEditorLocation()?.let { updateEditorLocation(locationKey(currentProjectName,target.name), it) }
+        currentEditorLocation()?.let { updateEditorLocation(locationKey(currentProjectName,targetName), it) }
         autosaveJob?.cancel()
         // The writer commits the latest contents before moving the file. Future
         // autosaves use the new name, so a delayed write cannot recreate untitled.py.
-        persistCode(projectDir, old.name, snapshot)
-        currentFileName = target.name
-        val tabIndex = openTabs.indexOf(old.name)
-        if (tabIndex >= 0) openTabs[tabIndex] = target.name
-        if (unsavedTabs.remove(old.name)) unsavedTabs.add(target.name)
+        persistCode(directory, oldName, snapshot)
+        currentFileName = targetName
+        val tabIndex = openTabs.indexOf(oldName)
+        if (tabIndex >= 0) openTabs[tabIndex] = targetName
+        if (unsavedTabs.remove(oldName)) unsavedTabs.add(targetName)
         persistTabs()
         settings.edit().putString("current_file",currentFileName)
             .putString("selected_$currentProjectName",currentFileName).apply()
@@ -914,22 +1181,25 @@ class IdeViewModel : ViewModel() {
             mainHandler.post {
                 if (result.isFailure) {
                     saveError = "Couldn’t rename ${old.name}: ${result.exceptionOrNull()?.message}"
-                    if (projectDir == old.parentFile && currentFileName == target.name && old.isFile) {
+                    if (projectDir == directory && currentFileName == targetName && old.isFile) {
                         // The original remains authoritative if the move failed. A newer
                         // save queued under the proposed name may also exist; retain it.
-                        currentFileName = old.name
-                        val changedTab = openTabs.indexOf(target.name)
-                        if (changedTab >= 0) openTabs[changedTab] = old.name
-                        if (unsavedTabs.remove(target.name)) unsavedTabs.add(old.name)
+                        currentFileName = oldName
+                        val changedTab = openTabs.indexOf(targetName)
+                        if (changedTab >= 0) openTabs[changedTab] = oldName
+                        if (unsavedTabs.remove(targetName)) unsavedTabs.add(oldName)
                         persistTabs()
-                        settings.edit().putString("current_file",old.name)
-                            .putString("selected_$currentProjectName",old.name).apply()
+                        settings.edit().putString("current_file",oldName)
+                            .putString("selected_$currentProjectName",oldName).apply()
                         editorRevision++
                         save()
                     }
-                } else if (currentFileName == target.name && code == snapshot &&
-                    pendingDocumentWrites.read(target) == null) unsavedTabs.remove(target.name)
-                if (::projectDir.isInitialized && projectDir == target.parentFile) refreshSaved()
+                } else if (currentFileName == targetName && code == snapshot &&
+                    pendingDocumentWrites.read(target) == null) unsavedTabs.remove(targetName)
+                if (::projectDir.isInitialized && projectDir == directory) {
+                    refreshSaved()
+                    refreshBrowserEntries()
+                }
             }
         }
     }
@@ -938,13 +1208,14 @@ class IdeViewModel : ViewModel() {
         if (running || !::projectDir.isInitialized) return
         rememberEditorLocation()
         save()
+        val parent = ProjectWorkspace.resolvePath(projectDir, currentFolder)?.takeIf { it.isDirectory } ?: projectDir
         var number=1
-        var file=File(projectDir,"untitled_$number.py")
-        while(file.exists()) file=File(projectDir,"untitled_${++number}.py")
+        var file=File(parent,"untitled_$number.py")
+        while(file.exists()) file=File(parent,"untitled_${++number}.py")
         file.writeText("")
-        currentFileName=file.name
+        currentFileName=ProjectWorkspace.relativePath(projectDir, file) ?: file.name
         projectProblemsStale = projectProblems.isNotEmpty()
-        addOpenTab(file.name)
+        addOpenTab(currentFileName)
         code=""
         codeDiagnostics=emptyList()
         pendingCode=null
@@ -952,20 +1223,21 @@ class IdeViewModel : ViewModel() {
         settings.edit().putString("current_file",currentFileName)
             .putString("selected_$currentProjectName",currentFileName).apply()
         refreshSaved()
+        refreshBrowserEntries()
         editorRevision++
     }
 
     fun duplicateFile(fileName: String, onCreated: () -> Unit = {}) {
         if (running || !::projectDir.isInitialized) return
         val directory = projectDir
-        val source = File(directory, fileName)
-        if (source.parentFile != directory || !source.isFile || !source.extension.equals("py", true)) return
+        val source = ProjectWorkspace.resolvePath(directory, fileName)
+            ?.takeIf { it.isFile && it.extension.equals("py", true) } ?: return
         if (fileName == currentFileName) save()
         val stem = source.nameWithoutExtension
-        var target = File(directory, "${stem}_copy.py")
+        var target = File(source.parentFile, "${stem}_copy.py")
         var suffix = 2
         while (target.exists() || target.absolutePath in pendingDuplicates)
-            target = File(directory, "${stem}_copy_${suffix++}.py")
+            target = File(source.parentFile, "${stem}_copy_${suffix++}.py")
         pendingDuplicates.add(target.absolutePath)
         ProjectFileWriter.duplicate(source, target) { result ->
             mainHandler.post {
@@ -973,7 +1245,8 @@ class IdeViewModel : ViewModel() {
                 result.onSuccess {
                     if (projectDir == directory) {
                         refreshSaved()
-                        if (openProjectFile(target.name)) onCreated()
+                        refreshBrowserEntries()
+                        ProjectWorkspace.relativePath(directory, target)?.let { if (openProjectFile(it)) onCreated() }
                     }
                 }.onFailure { saveError = "Couldn’t duplicate $fileName: ${it.message}" }
             }
@@ -982,22 +1255,21 @@ class IdeViewModel : ViewModel() {
 
     fun openSaved(displayName: String) {
         if (running || !::projectDir.isInitialized) return
-        val file=projectDir.listFiles()?.firstOrNull {
-            it.isFile && it.extension.equals("py",true) && it.nameWithoutExtension.replace('_',' ')==displayName
-        } ?: return
-        openProjectFile(file.name)
+        val file = savedCodes.firstOrNull { it.name == displayName || it.fileName == displayName } ?: return
+        openProjectFile(file.fileName)
     }
 
     fun openProjectFile(fileName: String): Boolean {
         if (running || !::projectDir.isInitialized) return false
-        val file = File(projectDir, fileName)
-        if (file.parentFile != projectDir || !file.isFile || !file.extension.equals("py", true)) return false
-        if (file.name == currentFileName) return true
+        val file = ProjectWorkspace.resolvePath(projectDir, fileName)
+            ?.takeIf { it.isFile && it.extension.equals("py", true) } ?: return false
+        val relativeName = ProjectWorkspace.relativePath(projectDir, file) ?: return false
+        if (relativeName == currentFileName) return true
         rememberEditorLocation()
         save()
-        currentFileName=file.name
+        currentFileName=relativeName
         projectProblemsStale = projectProblems.isNotEmpty()
-        addOpenTab(file.name)
+        addOpenTab(relativeName)
         code=readProjectText(file)
         codeDiagnostics=emptyList()
         pendingCode=null
@@ -1014,7 +1286,7 @@ class IdeViewModel : ViewModel() {
         if (projectProblems.isNotEmpty()) projectProblemsStale = true
         if (currentFileName !in unsavedTabs) unsavedTabs.add(currentFileName)
         codeDiagnostics = emptyList()
-        if (currentFileName.startsWith("untitled_") && value.trim().length >= 8) {
+        if (currentFileName.substringAfterLast('/').startsWith("untitled_") && value.trim().length >= 8) {
             namingJob?.cancel()
             namingJob=viewModelScope.launch {
                 delay(1800)
@@ -1091,17 +1363,19 @@ class IdeViewModel : ViewModel() {
 
     fun restoreHistory(version: File) {
         if (!::projectDir.isInitialized) return
-        val target = File(projectDir, currentFileName)
+        val directory = projectDir
+        val targetPath = currentFileName
+        val target = ProjectWorkspace.resolvePath(directory, targetPath) ?: return
         if (version !in ProjectFileHistory.versions(target)) return
         val currentSnapshot = code
         viewModelScope.launch {
             val recovered = withContext(Dispatchers.IO) { runCatching { readProjectText(version) } }
             recovered.onSuccess { snapshot ->
-                if (projectDir == target.parentFile && currentFileName == target.name && code == currentSnapshot) {
+                if (projectDir == directory && currentFileName == targetPath && code == currentSnapshot) {
                     ProjectFileWriter.checkpoint(target, currentSnapshot) { result ->
                         mainHandler.post {
                             if (result.isFailure) saveError = "Couldn’t protect current code: ${result.exceptionOrNull()?.message}"
-                            else if (projectDir == target.parentFile && currentFileName == target.name && code == currentSnapshot) {
+                            else if (projectDir == directory && currentFileName == targetPath && code == currentSnapshot) {
                                 code = snapshot
                                 codeDiagnostics = emptyList()
                                 editorRevision++
@@ -1159,7 +1433,11 @@ class IdeViewModel : ViewModel() {
 
     fun applyRuntimeFix() {
         val issue = runtimeIssue ?: return
-        if (File(issue.fileName).name == currentFileName && issue.replaceFrom.isNotBlank() && issue.replaceTo.isNotBlank()) {
+        val issuePath = File(issue.fileName).let { candidate ->
+            if (candidate.isAbsolute) ProjectWorkspace.relativePath(projectDir, candidate)
+            else ProjectWorkspace.normalizePath(issue.fileName)
+        }
+        if (issuePath == currentFileName && issue.replaceFrom.isNotBlank() && issue.replaceTo.isNotBlank()) {
             val lines = code.lines().toMutableList()
             val index = issue.line - 1
             if (index in lines.indices && lines[index].contains(issue.replaceFrom)) {
@@ -1180,15 +1458,18 @@ class IdeViewModel : ViewModel() {
     }
     fun openRuntimeSource(issue: RuntimeIssue): Boolean {
         if (running || !::projectDir.isInitialized) return false
-        val candidate = File(issue.fileName).let { if (it.isAbsolute) it else File(projectDir, issue.fileName) }
-        val file = runCatching { candidate.canonicalFile }.getOrNull() ?: return false
-        if (file.parentFile != projectDir.canonicalFile || !file.isFile || !file.name.endsWith(".py", true)) return false
-        if (file.name != currentFileName) {
+        val candidate = File(issue.fileName)
+        val file = (if (candidate.isAbsolute) runCatching { candidate.canonicalFile }
+            .getOrNull()?.takeIf { ProjectWorkspace.relativePath(projectDir, it) != null }
+        else ProjectWorkspace.resolvePath(projectDir, issue.fileName)) ?: return false
+        val relativeName = ProjectWorkspace.relativePath(projectDir, file) ?: return false
+        if (!file.isFile || !file.name.endsWith(".py", true)) return false
+        if (relativeName != currentFileName) {
             rememberEditorLocation()
             save()
-            currentFileName = file.name
+            currentFileName = relativeName
             projectProblemsStale = projectProblems.isNotEmpty()
-            addOpenTab(file.name)
+            addOpenTab(relativeName)
             code = readProjectText(file)
             codeDiagnostics = emptyList()
             settings.edit().putString("current_file", currentFileName)
@@ -1521,6 +1802,13 @@ private fun AchievementNotice(
         }
     }
     var showProjectTemplates by remember { mutableStateOf(false) }
+    var showNewFolderDialog by remember { mutableStateOf(false) }
+    var newFolderDraft by remember { mutableStateOf("") }
+    var renameFilePath by remember { mutableStateOf<String?>(null) }
+    var renameFileDraft by remember { mutableStateOf("") }
+    var moveFilePath by remember { mutableStateOf<String?>(null) }
+    var moveFolderQuery by remember { mutableStateOf("") }
+    var deleteFilePath by remember { mutableStateOf<String?>(null) }
     var quickOpenQuery by remember { mutableStateOf("") }
     var chosenVersion by remember { mutableStateOf<File?>(null) }
     var historyPreview by remember { mutableStateOf("") }
@@ -1617,9 +1905,10 @@ private fun AchievementNotice(
         Box(Modifier.fillMaxSize().background(bg)) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             vm.saveError?.let { error ->
-                Text(error + " · Tap to retry", color=Color.White, fontSize=12.sp,
+                val retryable = error.startsWith("Couldn’t save ") || error.startsWith("Couldn’t protect current code")
+                Text(if(retryable) "$error · Tap to retry" else error, color=Color.White, fontSize=12.sp,
                     modifier=Modifier.fillMaxWidth().background(Color(0xFF8B2835))
-                        .clickable { editorView?.flushCodeChange(); vm.save() }
+                        .then(if(retryable) Modifier.clickable { editorView?.flushCodeChange(); vm.save() } else Modifier)
                         .padding(horizontal=12.dp, vertical=8.dp))
             }
             if(vm.showHeader) {
@@ -1743,13 +2032,14 @@ private fun AchievementNotice(
                                 Text("Project  •  ${vm.currentProjectName}",color=Color.Gray,fontSize=11.sp)
                             }
                             Button(
+                                enabled=!vm.running,
                                 onClick={vm.makeNewCode();scope.launch{pager.animateScrollToPage(1)}},
                                 colors=ButtonDefaults.buttonColors(
-                                    containerColor=(if(vm.running) safeColor(vm.stopButtonHex,0xFFFF3D71) else safeColor(vm.runButtonHex,0xFF00E676)).copy(alpha=0.90f),
+                                    containerColor=Color(0xFF3D9BFA),
                                     contentColor=Color.Black
                                 ),
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
-                            ){Text("＋ Make new code",fontWeight=FontWeight.Bold)}
+                            ){Text("＋ New file",fontWeight=FontWeight.Bold)}
                         }
                         Row(
                             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -1768,43 +2058,99 @@ private fun AchievementNotice(
                             ){Text("＋ Project")}
                         }
                         HorizontalDivider(color=Color.White.copy(alpha=0.12f))
-                        if(vm.savedCodes.isEmpty()) {
-                            Box(Modifier.fillMaxSize(),contentAlignment=androidx.compose.ui.Alignment.Center) {
-                                Text("No saved code yet",color=Color.Gray)
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                            if (vm.currentFolder.isNotEmpty()) {
+                                IconButton(onClick=vm::navigateUpFolder,modifier=Modifier.size(40.dp)) {
+                                    IdeGlyph("Back",Color.White,Modifier.size(18.dp))
+                                }
                             }
-                        } else {
-                            Column(
+                            Column(Modifier.weight(1f)) {
+                                Text(if(vm.currentFolder.isEmpty()) "Project root" else vm.currentFolder,
+                                    color=Color.White,fontSize=13.sp,fontWeight=FontWeight.SemiBold,maxLines=1,
+                                    overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                Text("${vm.browserEntries.count { it.isDirectory }} folders · ${vm.browserEntries.count { !it.isDirectory }} Python files shown",
+                                    color=Color.Gray,fontSize=10.sp)
+                            }
+                            TextButton(onClick={newFolderDraft="";showNewFolderDialog=true},enabled=!vm.running) {
+                                Text("＋ Folder",fontSize=12.sp)
+                            }
+                        }
+                        if (vm.recoverableDeletedPath != null && vm.recoverableDeletedProject == vm.currentProjectName) {
+                            Surface(color=Color(0xFF18332B),shape=androidx.compose.foundation.shape.RoundedCornerShape(10.dp)) {
+                                Row(Modifier.fillMaxWidth().padding(start=12.dp,end=6.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                    Text("Deleted ${vm.recoverableDeletedPath}",color=Color(0xFFB8F1D5),fontSize=11.sp,modifier=Modifier.weight(1f),maxLines=1,
+                                        overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                    TextButton(onClick=vm::undoLastProjectDelete) { Text("Undo") }
+                                }
+                            }
+                        }
+                        when {
+                            vm.loadingBrowserEntries -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                            vm.browserEntries.isEmpty() -> Box(Modifier.fillMaxWidth().weight(1f),contentAlignment=androidx.compose.ui.Alignment.Center) {
+                                Column(horizontalAlignment=androidx.compose.ui.Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                                    Text("This folder is empty",color=Color.LightGray)
+                                    TextButton(onClick={vm.makeNewCode();scope.launch{pager.animateScrollToPage(1)}}) { Text("＋ New Python file") }
+                                }
+                            }
+                            else -> Column(
                                 Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
-                                verticalArrangement=Arrangement.spacedBy(7.dp)
+                                verticalArrangement=Arrangement.spacedBy(6.dp)
                             ) {
-                                vm.savedCodes.forEach { saved ->
-                                    Surface(
-                                        color=if(vm.currentFileName.substringBeforeLast('.').replace('_',' ')==saved.name) Color.White.copy(alpha=0.15f) else Color.White.copy(alpha=0.045f),
-                                        shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-                                        modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.10f),androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
-                                    ) {
-                                        Row(Modifier.padding(horizontal=15.dp,vertical=14.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
-                                            Row(Modifier.weight(1f).clickable(enabled=!vm.running) {
-                                                editorView?.flushCodeChange()
-                                                if (vm.openProjectFile(saved.fileName)) scope.launch{pager.animateScrollToPage(1)}
-                                            },verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
-                                                Text("⌘",color=Color.White,fontSize=18.sp)
+                                vm.browserEntries.forEach { entry ->
+                                    if (entry.isDirectory) {
+                                        Surface(color=Color.White.copy(alpha=0.045f),
+                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                            modifier=Modifier.fillMaxWidth().clickable { vm.navigateToFolder(entry.relativePath) }) {
+                                            Row(Modifier.padding(horizontal=14.dp,vertical=13.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                                IdeGlyph("Folders",Color(0xFF8FD6FF),Modifier.size(19.dp))
                                                 Spacer(Modifier.width(12.dp))
-                                                Column {
-                                                    Text(saved.name,color=Color.White,fontSize=15.sp,fontWeight=FontWeight.SemiBold)
-                                                    Text(".py  •  auto-saved",color=Color.Gray,fontSize=10.sp)
+                                                Text(entry.name,color=Color.White,fontSize=14.sp,modifier=Modifier.weight(1f))
+                                                Text("›",color=Color.Gray,fontSize=22.sp)
+                                            }
+                                        }
+                                    } else {
+                                        var menuExpanded by remember(entry.relativePath) { mutableStateOf(false) }
+                                        Surface(
+                                            color=if(vm.currentFileName==entry.relativePath) Color.White.copy(alpha=0.14f) else Color.White.copy(alpha=0.045f),
+                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                            modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.08f),androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                                        ) {
+                                            Row(Modifier.padding(start=14.dp,end=4.dp,top=5.dp,bottom=5.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                                Row(Modifier.weight(1f).clickable(enabled=!vm.running) {
+                                                    editorView?.flushCodeChange()
+                                                    if (vm.openProjectFile(entry.relativePath)) scope.launch{pager.animateScrollToPage(1)}
+                                                }.padding(vertical=8.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                                    Image(painterResource(R.drawable.ic_python_editor),"Python file",Modifier.size(19.dp))
+                                                    Spacer(Modifier.width(12.dp))
+                                                    Column {
+                                                        Text(entry.name,color=Color.White,fontSize=14.sp,fontWeight=FontWeight.SemiBold,maxLines=1)
+                                                        Text(entry.relativePath,color=Color.Gray,fontSize=10.sp,maxLines=1,
+                                                            overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                                    }
+                                                }
+                                                IconButton(enabled=!vm.running,onClick={
+                                                    editorView?.flushCodeChange()
+                                                    vm.duplicateFile(entry.relativePath) { scope.launch{pager.animateScrollToPage(1)} }
+                                                },modifier=Modifier.size(40.dp).semantics { contentDescription="Duplicate ${entry.relativePath}" }) {
+                                                    IdeGlyph("Copy",Color.LightGray,Modifier.size(17.dp))
+                                                }
+                                                Box {
+                                                    IconButton(enabled=!vm.running,onClick={menuExpanded=true},modifier=Modifier.size(40.dp).semantics {
+                                                        contentDescription="Actions for ${entry.relativePath}"
+                                                    }) { IdeGlyph("More",Color.LightGray,Modifier.size(18.dp)) }
+                                                    DropdownMenu(expanded=menuExpanded,onDismissRequest={menuExpanded=false}) {
+                                                        DropdownMenuItem(text={Text("Rename")},onClick={
+                                                            renameFilePath=entry.relativePath
+                                                            renameFileDraft=entry.name.substringBeforeLast('.')
+                                                            menuExpanded=false
+                                                        })
+                                                        DropdownMenuItem(text={Text("Move to folder")},onClick={
+                                                            moveFilePath=entry.relativePath;moveFolderQuery="";menuExpanded=false
+                                                        })
+                                                        DropdownMenuItem(text={Text("Delete")},onClick={deleteFilePath=entry.relativePath;menuExpanded=false})
+                                                    }
                                                 }
                                             }
-                                            IconButton(enabled=!vm.running,
-                                                onClick={editorView?.flushCodeChange();vm.duplicateFile(saved.fileName) {
-                                                    scope.launch{pager.animateScrollToPage(1)}
-                                                }},
-                                                modifier=Modifier.size(40.dp).semantics {
-                                                    contentDescription="Duplicate ${saved.fileName}"
-                                                }) {
-                                                IdeGlyph("Copy",Color.LightGray,Modifier.size(17.dp))
-                                            }
-                                            Text("›",color=Color.Gray,fontSize=24.sp)
                                         }
                                     }
                                 }
@@ -2557,6 +2903,55 @@ private fun AchievementNotice(
         }},
         confirmButton={TextButton(onClick={showProjectTemplates=false}) { Text("Cancel") }}
     )
+    if(showNewFolderDialog) AlertDialog(
+        onDismissRequest={showNewFolderDialog=false},containerColor=Color(0xFF171A20),
+        title={Text("Create folder")},
+        text={OutlinedTextField(newFolderDraft,{newFolderDraft=it},label={Text("Folder name")},singleLine=true,
+            modifier=Modifier.fillMaxWidth())},
+        confirmButton={TextButton(enabled=newFolderDraft.isNotBlank(),onClick={
+            vm.createFolder(newFolderDraft);showNewFolderDialog=false
+        }) { Text("Create") }},
+        dismissButton={TextButton(onClick={showNewFolderDialog=false}) { Text("Cancel") }}
+    )
+    renameFilePath?.let { filePath -> AlertDialog(
+        onDismissRequest={renameFilePath=null},containerColor=Color(0xFF171A20),
+        title={Text("Rename Python file")},
+        text={Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {
+            Text(filePath,color=Color.Gray,fontSize=12.sp)
+            OutlinedTextField(renameFileDraft,{renameFileDraft=it},label={Text("File name")},singleLine=true,
+                modifier=Modifier.fillMaxWidth())
+            Text("The .py extension is kept automatically.",color=Color.Gray,fontSize=11.sp)
+        }},
+        confirmButton={TextButton(enabled=renameFileDraft.isNotBlank(),onClick={
+            vm.renameProjectFile(filePath,renameFileDraft);renameFilePath=null
+        }) { Text("Rename") }},
+        dismissButton={TextButton(onClick={renameFilePath=null}) { Text("Cancel") }}
+    ) }
+    moveFilePath?.let { filePath -> AlertDialog(
+        onDismissRequest={moveFilePath=null},containerColor=Color(0xFF171A20),
+        title={Text("Move file")},
+        text={Column(Modifier.heightIn(max=430.dp)) {
+            Text(filePath,color=Color.Gray,fontSize=12.sp)
+            OutlinedTextField(moveFolderQuery,{moveFolderQuery=it},label={Text("Filter folders")},singleLine=true,
+                modifier=Modifier.fillMaxWidth())
+            Column(Modifier.fillMaxWidth().weight(1f,fill=false).verticalScroll(rememberScrollState())) {
+                vm.projectFolders.asSequence().filter { it.contains(moveFolderQuery,true) }.take(80).forEach { folder ->
+                    TextButton(enabled=!vm.running,onClick={vm.moveProjectFile(filePath,folder);moveFilePath=null},
+                        modifier=Modifier.fillMaxWidth()) {
+                        Text(if(folder.isEmpty()) "Project root" else folder,modifier=Modifier.fillMaxWidth())
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={moveFilePath=null}) { Text("Cancel") }}
+    ) }
+    deleteFilePath?.let { filePath -> AlertDialog(
+        onDismissRequest={deleteFilePath=null},containerColor=Color(0xFF171A20),
+        title={Text("Move to recovery?")},
+        text={Text("$filePath will leave the project and can be restored with Undo. Its existing history is preserved.")},
+        confirmButton={TextButton(enabled=!vm.running,onClick={vm.deleteProjectFile(filePath);deleteFilePath=null}) { Text("Delete") }},
+        dismissButton={TextButton(onClick={deleteFilePath=null}) { Text("Cancel") }}
+    ) }
     if(showPalette) AlertDialog(
         onDismissRequest={showPalette=false},containerColor=Color(0xFF171A20),
         title={Text("Commands")},
@@ -2597,7 +2992,8 @@ private fun AchievementNotice(
                 singleLine=true,modifier=Modifier.fillMaxWidth())
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 if(vm.running) Text("Stop the program before switching files.",color=Color.LightGray)
-                vm.savedCodes.filter { it.name.contains(quickOpenQuery,true) }.forEach { saved ->
+                vm.savedCodes.asSequence().filter { it.name.contains(quickOpenQuery,true) }
+                    .take(150).forEach { saved ->
                     TextButton(enabled=!vm.running,onClick={
                         editorView?.flushCodeChange()
                         vm.openProjectFile(saved.fileName)

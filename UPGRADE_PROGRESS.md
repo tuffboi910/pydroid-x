@@ -10,6 +10,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Projects: runnable Blank, Hello World, CLI, Calculator, Automation, Guessing Game, and CSV Data starters. Five nontrivial scripts passed local parse and execution checks. A file can be duplicated through the serialized atomic writer and opened after success.
 - Astro: editor-selection question handoff; bounded project names, diagnostics, and recent Console context only when code sharing is enabled; existing preview/Accept/Reject flow retained.
 - Navigation: searchable command palette, Quick Open, bounded background Find in Project with direct file/line navigation, and a horizontal open-file tab strip with close and Ctrl+W. Open tabs and selected file persist per project.
+- Project browser: nested folder navigation and creation; bounded recursive Python file listing; user-driven rename, move, and recoverable delete; recovery notice restored after process restart; nested paths across saved files, tabs, project search, diagnostics, traceback navigation, and file history. These changes await Android CI and device verification.
 
 ## Verification
 
@@ -17,12 +18,13 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Android CI runs 202–206 and 208–211 passed unit tests and debug APK packaging. Run 207 exposed a mistaken Unicode-tail test assertion; the assertion was corrected and run 208 passed.
 - Runs 212 (Astro context) and 213 (project starters) passed. Run 214 caught a Kotlin scope error in history preview; run 215 carried the same error. Corrected run 230, project-search run 231, queued-save run 232, corrected tab run 234, Console run 235, rename recovery run 236, autosave refresh run 237, duplication run 238, and the final guard run 239 passed Android tests and APK packaging. Run 233 caught an editor-location visibility issue and was fixed in 234. Project-wide Problems source tests pass locally; its Android CI run is pending.
 - Git diff checks and clean local status were verified at each checkpoint. No physical Android device or emulator was attached to this Work environment.
+- The nested project/browser batch passes 24 host Python tests with Jedi 0.19.2 and `git diff --check`; Android CI for this batch is pending.
 
 ## Incomplete or unverified
 
 - Measure typing, scrolling, Console throughput, keyboard transitions, and touch accuracy on a physical high-refresh device. UI geometry, animation timing, haptics, accessibility font scaling, rotation, and process-death recovery require device checks.
-- The editor still needs tab pinning/reorder/recently closed recovery, folding/sticky context if justified, and more real-world IME testing. Find in Project currently scans top-level Python files and caps results at 200. Project Problems also scans top-level Python files, caps at 300 files and 8 MB total, skips files above 1 MB, and requires an explicit scan. Failed writes still need on-disk recovery when storage becomes available; the in-memory pending text survives only while the process lives.
-- Project actions still lack user-driven rename/move/delete/recovery UI and folder navigation. History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots.
+- The editor still needs tab pinning/reorder/recently closed recovery, folding/sticky context if justified, and more real-world IME testing. Find in Project scans nested Python files and caps results at 200. Project Problems scans nested Python files, caps at 300 files and 8 MB total, skips files above 1 MB, and requires an explicit scan. Failed writes still need on-disk recovery when storage becomes available; the in-memory pending text survives only while the process lives.
+- Project browser/action behavior needs physical-device testing, including folder navigation, file moves, and delete recovery across process death. History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots.
 - Astro lacks per-hunk acceptance and constrained project-agent operations. Live provider and offline-model behavior need configured credentials/models and device testing.
 - Android runtime package installation is not implemented. The terminal truthfully reports this; installed-package listing already works. Do not advertise unsupported wheels as installable.
 - Console search results do not yet jump to the corresponding live-output scroll position; richer ANSI rendering and large-output interaction beyond the retained window remain. Broad UI/motion polish and first-run/accessibility passes remain.

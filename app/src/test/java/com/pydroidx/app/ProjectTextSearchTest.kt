@@ -10,10 +10,13 @@ class ProjectTextSearchTest {
         try {
             dir.resolve("main.py").writeText("stale")
             dir.resolve("other.py").writeText("first\nprint('Needle')\n")
+            dir.resolve("src/nested.py").parentFile.mkdirs()
+            dir.resolve("src/nested.py").writeText("needle in nested file\n")
             dir.resolve("notes.txt").writeText("needle")
             assertEquals(listOf(
                 ProjectSearchHit("main.py", 2, "needle = 1"),
-                ProjectSearchHit("other.py", 2, "print('Needle')")
+                ProjectSearchHit("other.py", 2, "print('Needle')"),
+                ProjectSearchHit("src/nested.py", 1, "needle in nested file")
             ), ProjectTextSearch.search(dir, "needle", "main.py", "# header\nneedle = 1\n"))
         } finally { dir.deleteRecursively() }
     }

@@ -35,6 +35,8 @@ fun IdeGlyph(name: String, color: Color, modifier: Modifier = Modifier) {
             "System" -> { m(12f,3f);l(12f,7f);m(12f,17f);l(12f,21f);m(3f,12f);l(7f,12f);m(17f,12f);l(21f,12f);m(5.6f,5.6f);l(8.4f,8.4f);m(15.6f,15.6f);l(18.4f,18.4f);m(18.4f,5.6f);l(15.6f,8.4f);m(8.4f,15.6f);l(5.6f,18.4f);drawCircle(color,4f*sx,style=Stroke(1.6f*sx)) }
             "Undo" -> { m(8f,5f);l(3f,10f);l(8f,15f);m(3f,10f);l(14f,10f);c(23f,10f,23f,21f,14f,21f) }
             "Redo" -> { m(16f,5f);l(21f,10f);l(16f,15f);m(21f,10f);l(10f,10f);c(1f,10f,1f,21f,10f,21f) }
+            "Back" -> { m(19f,12f);l(5f,12f);l(11f,6f);m(5f,12f);l(11f,18f) }
+            "More" -> { drawCircle(color,1.3f*sx,androidx.compose.ui.geometry.Offset(5f*sx,12f*sy));drawCircle(color,1.3f*sx,androidx.compose.ui.geometry.Offset(12f*sx,12f*sy));drawCircle(color,1.3f*sx,androidx.compose.ui.geometry.Offset(19f*sx,12f*sy)) }
             "Close" -> { m(6f,6f);l(18f,18f);m(18f,6f);l(6f,18f) }
             "New file" -> { m(12f,4f);l(12f,20f);m(4f,12f);l(20f,12f) }
             "Copy" -> { m(8f,7f);l(20f,7f);l(20f,21f);l(8f,21f);path.close();m(5f,17f);l(4f,17f);l(4f,3f);l(16f,3f);l(16f,5f) }

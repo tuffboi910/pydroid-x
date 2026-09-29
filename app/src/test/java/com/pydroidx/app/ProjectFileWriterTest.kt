@@ -98,6 +98,41 @@ class ProjectFileWriterTest {
         assertEquals("older", ProjectFileHistory.versions(target).first().readText())
     }
 
+    @Test fun moveCarriesHistoryAndPreservesTheFile() {
+        val root = Files.createTempDirectory("py4u-move-").toFile()
+        val source = File(root, "src/main.py").apply { parentFile.mkdirs(); writeText("current") }
+        val target = File(root, "lib/main.py").apply { parentFile.mkdirs() }
+        ProjectFileHistory.recoveryPoint(source, "previous".toByteArray())
+        val finished = CountDownLatch(1)
+        var succeeded = false
+        ProjectFileWriter.move(source, target) { result -> succeeded = result.isSuccess; finished.countDown() }
+        assertTrue(finished.await(5, TimeUnit.SECONDS))
+        assertTrue(succeeded)
+        assertTrue(!source.exists())
+        assertEquals("current", target.readText())
+        assertEquals("previous", ProjectFileHistory.versions(target).first().readText())
+    }
+
+    @Test fun deletedFileCanBeRestoredFromProjectRecovery() {
+        val root = Files.createTempDirectory("py4u-delete-").toFile()
+        val source = File(root, "nested/main.py").apply { parentFile.mkdirs(); writeText("recover me") }
+        val deleted = CountDownLatch(1)
+        var recovered: File? = null
+        ProjectFileWriter.moveToRecovery(source, root) { result ->
+            recovered = result.getOrNull()
+            deleted.countDown()
+        }
+        assertTrue(deleted.await(5, TimeUnit.SECONDS))
+        assertTrue(!source.exists())
+        val recovery = recovered ?: throw AssertionError("No recovery copy was created")
+        val restored = CountDownLatch(1)
+        var succeeded = false
+        ProjectFileWriter.move(recovery, source) { result -> succeeded = result.isSuccess; restored.countDown() }
+        assertTrue(restored.await(5, TimeUnit.SECONDS))
+        assertTrue(succeeded)
+        assertEquals("recover me", source.readText())
+    }
+
     @Test fun replacingFileKeepsRecoverablePreviousVersion() {
         val file = File(Files.createTempDirectory("py4u-history-").toFile(), "main.py")
         file.writeText("print('before')\n")

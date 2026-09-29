@@ -1,4 +1,5 @@
 import ast
+import bisect
 import builtins
 import contextlib
 import importlib
@@ -284,13 +285,20 @@ class _UndefinedNameAnalyzer(ast.NodeVisitor):
 
 def diagnose(source):
     """Return syntax errors and conservative unresolved-name warnings with exact ranges."""
-    def utf16_offset(index):
-        return len(source[:max(0, index)].encode("utf-16-le")) // 2
-
     def serialize(issues):
+        offsets = sorted({min(len(source), max(0, issue[key]))
+                          for issue in issues for key in ("start", "end")})
+        utf16_offsets = {}
+        codepoint = 0
+        utf16 = 0
+        for target in offsets:
+            while codepoint < target:
+                utf16 += 2 if ord(source[codepoint]) > 0xFFFF else 1
+                codepoint += 1
+            utf16_offsets[target] = utf16
         for issue in issues:
-            issue["start_utf16"] = utf16_offset(issue["start"])
-            issue["end_utf16"] = utf16_offset(issue["end"])
+            issue["start_utf16"] = utf16_offsets[min(len(source), max(0, issue["start"]))]
+            issue["end_utf16"] = utf16_offsets[min(len(source), max(0, issue["end"]))]
         return json.dumps(issues)
 
     try:
@@ -326,21 +334,48 @@ def diagnose(source):
 
 def diagnose_project(current_source, current_filename, project_dir, max_files=300,
                      max_file_bytes=1_000_000, max_total_bytes=8_000_000):
-    """Diagnose bounded top-level Python files, using the live buffer for the active file."""
+    """Diagnose bounded project Python files, using the live buffer for the active file."""
     root = os.path.realpath(project_dir)
-    current_filename = os.path.basename(current_filename)
+    current_filename = os.path.normpath(current_filename.replace("\\", os.sep))
+    if (os.path.isabs(current_filename) or current_filename in ("", ".", "..")
+            or current_filename.startswith(".." + os.sep)):
+        current_filename = ""
+
+    ignored_directories = {".git", ".history", ".recovery", "__pycache__", ".venv", "venv", "node_modules"}
+    names = []
+    max_files = max(1, int(max_files))
+    max_directories = max(32, min(2_000, max_files * 4))
+    visited_directories = 0
     try:
-        names = sorted(name for name in os.listdir(root)
-                       if name.lower().endswith(".py")
-                       and os.path.isfile(os.path.join(root, name)))
+        for directory, subdirectories, filenames in os.walk(root, followlinks=False):
+            visited_directories += 1
+            if visited_directories > max_directories:
+                break
+            if len(names) >= max_files:
+                break
+            subdirectories[:] = sorted(
+                name for name in subdirectories
+                if name not in ignored_directories and not name.startswith(".")
+                and not os.path.islink(os.path.join(directory, name)))
+            for name in filenames:
+                if not name.lower().endswith(".py"):
+                    continue
+                path = os.path.realpath(os.path.join(directory, name))
+                if path.startswith(root + os.sep):
+                    relative = os.path.relpath(path, root)
+                    if relative != current_filename:
+                        names.append(relative)
+                    if len(names) >= max_files:
+                        break
     except OSError:
         names = []
-    if current_filename.lower().endswith(".py"):
-        names = [current_filename] + [name for name in names if name != current_filename]
+    names = sorted(set(names))
+    if current_filename and current_filename.lower().endswith(".py"):
+        names = [current_filename] + [name for name in names if name != current_filename][:max_files - 1]
 
     results = []
     total_bytes = 0
-    for name in names[:max(1, max_files)]:
+    for name in names[:max_files]:
         path = os.path.join(root, name)
         if name == current_filename:
             source = current_source
@@ -357,10 +392,12 @@ def diagnose_project(current_source, current_filename, project_dir, max_files=30
         if encoded_size > max_file_bytes or total_bytes + encoded_size > max_total_bytes:
             continue
         total_bytes += encoded_size
+        lines = source.splitlines()
+        line_starts = [0]
+        line_starts.extend(index + 1 for index, character in enumerate(source) if character == "\n")
         for issue in json.loads(diagnose(source)):
             start = issue["start"]
-            line = source.count("\n", 0, start) + 1
-            lines = source.splitlines()
+            line = bisect.bisect_right(line_starts, start)
             preview = lines[line - 1].strip()[:160] if line <= len(lines) else ""
             results.append({
                 "file": name,

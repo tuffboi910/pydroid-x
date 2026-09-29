@@ -112,11 +112,15 @@ def outer(items):
             pathlib.Path(project, "main.py").write_text("print(stale)\n", encoding="utf-8")
             pathlib.Path(project, "helper.py").write_text(
                 "label = '🐍'\nprint(helper_missing)\n", encoding="utf-8")
+            pathlib.Path(project, "src/nested.py").parent.mkdir()
+            pathlib.Path(project, "src/nested.py").write_text(
+                "print(nested_missing)\n", encoding="utf-8")
             results = json.loads(runner.diagnose_project(
                 "# live\nprint(buffer_missing)\n", "main.py", project))
             self.assertEqual(
                 [("main.py", 2, "warning", "Undefined name: buffer_missing"),
-                 ("helper.py", 2, "warning", "Undefined name: helper_missing")],
+                 ("helper.py", 2, "warning", "Undefined name: helper_missing"),
+                 ("src/nested.py", 1, "warning", "Undefined name: nested_missing")],
                 [(item["file"], item["line"], item["severity"], item["message"])
                  for item in results])
             helper = next(item for item in results if item["file"] == "helper.py")

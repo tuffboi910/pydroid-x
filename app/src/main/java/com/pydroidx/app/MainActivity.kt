@@ -908,8 +908,7 @@ class IdeViewModel : ViewModel() {
                 result.onSuccess {
                     if (projectDir == directory) {
                         refreshSaved()
-                        openProjectFile(target.name)
-                        onCreated()
+                        if (openProjectFile(target.name)) onCreated()
                     }
                 }.onFailure { saveError = "Couldn’t duplicate $fileName: ${it.message}" }
             }

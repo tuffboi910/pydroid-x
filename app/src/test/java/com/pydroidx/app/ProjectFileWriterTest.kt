@@ -16,6 +16,26 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[28], application=Application::class)
 class ProjectFileWriterTest {
+    @Test fun latestUnsavedDraftSurvivesAndSavedContentClearsOnlyMatchingDraft() {
+        val root = Files.createTempDirectory("py4u-draft-").toFile()
+        val file = File(root, "nested/main.py").apply { parentFile.mkdirs(); writeText("saved") }
+        ProjectFileWriter.journalDraft(root, file, "first")
+        ProjectFileWriter.journalDraft(root, file, "unsaved 🐍")
+        val drained = CountDownLatch(1)
+        ProjectFileWriter.enqueue(file, "saved") { drained.countDown() }
+        assertTrue(drained.await(5, TimeUnit.SECONDS))
+        assertEquals("unsaved 🐍", ProjectFileWriter.recoverDraft(root, file))
+        ProjectFileWriter.clearSavedDraft(root, file, "saved")
+        val next = CountDownLatch(1)
+        ProjectFileWriter.enqueue(file, "unsaved 🐍") { next.countDown() }
+        assertTrue(next.await(5, TimeUnit.SECONDS))
+        ProjectFileWriter.clearSavedDraft(root, file, "unsaved 🐍")
+        val barrier = CountDownLatch(1)
+        ProjectFileWriter.enqueue(file, "unsaved 🐍") { barrier.countDown() }
+        assertTrue(barrier.await(5, TimeUnit.SECONDS))
+        assertEquals(null, ProjectFileWriter.recoverDraft(root, file))
+    }
+
     @Test fun writesInSubmissionOrderAndPreservesUnicode() {
         val dir = Files.createTempDirectory("py4u-writer-").toFile()
         val file = File(dir, "main.py")

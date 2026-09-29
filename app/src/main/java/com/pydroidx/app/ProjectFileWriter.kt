@@ -5,11 +5,76 @@ import java.io.File
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
+import java.util.concurrent.ConcurrentHashMap
 
 /** Serializes saves across activity recreation and keeps the previous file on write failure. */
 internal object ProjectFileWriter {
+    private val draftSnapshots = ConcurrentHashMap<String, String>()
+    private val draftScheduled = ConcurrentHashMap.newKeySet<String>()
     private val executor = Executors.newSingleThreadExecutor { task ->
         Thread(task, "PY4U-FileWriter").apply { isDaemon = true }
+    }
+
+    private fun draftFile(root: File, file: File): File? {
+        val path = ProjectWorkspace.relativePath(root, file) ?: return null
+        if (!path.endsWith(".py", ignoreCase = true)) return null
+        return File(root, ".recovery/drafts/$path.draft")
+    }
+
+    /** Coalesces rapid edits; the latest snapshot is journaled on the file worker. */
+    fun journalDraft(root: File, file: File, content: String) {
+        val draft = draftFile(root, file) ?: return
+        val key = draft.absolutePath
+        draftSnapshots[key] = content
+        if (!draftScheduled.add(key)) return
+        executor.execute {
+            var completed = false
+            try {
+                while (true) {
+                    val snapshot = draftSnapshots[key] ?: break
+                    val bytes = snapshot.toByteArray(StandardCharsets.UTF_8)
+                    if (bytes.size > 2_000_000) {
+                        draftSnapshots.remove(key, snapshot)
+                        break
+                    }
+                    if (!draft.parentFile.isDirectory && !draft.parentFile.mkdirs()) {
+                        throw IOException("Could not create draft directory")
+                    }
+                    val atomic = AtomicFile(draft)
+                    val stream = atomic.startWrite()
+                    try { stream.write(bytes); atomic.finishWrite(stream) }
+                    catch (error: Throwable) { atomic.failWrite(stream); throw error }
+                    draftSnapshots.remove(key, snapshot)
+                }
+                completed = true
+            } catch (_: IOException) {
+                // Keep the previous atomic draft and retry on the next edit.
+            } finally {
+                draftScheduled.remove(key)
+                if (completed) draftSnapshots[key]?.let { journalDraft(root, file, it) }
+            }
+        }
+    }
+
+    fun recoverDraft(root: File, file: File): String? {
+        val draft = draftFile(root, file) ?: return null
+        return draftSnapshots[draft.absolutePath] ?: draft.takeIf { it.isFile && it.length() <= 2_000_000 }
+            ?.let { runCatching { AtomicFile(it).openRead().bufferedReader(Charsets.UTF_8).use { reader -> reader.readText() } }.getOrNull() }
+    }
+
+    fun discardDraft(root: File, file: File) {
+        val draft = draftFile(root, file) ?: return
+        draftSnapshots.remove(draft.absolutePath)
+        executor.execute { draft.delete() }
+    }
+
+    fun clearSavedDraft(root: File, file: File, saved: String) {
+        val draft = draftFile(root, file) ?: return
+        executor.execute {
+            if (draftSnapshots[draft.absolutePath] != null) return@execute
+            val existing = recoverDraft(root, file)
+            if (existing == saved) draft.delete()
+        }
     }
 
     fun enqueue(file: File, content: String, complete: (Result<Unit>) -> Unit) {

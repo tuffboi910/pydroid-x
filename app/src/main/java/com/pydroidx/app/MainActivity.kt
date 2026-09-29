@@ -223,6 +223,8 @@ class IdeViewModel : ViewModel() {
     val inputHistory = ConsoleInputHistory()
     var runtimeVersion by mutableStateOf("Loading Python…")
     var saveError by mutableStateOf<String?>(null)
+    var recoverableDraft by mutableStateOf<String?>(null)
+        private set
     var consoleMode by mutableStateOf("Python")
     var aiPrompt by mutableStateOf("")
     val aiMessages = mutableStateListOf<AiMessage>()
@@ -358,6 +360,25 @@ class IdeViewModel : ViewModel() {
 
     private fun readProjectText(file: File): String = pendingDocumentWrites.read(file)
         ?: AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
+
+    private fun checkDraft(file: File) {
+        recoverableDraft = ProjectFileWriter.recoverDraft(projectDir, file)?.takeIf { it != code }
+    }
+
+    fun restoreDraft() {
+        val snapshot = recoverableDraft ?: return
+        val file = ProjectWorkspace.resolvePath(projectDir, currentFileName) ?: return
+        if (ProjectFileWriter.recoverDraft(projectDir, file) != snapshot) return
+        recoverableDraft = null
+        updateCode(snapshot)
+        editorRevision++
+    }
+
+    fun dismissDraft() {
+        val file = ProjectWorkspace.resolvePath(projectDir, currentFileName) ?: return
+        ProjectFileWriter.discardDraft(projectDir, file)
+        recoverableDraft = null
+    }
 
     fun refreshBrowserEntries() {
         if (!::projectDir.isInitialized) return
@@ -742,6 +763,7 @@ class IdeViewModel : ViewModel() {
             code = "print(\"Hello world!\")\n"
             current.writeText(code)
         }
+        checkDraft(current)
         settings.edit().putString("current_file",currentFileName).putString("current_project",currentProjectName).apply()
         refreshProjects()
         refreshSaved()
@@ -1163,6 +1185,7 @@ class IdeViewModel : ViewModel() {
         if (!current.exists() && !File(current.path + ".bak").exists()) current.writeText("print(\"Hello world!\")\n")
         currentFileName = ProjectWorkspace.relativePath(projectDir, current) ?: "main.py"
         code = readProjectText(current)
+        checkDraft(current)
         codeDiagnostics = emptyList()
         pendingCode = null
         shareCode = false
@@ -1321,6 +1344,7 @@ class IdeViewModel : ViewModel() {
         projectProblemsStale = projectProblems.isNotEmpty()
         addOpenTab(relativeName)
         code=readProjectText(file)
+        checkDraft(file)
         codeDiagnostics=emptyList()
         pendingCode=null
         shareCode=false
@@ -1334,6 +1358,9 @@ class IdeViewModel : ViewModel() {
 
     fun updateCode(value: String) {
         code = value
+        ProjectWorkspace.resolvePath(projectDir, currentFileName)?.let {
+            ProjectFileWriter.journalDraft(projectDir, it, value)
+        }
         if (projectProblems.isNotEmpty()) projectProblemsStale = true
         if (currentFileName !in unsavedTabs) unsavedTabs.add(currentFileName)
         codeDiagnostics = emptyList()
@@ -1442,6 +1469,7 @@ class IdeViewModel : ViewModel() {
         val file = File(directory, fileName)
         pendingDocumentWrites.mark(file, snapshot)
         ProjectFileWriter.enqueue(file, snapshot) { result ->
+            if (result.isSuccess) ProjectFileWriter.clearSavedDraft(directory, file, snapshot)
             mainHandler.post {
                 pendingDocumentWrites.completed(file, snapshot, result.isSuccess)
                 if (result.isSuccess && projectDir == directory &&
@@ -1817,8 +1845,8 @@ private fun AchievementNotice(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
                 vm.rememberEditorLocation()
+                editorView?.flushCodeChange()
                 if (vm.autoSave) {
-                    editorView?.flushCodeChange()
                     vm.save()
                 }
             }
@@ -3171,6 +3199,15 @@ private fun AchievementNotice(
         }},
         confirmButton={TextButton(onClick={showConsoleSearch=false}) { Text("Close") }}
     )
+    vm.recoverableDraft?.let { draft ->
+        AlertDialog(
+            onDismissRequest={}, containerColor=Color(0xFF171A20),
+            title={Text("Recover unsaved changes?")},
+            text={Text("A draft for ${vm.currentFileName} differs from the saved file. Review it in the editor before saving; the saved file will stay available in History.")},
+            confirmButton={Button(onClick={vm.restoreDraft()}) { Text("Restore draft") }},
+            dismissButton={TextButton(onClick={vm.dismissDraft()}) { Text("Discard draft") }}
+        )
+    }
     if(showHistory) AlertDialog(
         onDismissRequest={showHistory=false},containerColor=Color(0xFF171A20),
         title={Text("History · ${vm.currentFileName}")},

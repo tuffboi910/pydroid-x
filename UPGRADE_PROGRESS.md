@@ -27,6 +27,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Astro project edits now use only complete, bounded, explicitly shared Python files. Responses must name exact shared paths with complete fenced replacements; a project preview selects individual hunks per file. The serialized writer verifies every on-disk source before writing, checkpoints all selected files, and rolls back earlier writes if a later write fails. Stale or unexpected paths fail closed. Run 257 caught a Kotlin visibility error in the new property; corrected in the next checkpoint.
 - Runtime dependencies are now resolved and checked before the first package mutation. Conflicting constraints and unavailable dependencies leave the install target untouched; planned wheel bytes have an aggregate cap. Host regression suite: 33 tests pass. Android CI pending.
 - Both online and on-device Astro instructions now describe the exact project proposal format. Streaming partial replies are coalesced onto one UI update per frame instead of dispatching a coroutine/recomposition for every chunk. Android CI pending.
+- Console ANSI rendering now keeps a bounded cursor over visible text so carriage returns, backspaces, line erasure, and basic CSI cursor moves update existing output instead of concatenating progress frames. Style runs are rebuilt from the resulting text; copy and search share the same readable rendering. Robolectric regression tests cover progress and prior-line corrections. Android CI pending.
 
 ## Verification
 
@@ -45,7 +46,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots. Drafts larger than 2 MB and unavailable storage need an explicit recovery/error path; the new draft journal needs Android CI and device process-death validation.
 - Astro has constrained multi-file proposals, but lacks multi-step agent operations, cross-request planning, and device-tested provider output reliability.
 - Runtime installation currently supports compatible pure-Python wheels only; native Android wheels, package extras, and wheel script/data layouts need separate implementation. Dependency conflict resolution and upgrades of already imported modules need more work.
-- Full terminal cursor-motion/progress controls and interaction beyond the retained output window remain. Broader UI/motion polish, accessibility, and performance profiling remain.
+- The project-scoped terminal still lacks a full interactive shell/PTY and some terminal modes outside bounded CSI handling. Broader UI/motion polish, accessibility, and performance profiling remain.
 
 ## Physical-device checks
 

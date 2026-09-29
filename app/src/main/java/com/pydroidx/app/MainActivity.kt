@@ -316,10 +316,11 @@ class IdeViewModel : ViewModel() {
     private var browserRefreshGeneration = 0L
     private var tabRestoreGeneration = 0L
     private val outputBuffer = ConsoleOutputBuffer()
+    private var focusedConsoleLine: Int? = null
     private val outputFlushScheduled = AtomicBoolean(false)
     private val outputFlushRunnable = Runnable {
         outputFlushScheduled.set(false)
-        output = outputBuffer.visibleTail()
+        if (focusedConsoleLine == null) output = outputBuffer.visibleTail()
     }
     lateinit var projectDir: File
     private lateinit var projectsRoot: File
@@ -1454,12 +1455,29 @@ class IdeViewModel : ViewModel() {
 
     fun clearOutput() {
         outputBuffer.clear()
+        focusedConsoleLine = null
         mainHandler.removeCallbacks(outputFlushRunnable)
         outputFlushScheduled.set(false)
         output = ""
         runtimeIssue = null
     }
     fun fullOutput(): String = ConsoleAnsi.parse(outputBuffer.snapshot()).joinToString("") { it.text }
+
+    fun focusConsoleLine(line: Int, onReady: () -> Unit) {
+        viewModelScope.launch {
+            val window = withContext(Dispatchers.Default) {
+                ConsoleSearch.windowFromLine(fullOutput(), line)
+            } ?: return@launch
+            focusedConsoleLine = line
+            output = window
+            onReady()
+        }
+    }
+
+    fun resumeLiveConsole() {
+        focusedConsoleLine = null
+        output = outputBuffer.visibleTail()
+    }
 
     fun applyRuntimeFix() {
         val issue = runtimeIssue ?: return
@@ -2464,7 +2482,10 @@ private fun AchievementNotice(
                                     shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
                                     modifier=Modifier.graphicsLayer { scaleX=modeScale;scaleY=modeScale }){Text(mode)}
                             }
-                            TextButton(onClick={consoleAutoScroll=!consoleAutoScroll}) {
+                            TextButton(onClick={
+                                consoleAutoScroll=!consoleAutoScroll
+                                if (consoleAutoScroll) vm.resumeLiveConsole()
+                            }) {
                                 Text(if(consoleAutoScroll) "Auto on" else "Auto off",fontSize=11.sp)
                             }
                             TextButton(onClick={showConsoleSearch=true}) { Text("Search",fontSize=11.sp) }
@@ -3106,12 +3127,18 @@ private fun AchievementNotice(
             if (consoleSearchBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
             else if (consoleSearchQuery.isNotBlank() && consoleSearchHits.isEmpty())
                 Text("No matches in retained output",color=Color.LightGray,modifier=Modifier.padding(12.dp))
-            SelectionContainer {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    consoleSearchHits.forEach { hit ->
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                consoleSearchHits.forEach { hit ->
+                    TextButton(onClick={
+                        consoleAutoScroll=false
+                        showConsoleSearch=false
+                        vm.focusConsoleLine(hit.line) {
+                            scope.launch { withFrameNanos { }; consoleScroll.scrollTo(0) }
+                        }
+                    },modifier=Modifier.fillMaxWidth()) {
                         Text("${hit.line}  ${hit.preview}",color=Color.LightGray,
                             fontFamily=FontFamily.Monospace,fontSize=12.sp,
-                            modifier=Modifier.fillMaxWidth().padding(vertical=6.dp))
+                            modifier=Modifier.fillMaxWidth())
                     }
                 }
             }

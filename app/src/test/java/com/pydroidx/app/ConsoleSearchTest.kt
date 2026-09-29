@@ -11,4 +11,11 @@ class ConsoleSearchTest {
         assertEquals(1, ConsoleSearch.find(output, "error", 1).size)
         assertEquals(emptyList<ConsoleSearchHit>(), ConsoleSearch.find(output, "  "))
     }
+
+    @Test fun searchHitOpensBoundedOutputFromThatLine() {
+        val output = "ready\ntrace\nERROR: bad\nmore output\n"
+        assertEquals("[Viewing retained output from line 3]\nERROR: bad\nmore",
+            ConsoleSearch.windowFromLine(output, 3, 15))
+        assertEquals(null, ConsoleSearch.windowFromLine(output, 10))
+    }
 }

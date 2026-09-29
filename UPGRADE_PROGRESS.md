@@ -16,6 +16,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Astro edits: preview now separates independent line changes and allows accepting any selected subset after a recovery checkpoint. Diff work is bounded for large files and the original snapshot is checked again before applying. This batch awaits Android CI and device verification.
 - Console ANSI: bounded visible output interprets basic foreground, bright, bold, and RGB SGR colors while suppressing escape controls. Copy, search, and Astro context use readable text. This batch awaits Android CI and device verification.
 - Lifecycle: retained ViewModel initialization is idempotent across activity recreation, so rotation does not reload the on-disk file over a live editor buffer. This batch awaits Android CI and device verification.
+- Console search: tapping a retained-output hit opens a bounded readable window starting at that line, pauses live tail updates, and Auto on resumes the latest output. This batch awaits Android CI and device verification.
 
 ## Verification
 
@@ -35,6 +36,6 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Project browser/action behavior needs physical-device testing, including folder navigation, file moves, and delete recovery across process death. History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots.
 - Astro still lacks constrained project-agent operations. Per-hunk preview/selection needs Android CI and device verification; live provider and offline-model behavior need configured credentials/models and device testing.
 - Runtime installation currently supports compatible pure-Python wheels only; native Android wheels, package extras, and wheel script/data layouts need separate implementation. Validate network installs, dependency graphs, storage failure, and imports on an Android device.
-- Console search results do not yet jump to the corresponding live-output scroll position; full cursor-motion/progress control and large-output interaction beyond the retained window remain. Broad UI/motion polish and first-run/accessibility passes remain.
+- Full terminal cursor-motion/progress controls and interaction beyond the retained output window remain. Broad UI/motion polish and first-run/accessibility passes remain.
 
 The older `b119229` checkout was left intact. The previously lost `f386e22` object was not recovered; this branch reconstructs new work from the valid `a86c076` remote base.

@@ -92,6 +92,8 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -177,6 +179,8 @@ Plus Jakarta Sans|plusjakartasans,Prompt|prompt,Public Sans|publicsans,Quicksand
 class IdeViewModel : ViewModel() {
     @Volatile var code = "print(\"Hello world!\")\n"
     var currentFileName by mutableStateOf("main.py")
+    val openTabs = mutableStateListOf<String>()
+    val unsavedTabs = mutableStateListOf<String>()
     val savedCodes = mutableStateListOf<SavedCode>()
     val projectNames = mutableStateListOf<String>()
     var currentProjectName by mutableStateOf("default")
@@ -290,17 +294,17 @@ class IdeViewModel : ViewModel() {
     private lateinit var aiKeys: SecureAiKeyStore
     private lateinit var settings: android.content.SharedPreferences
     private val pendingDocumentWrites = PendingDocumentWrites()
-    var editorLocationProvider: (() -> EditorLocation?)? = null
+    internal var editorLocationProvider: (() -> EditorLocation?)? = null
 
     private fun locationKey(project: String, file: String) = "$project/$file"
 
-    fun currentEditorLocation(): EditorLocation? = if (::settings.isInitialized)
+    internal fun currentEditorLocation(): EditorLocation? = if (::settings.isInitialized)
         runCatching {
             EditorLocation.decode(JSONObject(settings.getString("editor_locations", "{}") ?: "{}")
                 .optString(locationKey(currentProjectName, currentFileName)))
         }.getOrNull() else null
 
-    fun rememberEditorLocation() {
+    internal fun rememberEditorLocation() {
         if (!::settings.isInitialized) return
         val location = editorLocationProvider?.invoke() ?: return
         updateEditorLocation(locationKey(currentProjectName, currentFileName), location)
@@ -319,6 +323,48 @@ class IdeViewModel : ViewModel() {
 
     private fun readProjectText(file: File): String = pendingDocumentWrites.read(file)
         ?: AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
+
+    private fun persistTabs() {
+        if (::settings.isInitialized) settings.edit().putString("tabs_$currentProjectName",
+            JSONArray(openTabs).toString()).apply()
+    }
+
+    private fun restoreTabs() {
+        val valid = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py", true) }
+            ?.map { it.name }?.toSet().orEmpty()
+        val saved = runCatching { JSONArray(settings.getString("tabs_$currentProjectName", "[]") ?: "[]") }
+            .getOrDefault(JSONArray())
+        val names = (0 until saved.length()).mapNotNull { saved.optString(it).takeIf(valid::contains) }
+            .distinct().take(12).toMutableList()
+        if (currentFileName !in names) {
+            if (names.size >= 12) names.removeAt(0)
+            names.add(currentFileName)
+        }
+        openTabs.clear()
+        openTabs.addAll(names)
+        unsavedTabs.clear()
+        unsavedTabs.addAll(names.filter { pendingDocumentWrites.read(File(projectDir, it)) != null })
+        persistTabs()
+    }
+
+    private fun addOpenTab(fileName: String) {
+        if (fileName !in openTabs) {
+            if (openTabs.size >= 12) openTabs.remove(openTabs.first { it != currentFileName })
+            openTabs.add(fileName)
+        }
+        persistTabs()
+    }
+
+    fun closeTab(fileName: String) {
+        if (running || fileName !in openTabs || openTabs.size <= 1) return
+        val index = openTabs.indexOf(fileName)
+        if (fileName == currentFileName) {
+            val next = openTabs[if (index > 0) index - 1 else 1]
+            if (!openProjectFile(next)) return
+        }
+        openTabs.remove(fileName)
+        persistTabs()
+    }
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
@@ -412,6 +458,7 @@ class IdeViewModel : ViewModel() {
         settings.edit().putString("current_file",currentFileName).putString("current_project",currentProjectName).apply()
         refreshProjects()
         refreshSaved()
+        restoreTabs()
         editorRevision++
         thread {
             val version = runCatching { Python.getInstance().getModule("runner").callAttr("version").toString() }
@@ -733,7 +780,9 @@ class IdeViewModel : ViewModel() {
         projectDir = targetDir
         currentProjectName = safeName
         val files = projectDir.listFiles()?.filter { it.isFile && it.extension.equals("py",true) }.orEmpty()
-        var current = files.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
+        val selectedName = settings.getString("selected_$safeName", null)
+        var current = files.firstOrNull { it.name == selectedName }
+            ?: files.maxByOrNull { it.lastModified() } ?: File(projectDir,"main.py")
         if (!current.exists() && !File(current.path + ".bak").exists()) current.writeText("print(\"Hello world!\")\n")
         currentFileName = current.name
         code = readProjectText(current)
@@ -741,9 +790,11 @@ class IdeViewModel : ViewModel() {
         pendingCode = null
         shareCode = false
         clearAttachment()
-        settings.edit().putString("current_project",currentProjectName).putString("current_file",currentFileName).apply()
+        settings.edit().putString("current_project",currentProjectName).putString("current_file",currentFileName)
+            .putString("selected_$currentProjectName",currentFileName).apply()
         refreshProjects()
         refreshSaved()
+        restoreTabs()
         editorRevision++
     }
 
@@ -785,10 +836,17 @@ class IdeViewModel : ViewModel() {
         // autosaves use the new name, so a delayed write cannot recreate untitled.py.
         persistCode(projectDir, old.name, snapshot)
         currentFileName = target.name
-        settings.edit().putString("current_file",currentFileName).apply()
+        val tabIndex = openTabs.indexOf(old.name)
+        if (tabIndex >= 0) openTabs[tabIndex] = target.name
+        if (unsavedTabs.remove(old.name)) unsavedTabs.add(target.name)
+        persistTabs()
+        settings.edit().putString("current_file",currentFileName)
+            .putString("selected_$currentProjectName",currentFileName).apply()
         ProjectFileWriter.rename(old, target) { result ->
             mainHandler.post {
                 if (result.isFailure) saveError = result.exceptionOrNull()?.message
+                else if (currentFileName == target.name && code == snapshot &&
+                    pendingDocumentWrites.read(target) == null) unsavedTabs.remove(target.name)
                 if (::projectDir.isInitialized && projectDir == target.parentFile) refreshSaved()
             }
         }
@@ -803,11 +861,13 @@ class IdeViewModel : ViewModel() {
         while(file.exists()) file=File(projectDir,"untitled_${++number}.py")
         file.writeText("")
         currentFileName=file.name
+        addOpenTab(file.name)
         code=""
         codeDiagnostics=emptyList()
         pendingCode=null
         shareCode=false
-        settings.edit().putString("current_file",currentFileName).apply()
+        settings.edit().putString("current_file",currentFileName)
+            .putString("selected_$currentProjectName",currentFileName).apply()
         refreshSaved()
         editorRevision++
     }
@@ -828,11 +888,13 @@ class IdeViewModel : ViewModel() {
         rememberEditorLocation()
         save()
         currentFileName=file.name
+        addOpenTab(file.name)
         code=readProjectText(file)
         codeDiagnostics=emptyList()
         pendingCode=null
         shareCode=false
-        settings.edit().putString("current_file",currentFileName).apply()
+        settings.edit().putString("current_file",currentFileName)
+            .putString("selected_$currentProjectName",currentFileName).apply()
         editorRevision++
         refreshSaved()
         return true
@@ -840,6 +902,7 @@ class IdeViewModel : ViewModel() {
 
     fun updateCode(value: String) {
         code = value
+        if (currentFileName !in unsavedTabs) unsavedTabs.add(currentFileName)
         codeDiagnostics = emptyList()
         if (currentFileName.startsWith("untitled_") && value.trim().length >= 8) {
             namingJob?.cancel()
@@ -946,6 +1009,11 @@ class IdeViewModel : ViewModel() {
         ProjectFileWriter.enqueue(file, snapshot) { result ->
             mainHandler.post {
                 pendingDocumentWrites.completed(file, snapshot, result.isSuccess)
+                if (result.isSuccess && projectDir == directory &&
+                    pendingDocumentWrites.read(file) == null &&
+                    (currentFileName != fileName || code == snapshot)) {
+                    unsavedTabs.remove(fileName)
+                }
                 if (result.isFailure) {
                     saveError = "Couldn’t save $fileName: ${result.exceptionOrNull()?.message ?: "storage error"}"
                 } else if (::projectDir.isInitialized && projectDir == directory) {
@@ -1003,9 +1071,11 @@ class IdeViewModel : ViewModel() {
             rememberEditorLocation()
             save()
             currentFileName = file.name
+            addOpenTab(file.name)
             code = readProjectText(file)
             codeDiagnostics = emptyList()
-            settings.edit().putString("current_file", currentFileName).apply()
+            settings.edit().putString("current_file", currentFileName)
+                .putString("selected_$currentProjectName",currentFileName).apply()
             editorRevision++
             refreshSaved()
         }
@@ -1636,6 +1706,44 @@ private fun AchievementNotice(
                             ){IdeGlyph("Close",Color(0xFF8C8C94))}
                         }
                         }
+                        Row(
+                            Modifier.fillMaxWidth().height(48.dp)
+                                .background(safeColor(vm.tabBarHex,0xFF181F29))
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal=6.dp,vertical=3.dp),
+                            horizontalArrangement=Arrangement.spacedBy(5.dp),
+                            verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            vm.openTabs.forEach { fileName ->
+                                val selected = fileName == vm.currentFileName
+                                Surface(
+                                    color=if (selected) Color.White.copy(alpha=.14f) else Color.White.copy(alpha=.045f),
+                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+                                    border=BorderStroke(1.dp,Color.White.copy(alpha=if(selected) .18f else .07f))
+                                ) {
+                                    Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                        TextButton(enabled=!vm.running,onClick={
+                                            editorView?.flushCodeChange()
+                                            vm.openProjectFile(fileName)
+                                        },contentPadding=PaddingValues(start=10.dp,end=3.dp)) {
+                                            Text(fileName,color=if(selected) Color.White else Color.LightGray,
+                                                maxLines=1,fontSize=12.sp)
+                                            if (fileName in vm.unsavedTabs) {
+                                                Spacer(Modifier.width(5.dp))
+                                                Text("●",color=Color(0xFFFFC88A),fontSize=9.sp)
+                                            }
+                                        }
+                                        IconButton(enabled=!vm.running && vm.openTabs.size>1,
+                                            onClick={editorView?.flushCodeChange();vm.closeTab(fileName)},
+                                            modifier=Modifier.size(40.dp).semantics {
+                                                contentDescription="Close $fileName"
+                                            }) {
+                                            IdeGlyph("Close",Color.LightGray,Modifier.size(14.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if (showFind) {
                             Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),
                                 verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
@@ -1673,6 +1781,7 @@ private fun AchievementNotice(
                                 view.onRunRequested={if (!vm.running) { vm.run();scope.launch{pager.animateScrollToPage(2)} }}
                                 view.onPaletteRequested={showPalette=true}
                                 view.onQuickOpenRequested={showQuickOpen=true}
+                                view.onCloseTabRequested={vm.closeTab(vm.currentFileName)}
                                 view.onCodeChanged=vm::updateCode
                                 view.onDiagnosticTap={selectedProblem=it}
                                 view.requestSmartCompletion=vm::requestCompletion
@@ -1686,6 +1795,7 @@ private fun AchievementNotice(
                                 view.onRunRequested={if (!vm.running) { vm.run();scope.launch{pager.animateScrollToPage(2)} }}
                                 view.onPaletteRequested={showPalette=true}
                                 view.onQuickOpenRequested={showQuickOpen=true}
+                                view.onCloseTabRequested={vm.closeTab(vm.currentFileName)}
                                 view.onDiagnosticTap={selectedProblem=it}
                                 view.setBackgroundColor(bg.toArgb())
                                 view.setCodeIfDifferent(vm.code,revision)
@@ -2296,7 +2406,7 @@ private fun AchievementNotice(
             OutlinedTextField(paletteQuery,{paletteQuery=it},label={Text("Search commands")},
                 singleLine=true,modifier=Modifier.fillMaxWidth())
             val commands = listOf(if(vm.running) "Stop program" else "Run Python file",
-                "Save file","Find in file","Replace in file","Find in project","Go to line","Open file",
+                "Save file","Find in file","Replace in file","Find in project","Go to line","Open file","Close tab",
                 "Open Settings","Ask Astro")
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 commands.filter { it.contains(paletteQuery,true) }.forEach { command ->
@@ -2311,6 +2421,7 @@ private fun AchievementNotice(
                             "Find in project" -> showProjectSearch=true
                             "Go to line" -> showGoToLine=true
                             "Open file" -> showQuickOpen=true
+                            "Close tab" -> {editorView?.flushCodeChange();vm.closeTab(vm.currentFileName)}
                             "Open Settings" -> scope.launch{pager.animateScrollToPage(4)}
                             "Ask Astro" -> scope.launch{pager.animateScrollToPage(3)}
                         }

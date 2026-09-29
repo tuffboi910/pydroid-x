@@ -180,6 +180,18 @@ class PythonEditorViewTest {
         assertEquals(1, palette)
     }
 
+    @Test fun hardwareCloseTabFlushesLatestText() {
+        var closed = 0
+        var snapshot = ""
+        editor.onCodeChanged = { snapshot = it }
+        editor.onCloseTabRequested = { closed++ }
+        editor.text.append("r")
+        editor.onKeyDown(KeyEvent.KEYCODE_W,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_W, 0, KeyEvent.META_CTRL_ON))
+        assertEquals(1, closed)
+        assertEquals("var", snapshot)
+    }
+
     @Test fun typingExistingCloserSkipsDuplicate() {
         editor.setCodeIfDifferent(")", revision = 4)
         editor.setSelection(0)

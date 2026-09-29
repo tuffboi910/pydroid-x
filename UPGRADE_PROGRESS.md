@@ -21,6 +21,7 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 - Runtime package hardening: redirects outside PyPI, oversized metadata, and native libraries hidden in universal-tagged wheels are rejected. Host tests now total 28; Android CI pending.
 - Astro project context is now budgeted per file so a long active buffer does not crowd out the rest of the project; on-device models receive a smaller context based on their configured token window. Android CI pending.
 - Project-context replies are analysis-only in the IDE: fenced code from that mode cannot become an Apply action because the shared active file may be truncated. Current-file sharing retains guarded edit previews. Android CI pending.
+- Runtime package downloads and extraction now check the existing Stop signal between bounded chunks and clean staging on cancellation. Host Python suite totals 29 tests; Android CI pending.
 
 ## Verification
 

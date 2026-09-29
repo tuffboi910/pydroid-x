@@ -71,3 +71,10 @@ class RuntimePackageTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "native code"):
                 runtime_packages.install(["py4usample"], root, lambda _: None,
                                          FakeIndex(wheel_bytes(native=True)))
+
+    def test_stop_aborts_before_network_or_install(self):
+        with tempfile.TemporaryDirectory(prefix="py4u-package-test-") as root:
+            with self.assertRaisesRegex(InterruptedError, "stopped"):
+                runtime_packages.install(["py4usample"], root, lambda _: None,
+                                         FakeIndex(wheel_bytes()), cancelled=lambda: True)
+            self.assertFalse((pathlib.Path(root) / "py4usample").exists())

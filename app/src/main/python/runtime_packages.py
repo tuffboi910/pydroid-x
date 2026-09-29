@@ -41,7 +41,7 @@ def activate(root):
     importlib.invalidate_caches()
 
 
-def _download(url, maximum, opener):
+def _download(url, maximum, opener, cancelled):
     if not url.startswith("https://") or urllib.parse.urlsplit(url).hostname not in (
             "pypi.org", "files.pythonhosted.org"):
         raise ValueError("Package download must come from PyPI")
@@ -50,18 +50,25 @@ def _download(url, maximum, opener):
         if (urllib.parse.urlsplit(final_url).scheme != "https" or
                 urllib.parse.urlsplit(final_url).hostname not in ("pypi.org", "files.pythonhosted.org")):
             raise ValueError("Package download redirected outside PyPI")
-        data = response.read(maximum + 1)
-    if len(data) > maximum:
-        raise ValueError("Package download exceeds the size limit")
-    return data
+        data = bytearray()
+        while True:
+            if cancelled():
+                raise InterruptedError("Package installation stopped")
+            chunk = response.read(min(64_000, maximum + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > maximum:
+                raise ValueError("Package download exceeds the size limit")
+    return bytes(data)
 
 
-def _candidate(requirement, opener):
+def _candidate(requirement, opener, cancelled):
     project = canonicalize_name(requirement.name)
     if not re.fullmatch(r"[a-z0-9]+(?:[-][a-z0-9]+)*", project):
         raise ValueError("Invalid package name")
     url = "https://pypi.org/pypi/%s/json" % urllib.parse.quote(project)
-    releases = json.loads(_download(url, MAX_INDEX, opener))["releases"]
+    releases = json.loads(_download(url, MAX_INDEX, opener, cancelled))["releases"]
     versions = []
     for raw_version in releases:
         try:
@@ -139,7 +146,7 @@ def _wheel_contents(data, expected_name):
     return result, metadata
 
 
-def install(requirements, root, output, opener=urllib.request.urlopen):
+def install(requirements, root, output, opener=urllib.request.urlopen, cancelled=lambda: False):
     """Install requested names and dependencies, rejecting incompatible wheels."""
     os.makedirs(root, exist_ok=True)
     activate(root)
@@ -147,6 +154,8 @@ def install(requirements, root, output, opener=urllib.request.urlopen):
     installed = []
 
     def resolve(raw, depth):
+        if cancelled():
+            raise InterruptedError("Package installation stopped")
         if depth > 24 or len(visited) > 60:
             raise ValueError("Package dependency graph is too large")
         req = Requirement(raw)
@@ -166,9 +175,9 @@ def install(requirements, root, output, opener=urllib.request.urlopen):
         if name in visited:
             raise ValueError("Circular or conflicting dependency: " + name)
         visited.add(name)
-        version, release = _candidate(req, opener)
+        version, release = _candidate(req, opener, cancelled)
         output("Downloading %s %s…\n" % (name, version))
-        data = _download(release["url"], MAX_WHEEL, opener)
+        data = _download(release["url"], MAX_WHEEL, opener, cancelled)
         if hashlib.sha256(data).hexdigest() != release["digests"]["sha256"]:
             raise ValueError("Wheel checksum mismatch")
         contents, metadata = _wheel_contents(data, name)
@@ -180,10 +189,18 @@ def install(requirements, root, output, opener=urllib.request.urlopen):
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 for item, path in contents:
+                    if cancelled():
+                        raise InterruptedError("Package installation stopped")
                     destination = os.path.join(stage, path)
                     os.makedirs(os.path.dirname(destination), exist_ok=True)
                     with archive.open(item) as source, open(destination, "wb") as sink:
-                        shutil.copyfileobj(source, sink)
+                        while True:
+                            if cancelled():
+                                raise InterruptedError("Package installation stopped")
+                            chunk = source.read(64_000)
+                            if not chunk:
+                                break
+                            sink.write(chunk)
             if os.path.exists(backup):
                 shutil.rmtree(backup)
             if os.path.exists(target):

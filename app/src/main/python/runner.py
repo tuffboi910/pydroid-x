@@ -666,7 +666,8 @@ def run_terminal_command(command, project_dir, bridge):
         elif name == "pip" and args and args[0] == "install":
             if len(args) < 2:
                 raise ValueError("Usage: pip install PACKAGE[==VERSION] (pure-Python wheels only)")
-            runtime_packages.install(args[1:], _package_root(root), out.write)
+            runtime_packages.install(args[1:], _package_root(root), out.write,
+                                     cancelled=lambda: bool(bridge.shouldStop()))
         else:
             raise ValueError("Unknown command: %s. Type help." % name)
         bridge.exited(0)

@@ -803,7 +803,7 @@ class IdeViewModel : ViewModel() {
         runButtonHex=settings.getString("run_button_hex","#78ADFF")?:"#78ADFF"
         stopButtonHex=settings.getString("stop_button_hex","#F0ABA8")?:"#F0ABA8"
         headerHeight=settings.getFloat("header_height",68f);tabHeight=settings.getFloat("tab_height",42f)
-        toolbarHeight=settings.getFloat("toolbar_height",52f);bubbleRadius=settings.getFloat("bubble_radius",16f)
+        toolbarHeight=settings.getFloat("toolbar_height",52f);bubbleRadius=settings.getFloat("bubble_radius",20f).coerceAtLeast(16f)
         bubbleWidth=settings.getFloat("bubble_width",310f);pageDotSize=settings.getFloat("page_dot_size",8f)
         showHeader=settings.getBoolean("show_header",true);showFileInfo=settings.getBoolean("show_file_info",true)
         projectsRoot = File(context.filesDir, "projects").apply { mkdirs() }
@@ -1893,7 +1893,7 @@ private fun SwitchingModelNotice(status: String, accent: Color, onFinished: () -
         enter=slideInVertically(initialOffsetY={-it})+fadeIn()+scaleIn(initialScale=0.96f),
         exit=slideOutVertically(targetOffsetY={-it/2})+fadeOut()+scaleOut(targetScale=0.98f)
     ) {
-        val shape=androidx.compose.foundation.shape.RoundedCornerShape(9.dp)
+        val shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
         Row(
             Modifier.widthIn(max=270.dp).background(Color(0xF20A0D10),shape)
                 .border(1.dp,IdeDesign.outline,shape).padding(horizontal=9.dp,vertical=6.dp),
@@ -1939,7 +1939,7 @@ private fun AchievementNotice(
             enter=slideInVertically(initialOffsetY={-it})+fadeIn()+scaleIn(initialScale=0.94f),
             exit=slideOutHorizontally(targetOffsetX={it})+fadeOut()+scaleOut(targetScale=0.97f)
         ) {
-            val shape=androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+            val shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
             Surface(
                 color=Color(0xF20A0D10),
                 contentColor=Color.White,
@@ -1969,8 +1969,8 @@ private fun AchievementNotice(
                         horizontalArrangement=Arrangement.spacedBy(7.dp)
                     ) {
                         Box(
-                            Modifier.size(26.dp).background(accent.copy(alpha=0.13f),androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                                .border(1.dp,accent.copy(alpha=0.75f),androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
+                            Modifier.size(26.dp).background(accent.copy(alpha=0.13f),androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                                .border(1.dp,accent.copy(alpha=0.75f),androidx.compose.foundation.shape.RoundedCornerShape(12.dp)),
                             contentAlignment=androidx.compose.ui.Alignment.Center
                         ) { Text("◆",color=accent,fontSize=14.sp) }
                         Column(Modifier.weight(1f)) {
@@ -2336,7 +2336,11 @@ private fun AchievementNotice(
                             Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
                             verticalArrangement=Arrangement.spacedBy(10.dp)) {
                             val projects=vm.projectNames.filter { it.contains(homeQuery,true) }
-                            if(projects.isEmpty()) IdeEmptyState("No projects found","Try a different search or create a project.","Folders")
+                            if(projects.isEmpty()) IdeEmptyState("No projects found","Try a different search or create a project.","Folders") {
+                                TextButton(onClick={if(homeQuery.isNotBlank()) homeQuery="" else showProjectTemplates=true}) {
+                                    Text(if(homeQuery.isNotBlank()) "Clear search" else "Create project")
+                                }
+                            }
                             projects.forEach { project ->
                                 Surface(onClick={editorView?.flushCodeChange();vm.switchProject(project);homeSection="Files"},
                                     enabled=!vm.running,
@@ -2356,8 +2360,6 @@ private fun AchievementNotice(
                                     }
                                 }
                             }
-                            Text("with Astro",color=IdeDesign.muted,style=MaterialTheme.typography.bodySmall,
-                                modifier=Modifier.padding(top=12.dp).align(androidx.compose.ui.Alignment.CenterHorizontally))
                         } else Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(12.dp)) {
                         HorizontalDivider(color=Color.White.copy(alpha=0.12f))
                         Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
@@ -2380,7 +2382,7 @@ private fun AchievementNotice(
                             }
                         }
                         if (vm.recoverableDeletedPath != null && vm.recoverableDeletedProject == vm.currentProjectName) {
-                            Surface(color=Color(0xFF18332B),shape=androidx.compose.foundation.shape.RoundedCornerShape(10.dp)) {
+                            Surface(color=Color(0xFF18332B),shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp)) {
                                 Row(Modifier.fillMaxWidth().padding(start=12.dp,end=6.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
                                     Text("Deleted ${vm.recoverableDeletedPath}",color=Color(0xFFB8F1D5),fontSize=11.sp,modifier=Modifier.weight(1f),maxLines=1,
                                         overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
@@ -2403,7 +2405,7 @@ private fun AchievementNotice(
                                 vm.browserEntries.filter { it.name.contains(homeQuery,true) || it.relativePath.contains(homeQuery,true) }.forEach { entry ->
                                     if (entry.isDirectory) {
                                         Surface(color=Color.White.copy(alpha=0.045f),
-                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
                                             modifier=Modifier.fillMaxWidth().clickable { vm.navigateToFolder(entry.relativePath) }) {
                                             Row(Modifier.padding(horizontal=14.dp,vertical=13.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
                                                 IdeGlyph("Folders",Color(0xFF8FD6FF),Modifier.size(19.dp))
@@ -2416,8 +2418,8 @@ private fun AchievementNotice(
                                         var menuExpanded by remember(entry.relativePath) { mutableStateOf(false) }
                                         Surface(
                                             color=if(vm.currentFileName==entry.relativePath) Color.White.copy(alpha=0.14f) else Color.White.copy(alpha=0.045f),
-                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                                            modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.08f),androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                                            modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.08f),androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
                                         ) {
                                             Row(Modifier.padding(start=14.dp,end=4.dp,top=5.dp,bottom=5.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
                                                 Row(Modifier.weight(1f).clickable(enabled=!vm.running) {
@@ -2488,7 +2490,7 @@ private fun AchievementNotice(
                                 var tabMenuExpanded by remember(fileName) { mutableStateOf(false) }
                                 Surface(
                                     color=if(selected) accent.copy(alpha=.20f) else IdeDesign.surface,
-                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
                                     border=BorderStroke(1.dp,if(selected) accent.copy(alpha=.65f) else IdeDesign.outline.copy(alpha=.35f))
                                 ) {
                                     Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
@@ -2609,7 +2611,7 @@ private fun AchievementNotice(
                         if(vm.showToolbar) {
                             Surface(
                                 color=IdeDesign.legacySurface(vm.toolbarHex,IdeDesign.surface,"#050505","#181F29","#191B1F"),
-                                shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                                shape=androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
                                 border=BorderStroke(1.dp,Color.White.copy(alpha=.16f)),
                                 modifier=Modifier.fillMaxWidth().padding(horizontal=10.dp,vertical=5.dp)
                             ){
@@ -2647,7 +2649,7 @@ private fun AchievementNotice(
 
                                             },
                                             modifier=Modifier.width(if(key=="Astro")56.dp else if(key=="Tab")46.dp else 36.dp).fillMaxHeight(),
-                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(11.dp),
+                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
                                             border=BorderStroke(1.dp,Color.White.copy(alpha=.14f)),
                                             colors=ButtonDefaults.outlinedButtonColors(
                                                 containerColor=Color.White.copy(alpha=.025f),contentColor=Color.White
@@ -2682,7 +2684,7 @@ private fun AchievementNotice(
                                 OutlinedButton(onClick={if(!vm.running){vm.consoleMode=mode;vm.input="";consoleInputValue=TextFieldValue("")}},
                                     colors=ButtonDefaults.outlinedButtonColors(containerColor=modeColor,contentColor=Color.White),
                                     border=BorderStroke(1.dp,Color.White.copy(alpha=if(selected).24f else .14f)),
-                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                    shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
                                     modifier=Modifier.graphicsLayer { scaleX=modeScale;scaleY=modeScale }){Text(mode)}
                             }
                             TextButton(onClick={
@@ -2700,7 +2702,7 @@ private fun AchievementNotice(
                         Spacer(Modifier.height(14.dp))
                         Surface(
                             color=IdeDesign.legacySurface(vm.consoleBackgroundHex,IdeDesign.background,"#030303","#101113","#11161D"),
-                            shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                            shape=androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
                                     border=BorderStroke(1.dp,accent.copy(alpha=.28f)),
                             modifier=Modifier.weight(1f).fillMaxWidth()
                         ){
@@ -2740,7 +2742,7 @@ private fun AchievementNotice(
                                     }
                                     vm.runtimeIssue?.let { issue ->
                                         var showDetails by remember(issue.details) { mutableStateOf(false) }
-                                        Surface(color=Color(0xFF151316),shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
+                                        Surface(color=Color(0xFF151316),shape=androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
                                             border=BorderStroke(1.dp,Color(0xFFFF6B81).copy(alpha=.48f)),
                                             modifier=Modifier.align(androidx.compose.ui.Alignment.BottomCenter)
                                                 .fillMaxWidth().animateContentSize()) {
@@ -2868,7 +2870,7 @@ private fun AchievementNotice(
                                         Surface(
                                             color=IdeDesign.legacySurface(vm.userBubbleHex,accent.copy(alpha=.20f),"#082F36","#22252A"),
                                             contentColor=Color.White,
-                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(vm.bubbleRadius.dp),
+                                            shape=androidx.compose.foundation.shape.RoundedCornerShape(vm.bubbleRadius.coerceAtLeast(16f).dp),
                                             modifier=Modifier.widthIn(max=vm.bubbleWidth.dp)
                                         ) {
                                             MarkdownMessage(message.text,Color.White,Modifier.padding(horizontal=14.dp,vertical=11.dp))
@@ -2891,7 +2893,7 @@ private fun AchievementNotice(
                                             Text("Astro",color=Color(0xFF858993),fontSize=10.sp,modifier=Modifier.padding(start=3.dp,bottom=5.dp))
                                             Surface(
                                                 color=IdeDesign.legacySurface(vm.helperBubbleHex,IdeDesign.surface,"#00E5FF"),contentColor=Color.White,
-                                                shape=androidx.compose.foundation.shape.RoundedCornerShape(vm.bubbleRadius.dp),
+                                                shape=androidx.compose.foundation.shape.RoundedCornerShape(vm.bubbleRadius.coerceAtLeast(16f).dp),
                                                 border=BorderStroke(1.dp,Color(0xFF393C42)),
                                                 modifier=Modifier.fillMaxWidth()
                                             ) {
@@ -2935,7 +2937,7 @@ private fun AchievementNotice(
                             )
                         }
                         vm.pendingCode?.let { change ->
-                            Surface(color=accent.copy(alpha=.10f),shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                            Surface(color=accent.copy(alpha=.10f),shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
                                 border=BorderStroke(1.dp,IdeDesign.outline)) {
                                 Row(Modifier.fillMaxWidth().padding(9.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
                                     Column(Modifier.weight(1f)) {
@@ -2948,7 +2950,7 @@ private fun AchievementNotice(
                             }
                         }
                         if (vm.pendingProjectEdits.isNotEmpty()) {
-                            Surface(color=accent.copy(alpha=.10f),shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                            Surface(color=accent.copy(alpha=.10f),shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
                                 border=BorderStroke(1.dp,IdeDesign.outline)) {
                                 Row(Modifier.fillMaxWidth().padding(9.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
                                     Text("Project edit ready · ${vm.pendingProjectEdits.size} files",color=Color.White,
@@ -3100,7 +3102,7 @@ private fun AchievementNotice(
                         ColorSetting("Run button",vm.runButtonHex){vm.runButtonHex=it;vm.saveAppearance()}
                         ColorSetting("Stop button",vm.stopButtonHex){vm.stopButtonHex=it;vm.saveAppearance()}
                         Text("Chat bubble corners  ${vm.bubbleRadius.toInt()} dp",color=text)
-                        Slider(vm.bubbleRadius,{vm.bubbleRadius=it;vm.saveAppearance()},valueRange=0f..36f)
+                        Slider(vm.bubbleRadius,{vm.bubbleRadius=it;vm.saveAppearance()},valueRange=16f..36f)
                         Text("Chat bubble width  ${vm.bubbleWidth.toInt()} dp",color=text)
                         Slider(vm.bubbleWidth,{vm.bubbleWidth=it;vm.saveAppearance()},valueRange=180f..420f)
                         Text("Terminal font  ${vm.terminalFontSize.toInt()} sp",color=text)
@@ -3171,7 +3173,7 @@ private fun AchievementNotice(
                         Text(vm.fontStatus,color=IdeDesign.muted,fontSize=11.sp)
                         val genericFontSearch = searchMatches("fonts","font family","font vault","typeface")
                         FONT_VAULT.filter { settingsSearch.isBlank() || genericFontSearch || it.first.contains(settingsSearch,true) }.forEach { font ->
-                            Surface(color=Color.White.copy(alpha=0.055f),shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.12f),androidx.compose.foundation.shape.RoundedCornerShape(14.dp))){
+                            Surface(color=Color.White.copy(alpha=0.055f),shape=androidx.compose.foundation.shape.RoundedCornerShape(20.dp),modifier=Modifier.fillMaxWidth().border(1.dp,Color.White.copy(alpha=0.12f),androidx.compose.foundation.shape.RoundedCornerShape(20.dp))){
                             Row(Modifier.fillMaxWidth().padding(horizontal=14.dp,vertical=8.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                                 Column(Modifier.weight(1f)){Text(font.first,color=text,fontSize=14.sp);Text("Google Fonts · OFL",color=IdeDesign.muted,fontSize=9.sp)}
                                 TextButton(onClick={vm.installVaultFont(context,font.first,font.second)},enabled=!vm.fontStatus.startsWith("Downloading")){Text(if(vm.fontName==font.first)"Installed" else "Download")}
@@ -3828,7 +3830,7 @@ private fun AchievementNotice(
 }
 
 @Composable private fun SettingsCategory(title:String,subtitle:String,accent:Color,motionAllowed:Boolean,onClick:()->Unit){
-    val shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp)
+    val shape=androidx.compose.foundation.shape.RoundedCornerShape(24.dp)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if(pressed && motionAllowed) .975f else 1f,
@@ -3846,7 +3848,7 @@ private fun AchievementNotice(
         Row(Modifier.padding(horizontal=16.dp,vertical=15.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
             Box(Modifier.width(3.dp).height(32.dp).background(accent,androidx.compose.foundation.shape.RoundedCornerShape(3.dp)))
             Spacer(Modifier.width(12.dp))
-            Box(Modifier.size(38.dp).background(accent.copy(alpha=0.13f),androidx.compose.foundation.shape.RoundedCornerShape(11.dp)),contentAlignment=androidx.compose.ui.Alignment.Center) {
+            Box(Modifier.size(38.dp).background(accent.copy(alpha=0.13f),androidx.compose.foundation.shape.RoundedCornerShape(16.dp)),contentAlignment=androidx.compose.ui.Alignment.Center) {
                 IdeGlyph(title,accent,Modifier.size(21.dp))
             }
             Spacer(Modifier.width(14.dp))
@@ -3918,7 +3920,7 @@ private fun pythonCodeColors(source:String):AnnotatedString=buildAnnotatedString
 
 @Composable private fun AstroCodeBlock(code:String,language:String="python"){
     val context=LocalContext.current
-    val shape=androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
+    val shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp)
     Surface(
         color=Color(0xFF050505),
         shape=shape,

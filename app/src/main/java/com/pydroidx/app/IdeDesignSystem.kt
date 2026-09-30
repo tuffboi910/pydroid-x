@@ -13,6 +13,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,9 +40,9 @@ object IdeDesign {
     val error = Color(0xFFF0ABA8)
     val warning = Color(0xFFE4C28A)
     val success = Color(0xFFAACDB4)
-    val compact = RoundedCornerShape(10.dp)
-    val card = RoundedCornerShape(16.dp)
-    val sheet = RoundedCornerShape(topStart=24.dp, topEnd=24.dp)
+    val compact = RoundedCornerShape(16.dp)
+    val card = RoundedCornerShape(24.dp)
+    val sheet = RoundedCornerShape(topStart=32.dp, topEnd=32.dp)
     const val fast = 120
     const val standard = 200
     const val enter = 240
@@ -78,8 +79,8 @@ fun IdeTheme(accentHex: String, backgroundHex: String, content: @Composable () -
         surfaceTint=Color.Transparent
     )
     MaterialTheme(colorScheme=scheme,
-        shapes=Shapes(extraSmall=RoundedCornerShape(6.dp), small=IdeDesign.compact,
-            medium=IdeDesign.card, large=RoundedCornerShape(20.dp), extraLarge=RoundedCornerShape(24.dp)),
+        shapes=Shapes(extraSmall=RoundedCornerShape(12.dp), small=IdeDesign.compact,
+            medium=RoundedCornerShape(20.dp), large=IdeDesign.card, extraLarge=RoundedCornerShape(32.dp)),
         typography=Typography(
             headlineLarge=TextStyle(fontFamily=FontFamily.SansSerif,fontSize=30.sp,lineHeight=36.sp,fontWeight=FontWeight.SemiBold),
             headlineSmall=TextStyle(fontFamily=FontFamily.SansSerif,fontSize=24.sp,lineHeight=30.sp,fontWeight=FontWeight.SemiBold),
@@ -112,10 +113,10 @@ fun IdePageHeading(title: String, subtitle: String, actions: @Composable RowScop
 @Composable
 fun IdeWorkspaceHero(project: String, files: Int, onOpen: () -> Unit) {
     val accent = MaterialTheme.colorScheme.primary
-    Surface(onClick=onOpen, color=IdeDesign.surface, shape=IdeDesign.card,
-        border=BorderStroke(1.dp,accent.copy(alpha=.35f)),modifier=Modifier.fillMaxWidth()) {
+    Surface(onClick=onOpen, color=Color.Transparent, shape=IdeDesign.card,
+        border=BorderStroke(1.dp,accent.copy(alpha=.25f)),modifier=Modifier.fillMaxWidth()
+            .background(Brush.linearGradient(listOf(accent.copy(alpha=.20f),IdeDesign.raised,IdeDesign.surface)),IdeDesign.card)) {
         Row(Modifier.heightIn(min=140.dp)) {
-            Box(Modifier.width(6.dp).height(140.dp).background(accent))
             Column(Modifier.weight(1f).padding(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                 Text("CURRENT WORKSPACE",color=accent,style=MaterialTheme.typography.labelSmall,
                     fontWeight=FontWeight.Bold,letterSpacing=1.2.sp)
@@ -124,7 +125,7 @@ fun IdeWorkspaceHero(project: String, files: Int, onOpen: () -> Unit) {
                 Text("$files Python files  ·  Open workspace",color=IdeDesign.muted,
                     style=MaterialTheme.typography.bodyMedium)
             }
-            Box(Modifier.padding(18.dp).size(44.dp).background(accent.copy(alpha=.18f),IdeDesign.compact),
+            Box(Modifier.padding(18.dp).size(44.dp).background(accent.copy(alpha=.22f),IdeDesign.compact),
                 contentAlignment=Alignment.Center) { IdeGlyph("Folders",accent,Modifier.size(24.dp)) }
         }
     }
@@ -133,8 +134,9 @@ fun IdeWorkspaceHero(project: String, files: Int, onOpen: () -> Unit) {
 @Composable
 fun IdeAssistantWelcome() {
     val accent=MaterialTheme.colorScheme.primary
-    Surface(color=accent.copy(alpha=.13f),shape=IdeDesign.card,
-        border=BorderStroke(1.dp,accent.copy(alpha=.34f)),modifier=Modifier.fillMaxWidth()) {
+    Surface(color=Color.Transparent,shape=IdeDesign.card,
+        border=BorderStroke(1.dp,accent.copy(alpha=.28f)),modifier=Modifier.fillMaxWidth()
+            .background(Brush.linearGradient(listOf(accent.copy(alpha=.19f),IdeDesign.raised,IdeDesign.surface)),IdeDesign.card)) {
         Row(Modifier.padding(20.dp),verticalAlignment=Alignment.CenterVertically,
             horizontalArrangement=Arrangement.spacedBy(16.dp)) {
             Box(Modifier.size(52.dp).background(accent.copy(alpha=.20f),IdeDesign.card),
@@ -158,8 +160,9 @@ fun IdeActionTile(title: String, subtitle: String = "", glyph: String, enabled: 
     val scale by animateFloatAsState(if(pressed && motion && ValueAnimator.areAnimatorsEnabled()) .98f else 1f,
         animationSpec=if(motion && ValueAnimator.areAnimatorsEnabled()) spring(dampingRatio=1f,stiffness=Spring.StiffnessHigh) else tween(0),label="tile feedback")
     val accent=MaterialTheme.colorScheme.primary
-    Surface(color=accent.copy(alpha=.11f),shape=IdeDesign.card,border=BorderStroke(1.dp,accent.copy(alpha=.22f)),
+    Surface(color=Color.Transparent,shape=IdeDesign.card,border=BorderStroke(1.dp,accent.copy(alpha=.18f)),
         modifier=modifier.graphicsLayer { scaleX=scale;scaleY=scale;alpha=if(enabled) 1f else .45f }
+            .background(Brush.linearGradient(listOf(accent.copy(alpha=.15f),IdeDesign.raised,IdeDesign.surface)),IdeDesign.card)
             .clickable(enabled=enabled,interactionSource=interaction,indication=ripple(),onClick=onClick)) {
         Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
             Box(Modifier.size(38.dp).background(accent.copy(alpha=.17f),IdeDesign.compact),contentAlignment=Alignment.Center) {

@@ -63,12 +63,12 @@ object CompletionPopup {
         val bottom = top + popupHeight
 
         fill.style = Paint.Style.FILL
-        fill.color = Color.rgb(34, 37, 42)
+        fill.color = Color.rgb(23, 29, 40)
         fill.strokeWidth = density
-        canvas.drawRoundRect(left, top, right, bottom, 5 * density, 5 * density, fill)
+        canvas.drawRoundRect(left, top, right, bottom, 12 * density, 12 * density, fill)
         fill.style = Paint.Style.STROKE
-        fill.color = Color.rgb(53, 57, 64)
-        canvas.drawRoundRect(left, top, right, bottom, 5 * density, 5 * density, fill)
+        fill.color = Color.rgb(58, 70, 87)
+        canvas.drawRoundRect(left, top, right, bottom, 12 * density, 12 * density, fill)
         canvas.save()
         canvas.clipRect(left, top, right, bottom)
         try {
@@ -79,9 +79,9 @@ object CompletionPopup {
                 val rowTop = top + index * rowHeight
                 if (index == selected) {
                     fill.style = Paint.Style.FILL
-                    fill.color = Color.rgb(51, 58, 69)
+                    fill.color = Color.rgb(49, 70, 105)
                     canvas.drawRoundRect(left + 3 * density, rowTop + density, right - 3 * density,
-                        rowTop + rowHeight - density, 3 * density, 3 * density, fill)
+                        rowTop + rowHeight - density, 8 * density, 8 * density, fill)
                 }
                 val baseline = rowTop + (rowHeight - fontMetrics.ascent - fontMetrics.descent) / 2
                 val cx = left + 12 * density

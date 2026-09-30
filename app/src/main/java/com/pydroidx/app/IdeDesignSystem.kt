@@ -28,14 +28,14 @@ import androidx.compose.ui.unit.sp
 
 /** Shared production chrome. Content colors (syntax/ANSI) remain independent. */
 object IdeDesign {
-    val background = Color(0xFF101113)
-    val surface = Color(0xFF191B1F)
-    val raised = Color(0xFF22252A)
-    val highest = Color(0xFF2B2F35)
-    val outline = Color(0xFF353940)
+    val background = Color(0xFF0D1118)
+    val surface = Color(0xFF171D28)
+    val raised = Color(0xFF222B39)
+    val highest = Color(0xFF2C3748)
+    val outline = Color(0xFF3A4657)
     val text = Color(0xFFF0F1F3)
-    val muted = Color(0xFFA5AAB4)
-    val accent = Color(0xFFA8C7FA)
+    val muted = Color(0xFFAAB8CB)
+    val accent = Color(0xFF78ADFF)
     val error = Color(0xFFF0ABA8)
     val warning = Color(0xFFE4C28A)
     val success = Color(0xFFAACDB4)
@@ -49,7 +49,7 @@ object IdeDesign {
         runCatching { Color(AndroidColor.parseColor(hex)) }.getOrDefault(fallback)
     fun foreground(color: Color): Color = if (
         .2126f*color.red + .7152f*color.green + .0722f*color.blue > .58f
-    ) Color(0xFF101113) else text
+    ) Color(0xFF0D1118) else text
     // Earlier releases saved their neon defaults alongside every setting change.
     // Render those defaults neutrally without overwriting any stored preference.
     fun legacySurface(hex: String, fallback: Color, vararg legacy: String): Color =
@@ -96,7 +96,10 @@ fun IdeTheme(accentHex: String, backgroundHex: String, content: @Composable () -
 
 @Composable
 fun IdePageHeading(title: String, subtitle: String, actions: @Composable RowScope.() -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().heightIn(min=56.dp),verticalAlignment=Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min=60.dp),verticalAlignment=Alignment.CenterVertically,
+        horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+        Box(Modifier.width(3.dp).height(32.dp).background(MaterialTheme.colorScheme.primary,
+            RoundedCornerShape(3.dp)))
         Column(Modifier.weight(1f)) {
             Text(title,style=MaterialTheme.typography.headlineSmall,color=IdeDesign.text)
             if(subtitle.isNotBlank()) Text(subtitle,style=MaterialTheme.typography.bodySmall,
@@ -107,17 +110,61 @@ fun IdePageHeading(title: String, subtitle: String, actions: @Composable RowScop
 }
 
 @Composable
+fun IdeWorkspaceHero(project: String, files: Int, onOpen: () -> Unit) {
+    val accent = MaterialTheme.colorScheme.primary
+    Surface(onClick=onOpen, color=IdeDesign.surface, shape=IdeDesign.card,
+        border=BorderStroke(1.dp,accent.copy(alpha=.35f)),modifier=Modifier.fillMaxWidth()) {
+        Row(Modifier.heightIn(min=140.dp)) {
+            Box(Modifier.width(6.dp).height(140.dp).background(accent))
+            Column(Modifier.weight(1f).padding(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                Text("CURRENT WORKSPACE",color=accent,style=MaterialTheme.typography.labelSmall,
+                    fontWeight=FontWeight.Bold,letterSpacing=1.2.sp)
+                Text(project,color=IdeDesign.text,style=MaterialTheme.typography.headlineSmall,
+                    maxLines=1,overflow=TextOverflow.Ellipsis)
+                Text("$files Python files  ·  Open workspace",color=IdeDesign.muted,
+                    style=MaterialTheme.typography.bodyMedium)
+            }
+            Box(Modifier.padding(18.dp).size(44.dp).background(accent.copy(alpha=.18f),IdeDesign.compact),
+                contentAlignment=Alignment.Center) { IdeGlyph("Folders",accent,Modifier.size(24.dp)) }
+        }
+    }
+}
+
+@Composable
+fun IdeAssistantWelcome() {
+    val accent=MaterialTheme.colorScheme.primary
+    Surface(color=accent.copy(alpha=.13f),shape=IdeDesign.card,
+        border=BorderStroke(1.dp,accent.copy(alpha=.34f)),modifier=Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(20.dp),verticalAlignment=Alignment.CenterVertically,
+            horizontalArrangement=Arrangement.spacedBy(16.dp)) {
+            Box(Modifier.size(52.dp).background(accent.copy(alpha=.20f),IdeDesign.card),
+                contentAlignment=Alignment.Center) { IdeGlyph("Astro",accent,Modifier.size(28.dp)) }
+            Column(verticalArrangement=Arrangement.spacedBy(5.dp)) {
+                Text("ASTRO · YOUR CODING PARTNER",color=accent,
+                    style=MaterialTheme.typography.labelSmall,fontWeight=FontWeight.Bold,letterSpacing=1.sp)
+                Text("What are we building?",color=IdeDesign.text,style=MaterialTheme.typography.titleLarge)
+                Text("Explore ideas, understand code, or review a change together.",
+                    color=IdeDesign.muted,style=MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
 fun IdeActionTile(title: String, subtitle: String = "", glyph: String, enabled: Boolean = true,
                   motion: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val interaction=remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if(pressed && motion && ValueAnimator.areAnimatorsEnabled()) .98f else 1f,
         animationSpec=if(motion && ValueAnimator.areAnimatorsEnabled()) spring(dampingRatio=1f,stiffness=Spring.StiffnessHigh) else tween(0),label="tile feedback")
-    Surface(color=IdeDesign.surface,shape=IdeDesign.card,border=BorderStroke(1.dp,IdeDesign.outline.copy(alpha=.45f)),
+    val accent=MaterialTheme.colorScheme.primary
+    Surface(color=accent.copy(alpha=.11f),shape=IdeDesign.card,border=BorderStroke(1.dp,accent.copy(alpha=.22f)),
         modifier=modifier.graphicsLayer { scaleX=scale;scaleY=scale;alpha=if(enabled) 1f else .45f }
             .clickable(enabled=enabled,interactionSource=interaction,indication=ripple(),onClick=onClick)) {
         Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-            IdeGlyph(glyph,MaterialTheme.colorScheme.primary,Modifier.size(24.dp))
+            Box(Modifier.size(38.dp).background(accent.copy(alpha=.17f),IdeDesign.compact),contentAlignment=Alignment.Center) {
+                IdeGlyph(glyph,accent,Modifier.size(22.dp))
+            }
             Column {
                 Text(title,color=IdeDesign.text,style=MaterialTheme.typography.titleMedium)
                 if(subtitle.isNotBlank()) Text(subtitle,color=IdeDesign.muted,style=MaterialTheme.typography.bodySmall)
@@ -143,17 +190,23 @@ fun IdeEmptyState(title: String, description: String, glyph: String, modifier: M
 
 @Composable
 fun IdeNavigation(selected: Int, height: Float, onSelected: (Int) -> Unit) {
+    val accent=MaterialTheme.colorScheme.primary
     NavigationBar(containerColor=IdeDesign.surface,tonalElevation=0.dp,
         windowInsets=WindowInsets(0,0,0,0),modifier=Modifier.height(height.coerceIn(64f,88f).dp)) {
         listOf("Home" to "Home","Code" to "Code","Console" to "Console","Astro" to "Astro","Settings" to "Settings")
             .forEachIndexed { index,(title,glyph) ->
                 NavigationBarItem(selected=selected==index,onClick={onSelected(index)},
-                    icon={IdeGlyph(glyph,if(selected==index) MaterialTheme.colorScheme.primary else IdeDesign.muted)},
+                    icon={Column(horizontalAlignment=Alignment.CenterHorizontally) {
+                        IdeGlyph(glyph,if(selected==index) accent else IdeDesign.muted)
+                        Spacer(Modifier.height(3.dp))
+                        Box(Modifier.width(if(selected==index) 14.dp else 0.dp).height(2.dp)
+                            .background(accent, RoundedCornerShape(2.dp)))
+                    }},
                     label={Text(title,fontSize=11.sp,maxLines=1)},
                     colors=NavigationBarItemDefaults.colors(
                         selectedIconColor=MaterialTheme.colorScheme.primary,selectedTextColor=IdeDesign.text,
                         unselectedIconColor=IdeDesign.muted,unselectedTextColor=IdeDesign.muted,
-                        indicatorColor=MaterialTheme.colorScheme.primary.copy(alpha=.12f)))
+                        indicatorColor=accent.copy(alpha=.18f)))
             }
     }
 }

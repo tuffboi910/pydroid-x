@@ -284,8 +284,8 @@ class IdeViewModel : ViewModel() {
     var ghostBrightness by mutableFloatStateOf(0.48f)
     var lineNumbers by mutableStateOf(true)
     var highlightCurrentLine by mutableStateOf(true)
-    var accentHex by mutableStateOf("#A8C7FA")
-    var backgroundHex by mutableStateOf("#101113")
+    var accentHex by mutableStateOf("#78ADFF")
+    var backgroundHex by mutableStateOf("#0D1118")
     var motionStyle by mutableStateOf("Aurora glide")
     var motionIntensity by mutableFloatStateOf(0.7f)
     var motionEnabled by mutableStateOf(true)
@@ -306,7 +306,7 @@ class IdeViewModel : ViewModel() {
     var tabBarHex by mutableStateOf("#191B1F")
     var userBubbleHex by mutableStateOf("#22252A")
     var helperBubbleHex by mutableStateOf("#191B1F")
-    var runButtonHex by mutableStateOf("#A8C7FA")
+    var runButtonHex by mutableStateOf("#78ADFF")
     var stopButtonHex by mutableStateOf("#F0ABA8")
     var headerHeight by mutableFloatStateOf(68f)
     var tabHeight by mutableFloatStateOf(42f)
@@ -776,8 +776,12 @@ class IdeViewModel : ViewModel() {
         ai3Model = settings.getString("ai3_model", "") ?: ""
         lineNumbers = settings.getBoolean("line_numbers", true)
         highlightCurrentLine = settings.getBoolean("current_line", true)
-        accentHex = settings.getString("accent_hex", "#A8C7FA") ?: "#A8C7FA"
-        backgroundHex = settings.getString("background_hex", "#101113") ?: "#101113"
+        accentHex = settings.getString("accent_hex", "#78ADFF")?.let {
+            if(it.equals("#A8C7FA",true) || it.equals("#FFFFFF",true)) "#78ADFF" else it
+        } ?: "#78ADFF"
+        backgroundHex = settings.getString("background_hex", "#0D1118")?.let {
+            if(it.equals("#101113",true) || it.equals("#11161D",true)) "#0D1118" else it
+        } ?: "#0D1118"
         motionStyle = settings.getString("motion_style", "Aurora glide") ?: "Aurora glide"
         motionIntensity = settings.getFloat("motion_intensity", 0.7f)
         motionEnabled = settings.getBoolean("motion_enabled", true)
@@ -796,7 +800,7 @@ class IdeViewModel : ViewModel() {
         tabBarHex=settings.getString("tab_bar_hex","#191B1F")?:"#191B1F"
         userBubbleHex=settings.getString("user_bubble_hex","#22252A")?:"#22252A"
         helperBubbleHex=settings.getString("helper_bubble_hex","#191B1F")?:"#191B1F"
-        runButtonHex=settings.getString("run_button_hex","#A8C7FA")?:"#A8C7FA"
+        runButtonHex=settings.getString("run_button_hex","#78ADFF")?:"#78ADFF"
         stopButtonHex=settings.getString("stop_button_hex","#F0ABA8")?:"#F0ABA8"
         headerHeight=settings.getFloat("header_height",68f);tabHeight=settings.getFloat("tab_height",42f)
         toolbarHeight=settings.getFloat("toolbar_height",52f);bubbleRadius=settings.getFloat("bubble_radius",16f)
@@ -2189,9 +2193,16 @@ private fun AchievementNotice(
     var packageQuery by remember { mutableStateOf("") }
     var packageSection by remember { mutableStateOf("Installed") }
     var packageRows by remember { mutableStateOf<List<List<String>>>(emptyList()) }
+    var importRows by remember { mutableStateOf<List<String>>(emptyList()) }
     var packageLoading by remember { mutableStateOf(false) }
     var packageError by remember { mutableStateOf<String?>(null) }
     var packageRefresh by remember { mutableIntStateOf(0) }
+    val pyPiCatalog = remember(context) { PyPiCatalog(context) }
+    var catalogCount by remember { mutableIntStateOf(0) }
+    var catalogRows by remember { mutableStateOf<List<String>>(emptyList()) }
+    var catalogLoading by remember { mutableStateOf(false) }
+    var catalogError by remember { mutableStateOf<String?>(null) }
+    var catalogGeneration by remember { mutableIntStateOf(0) }
     var showTabOverview by remember { mutableStateOf(false) }
     var showExitDialog by remember { mutableStateOf(false) }
     LaunchedEffect(showPackages, vm.running, packageRefresh) {
@@ -2199,13 +2210,25 @@ private fun AchievementNotice(
         packageLoading=true; packageError=null
         val directory=vm.projectDir
         val result=withContext(Dispatchers.IO) { runCatching {
-            Python.getInstance().getModule("runtime_packages")
-                .callAttr("package_state",File(directory.parentFile?.parentFile,"runtime-packages").absolutePath)
+            val module=Python.getInstance().getModule("runtime_packages")
+            val runtimeRoot=File(directory.parentFile?.parentFile,"runtime-packages").absolutePath
+            val packages=module.callAttr("package_state",runtimeRoot)
                 .asList().map { row -> row.asList().map { it.toString() } }
+            val imports=module.callAttr("importable_module_state",runtimeRoot).asList().map { it.toString() }
+            packages to imports
         } }
-        packageRows=result.getOrDefault(emptyList())
+        packageRows=result.getOrNull()?.first.orEmpty()
+        importRows=result.getOrNull()?.second.orEmpty()
         packageError=result.exceptionOrNull()?.message
         packageLoading=false
+    }
+    LaunchedEffect(showPackages, packageQuery, packageSection, catalogGeneration, catalogLoading) {
+        if (!showPackages || packageSection!="PyPI" || catalogLoading) return@LaunchedEffect
+        delay(150)
+        val query=packageQuery.substringBefore("==").trim()
+        val result=withContext(Dispatchers.IO) { pyPiCatalog.count() to pyPiCatalog.search(query) }
+        catalogCount=result.first
+        catalogRows=result.second
     }
     fun navigateTo(index: Int) {
         editorView?.flushCodeChange()
@@ -2291,6 +2314,7 @@ private fun AchievementNotice(
                         IdePageHeading("PY4U", "Your projects. Your workspace.") {
                             IconButton(onClick={showTools=true}) { IdeGlyph("Tools",IdeDesign.muted) }
                         }
+                        IdeWorkspaceHero(vm.currentProjectName,vm.savedCodes.size) { homeSection="Files" }
                         Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                             IdeActionTile("New code","Create a Python file","New file",enabled=!vm.running,
                                 motion=motionAllowed,modifier=Modifier.weight(1f)) { vm.makeNewCode();navigateTo(1) }
@@ -2315,8 +2339,10 @@ private fun AchievementNotice(
                             if(projects.isEmpty()) IdeEmptyState("No projects found","Try a different search or create a project.","Folders")
                             projects.forEach { project ->
                                 Surface(onClick={editorView?.flushCodeChange();vm.switchProject(project);homeSection="Files"},
-                                    enabled=!vm.running,color=IdeDesign.surface,shape=IdeDesign.card,
-                                    border=BorderStroke(1.dp,if(project==vm.currentProjectName) accent.copy(alpha=.25f) else IdeDesign.outline.copy(alpha=.45f))) {
+                                    enabled=!vm.running,
+                                    color=if(project==vm.currentProjectName) accent.copy(alpha=.12f) else IdeDesign.surface,
+                                    shape=IdeDesign.card,
+                                    border=BorderStroke(1.dp,if(project==vm.currentProjectName) accent.copy(alpha=.5f) else IdeDesign.outline.copy(alpha=.45f))) {
                                     Row(Modifier.fillMaxWidth().padding(16.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,
                                         horizontalArrangement=Arrangement.spacedBy(14.dp)) {
                                         Box(Modifier.size(44.dp).background(IdeDesign.raised,IdeDesign.compact),contentAlignment=androidx.compose.ui.Alignment.Center) {
@@ -2439,14 +2465,19 @@ private fun AchievementNotice(
                             IconButton(onClick={editorView?.redoCode()},modifier=Modifier.semantics { contentDescription="Redo code edit" }) { IdeGlyph("Redo",IdeDesign.muted) }
                             FilledTonalIconButton(onClick={editorView?.flushCodeChange();if(vm.hapticsEnabled) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 if(vm.running) vm.stop() else { vm.run();navigateTo(2) }},
+                                colors=IconButtonDefaults.filledTonalIconButtonColors(
+                                    containerColor=if(vm.running) IdeDesign.legacySurface(vm.stopButtonHex,IdeDesign.error,"#FF3D71")
+                                        else IdeDesign.legacySurface(vm.runButtonHex,accent,"#A8C7FA","#00E676")),
                                 modifier=Modifier.semantics { contentDescription=if(vm.running) "Stop program" else "Run program" }) {
-                                IdeGlyph(if(vm.running) "Stop" else "Run",if(vm.running) IdeDesign.error else accent)
+                                val tint=if(vm.running) IdeDesign.legacySurface(vm.stopButtonHex,IdeDesign.error,"#FF3D71")
+                                    else IdeDesign.legacySurface(vm.runButtonHex,accent,"#A8C7FA","#00E676")
+                                IdeGlyph(if(vm.running) "Stop" else "Run",IdeDesign.foreground(tint))
                             }
                             IconButton(onClick={showTools=true}) { IdeGlyph("More",IdeDesign.muted) }
                         }
                         Row(
                             Modifier.fillMaxWidth().height(vm.tabHeight.coerceIn(44f,72f).dp)
-                                .background(safeColor(vm.tabBarHex,0xFF191B1F))
+                                .background(IdeDesign.legacySurface(vm.tabBarHex,IdeDesign.surface,"#050505","#181F29","#191B1F"))
                                 .horizontalScroll(rememberScrollState())
                                 .padding(horizontal=6.dp,vertical=3.dp),
                             horizontalArrangement=Arrangement.spacedBy(5.dp),
@@ -2456,9 +2487,9 @@ private fun AchievementNotice(
                                 val selected = fileName == vm.currentFileName
                                 var tabMenuExpanded by remember(fileName) { mutableStateOf(false) }
                                 Surface(
-                                    color=if(selected) accent.copy(alpha=.10f) else IdeDesign.surface,
+                                    color=if(selected) accent.copy(alpha=.20f) else IdeDesign.surface,
                                     shape=androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
-                                    border=BorderStroke(1.dp,if(selected) accent.copy(alpha=.22f) else IdeDesign.outline.copy(alpha=.35f))
+                                    border=BorderStroke(1.dp,if(selected) accent.copy(alpha=.65f) else IdeDesign.outline.copy(alpha=.35f))
                                 ) {
                                     Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
                                         TextButton(enabled=!vm.running,onClick={
@@ -2468,7 +2499,7 @@ private fun AchievementNotice(
                                             modifier=Modifier.semantics {
                                                 contentDescription="Open $fileName${if (fileName in vm.pinnedTabs) ", pinned" else ""}"
                                             }) {
-                                            Text(fileName,color=if(selected) Color.White else IdeDesign.muted,
+                                            Text(fileName,color=if(selected) accent else IdeDesign.muted,
                                                 maxLines=1,fontSize=12.sp)
                                             if (fileName in vm.pinnedTabs) {
                                                 Spacer(Modifier.width(4.dp))
@@ -2577,7 +2608,7 @@ private fun AchievementNotice(
                         )
                         if(vm.showToolbar) {
                             Surface(
-                                color=safeColor(vm.toolbarHex,0xFF050505),
+                                color=IdeDesign.legacySurface(vm.toolbarHex,IdeDesign.surface,"#050505","#181F29","#191B1F"),
                                 shape=androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
                                 border=BorderStroke(1.dp,Color.White.copy(alpha=.16f)),
                                 modifier=Modifier.fillMaxWidth().padding(horizontal=10.dp,vertical=5.dp)
@@ -2668,9 +2699,9 @@ private fun AchievementNotice(
                         }
                         Spacer(Modifier.height(14.dp))
                         Surface(
-                            color=safeColor(vm.consoleBackgroundHex,0xFF030303),
+                            color=IdeDesign.legacySurface(vm.consoleBackgroundHex,IdeDesign.background,"#030303","#101113","#11161D"),
                             shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-                            border=BorderStroke(1.dp,Color.White.copy(alpha=.12f)),
+                                    border=BorderStroke(1.dp,accent.copy(alpha=.28f)),
                             modifier=Modifier.weight(1f).fillMaxWidth()
                         ){
                             Column(Modifier.fillMaxSize().padding(10.dp)){
@@ -2745,9 +2776,10 @@ private fun AchievementNotice(
                                         }
                                     }
                                 }
-                                ConsoleKeyToolbar(consoleInputValue,{consoleInputValue=it;vm.input=it.text},vm.inputHistory,consoleInputFocus,vm.input,vm.output.length,consoleScroll,safeColor(vm.toolbarHex,0xFF050505),consoleAutoScroll)
+                                ConsoleKeyToolbar(consoleInputValue,{consoleInputValue=it;vm.input=it.text},vm.inputHistory,consoleInputFocus,vm.input,vm.output.length,consoleScroll,
+                                    IdeDesign.legacySurface(vm.toolbarHex,IdeDesign.surface,"#050505","#181F29","#191B1F"),consoleAutoScroll)
                                 Surface(
-                                    color=safeColor(vm.consoleBackgroundHex,0xFF050505),
+                                    color=IdeDesign.legacySurface(vm.consoleBackgroundHex,IdeDesign.background,"#050505","#11161D","#101113"),
                                     shape=androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
                                     border=BorderStroke(1.dp,Color.White.copy(alpha=.16f)),
                                     modifier=Modifier.fillMaxWidth()
@@ -2756,7 +2788,7 @@ private fun AchievementNotice(
                                         Modifier.padding(start=14.dp,end=7.dp,top=5.dp,bottom=5.dp),
                                         verticalAlignment=androidx.compose.ui.Alignment.CenterVertically
                                     ){
-                                        Text(if(vm.consoleMode=="Terminal")"$" else ">>>",color=Color.White,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold)
+                                        Text(if(vm.consoleMode=="Terminal")"$" else ">>>",color=accent,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Bold)
                                         TextField(
                                             consoleInputValue,{consoleInputValue=it;vm.input=it.text},
                                             enabled=vm.waitingInput||(vm.consoleMode=="Terminal"&&!vm.running),
@@ -2809,8 +2841,7 @@ private fun AchievementNotice(
                             verticalArrangement=Arrangement.spacedBy(16.dp)
                         ) {
                             if(vm.aiMessages.isEmpty()) {
-                                IdeEmptyState("What are we building?","Ask about your code, review an error, or learn something new.","Astro",
-                                    Modifier.fillMaxWidth().padding(top=8.dp))
+                                IdeAssistantWelcome()
                                 val astroActions=listOf(
                                     Triple("Explain code","Explain","Explain my current Python file step by step."),
                                     Triple("Edit code","Editor","Help me improve my current Python file. Propose changes for review."),
@@ -2835,7 +2866,7 @@ private fun AchievementNotice(
                                     Column(Modifier.fillMaxWidth(),horizontalAlignment=androidx.compose.ui.Alignment.End) {
                                         Text("You",color=Color(0xFF858993),fontSize=10.sp,modifier=Modifier.padding(end=8.dp,bottom=4.dp))
                                         Surface(
-                                            color=IdeDesign.legacySurface(vm.userBubbleHex,IdeDesign.raised,"#082F36"),
+                                            color=IdeDesign.legacySurface(vm.userBubbleHex,accent.copy(alpha=.20f),"#082F36","#22252A"),
                                             contentColor=Color.White,
                                             shape=androidx.compose.foundation.shape.RoundedCornerShape(vm.bubbleRadius.dp),
                                             modifier=Modifier.widthIn(max=vm.bubbleWidth.dp)
@@ -3037,7 +3068,7 @@ private fun AchievementNotice(
                         if(settingsSection=="Appearance" || searchMatches("appearance","theme","accent color","background","editor token colors","comments","strings","numbers","keywords","functions","variables")){
                         Text("ACCENT COLOR",color=accent,fontSize=12.sp)
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){
-                            listOf("#A8C7FA","#B9CBB0","#C8B9DB","#E1BAB4","#E4C28A","#A9CBCB","#FFFFFF").forEach{hex->
+                            listOf("#78ADFF","#76C7AC","#B39CFA","#E7A781","#DBBE77","#84BDD5","#F0F1F3").forEach{hex->
                                 val swatch=safeColor(hex,0xFF00E5FF)
                                 FilterChip(selected=vm.accentHex==hex,onClick={vm.accentHex=hex;vm.saveAppearance()},label={Box(Modifier.size(22.dp).background(swatch,androidx.compose.foundation.shape.CircleShape))})
                             }
@@ -3250,34 +3281,65 @@ private fun AchievementNotice(
             Button(enabled=!vm.running,onClick={vm.makeNewCode();showTabOverview=false;navigateTo(1)}) { Text("New file") }
         }
     }
-    if(showPackages) IdeSheet("Python packages","Install and manage your Python libraries",onDismiss={showPackages=false}) {
+    if(showPackages) IdeSheet("Library","Python on this device and the real PyPI index",onDismiss={showPackages=false}) {
         Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            listOf("Installed","Available").forEach { section ->
+            listOf("Installed","Imports","PyPI").forEach { section ->
                 FilterChip(selected=packageSection==section,onClick={packageSection=section},label={Text(section)})
             }
             Spacer(Modifier.weight(1f))
             IconButton(onClick={packageRefresh++},enabled=!packageLoading && !vm.running) { IdeGlyph("Refresh",IdeDesign.muted) }
         }
         OutlinedTextField(packageQuery,{packageQuery=it},singleLine=true,modifier=Modifier.fillMaxWidth(),shape=IdeDesign.card,
-            placeholder={Text(if(packageSection=="Installed") "Search installed packages" else "Package name or name==version")},
+            placeholder={Text(when(packageSection) { "Installed" -> "Search installed packages"; "Imports" -> "Search importable modules"; else -> "Search PyPI by package name" })},
             leadingIcon={IdeGlyph("Search",IdeDesign.muted)})
+        if(packageSection=="PyPI") {
+            Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                Text(if(catalogCount>0) "${catalogCount} real PyPI projects cached" else "Official PyPI catalog",
+                    color=IdeDesign.muted,style=MaterialTheme.typography.bodySmall,modifier=Modifier.weight(1f))
+                TextButton(enabled=!catalogLoading,onClick={
+                    catalogLoading=true;catalogError=null
+                    scope.launch {
+                        val result=runCatching { pyPiCatalog.sync() }
+                        catalogError=result.exceptionOrNull()?.localizedMessage
+                        catalogLoading=false
+                        catalogGeneration++
+                    }
+                }) { Text(if(catalogCount>0) "Update index" else "Sync index") }
+            }
+            if(catalogLoading) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text("Downloading project names once. You can keep using the editor.",
+                    style=MaterialTheme.typography.bodySmall,color=IdeDesign.muted)
+            }
+            catalogError?.let { Text("Index sync failed: ${it.take(160)}",color=IdeDesign.error,
+                style=MaterialTheme.typography.bodySmall) }
+        }
         if(vm.running) {
             Text("A program or package command is running. Open Console to see output.",color=IdeDesign.muted)
             TextButton(onClick={showPackages=false;navigateTo(2)}) { Text("Open Console") }
         }
         when {
-            packageLoading -> LinearProgressIndicator(Modifier.fillMaxWidth())
-            packageError!=null -> IdeEmptyState("Couldn’t load packages",packageError.orEmpty().take(180),"Problems") {
+            packageLoading && packageSection!="PyPI" -> LinearProgressIndicator(Modifier.fillMaxWidth())
+            packageError!=null && packageSection!="PyPI" -> IdeEmptyState("Couldn’t load packages",packageError.orEmpty().take(180),"Problems") {
                 TextButton(onClick={packageRefresh++}) { Text("Retry") }
             }
             else -> Column(Modifier.fillMaxWidth().heightIn(max=330.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement=Arrangement.spacedBy(8.dp)) {
                 val installed=packageRows.filter { it.isNotEmpty() }
-                val rows=if(packageSection=="Installed") installed.filter { it[0].contains(packageQuery,true) }
-                    else listOf("requests","beautifulsoup4","rich","colorama","python-dateutil","pytz","packaging","pyfiglet","humanize")
-                        .filter { it.contains(packageQuery.substringBefore("=="),true) }
-                        .map { name -> installed.firstOrNull { it[0]==name } ?: listOf(name,"","Available") }
-                if(rows.isEmpty() && packageSection=="Installed") IdeEmptyState("No matching packages","Try another package name.","Packages")
+                val rows=when(packageSection) {
+                    "Installed" -> installed.filter { it[0].contains(packageQuery,true) }
+                    "Imports" -> importRows.filter { it.contains(packageQuery,true) }.take(100).map { listOf(it,"Importable in this runtime","module") }
+                    else -> catalogRows.map { name ->
+                        installed.firstOrNull { it[0].equals(name,true) } ?: listOf(name,"PyPI project","Available")
+                    }
+                }
+                if(rows.isEmpty()) IdeEmptyState(
+                    when { packageSection=="PyPI" && catalogCount==0 -> "Sync the PyPI index"
+                        packageSection=="PyPI" && packageQuery.length<2 -> "Search the package index"
+                        else -> "No matching packages" },
+                    when { packageSection=="PyPI" && catalogCount==0 -> "Fetch the complete project list from pypi.org, then search locally."
+                        packageSection=="PyPI" && packageQuery.length<2 -> "Type at least two characters to search all cached project names."
+                        else -> "Try another name." },"Packages")
                 rows.forEach { row ->
                     Surface(color=IdeDesign.raised,shape=IdeDesign.compact) {
                         Row(Modifier.fillMaxWidth().padding(start=14.dp,end=8.dp,top=8.dp,bottom=8.dp),
@@ -3287,20 +3349,20 @@ private fun AchievementNotice(
                                 Text(row[0],style=MaterialTheme.typography.titleMedium)
                                 Text(row.drop(1).joinToString(" · "),style=MaterialTheme.typography.bodySmall,color=IdeDesign.muted)
                             }
-                            if(packageSection=="Available" && row.getOrNull(2)=="Available") TextButton(enabled=!vm.running,
+                            if(packageSection=="PyPI" && row.getOrNull(2)=="Available") TextButton(enabled=!vm.running,
                                 onClick={packageCommand("pip install ${row[0]}")}) { Text("Install") }
-                            else Text("Installed",style=MaterialTheme.typography.labelSmall,color=IdeDesign.muted)
+                            else Text(if(packageSection=="Imports") "Ready" else "Installed",style=MaterialTheme.typography.labelSmall,color=IdeDesign.muted)
                         }
                     }
                 }
             }
         }
-        if(packageSection=="Available") {
+        if(packageSection=="PyPI") {
             val validRequirement=remember(packageQuery) { Regex("[A-Za-z0-9][A-Za-z0-9._-]*(?:\\[[A-Za-z0-9,._-]+\\])?(?:==[A-Za-z0-9._+-]+)?").matches(packageQuery.trim()) }
             Button(enabled=!vm.running && validRequirement,onClick={packageCommand("pip install ${packageQuery.trim()}")},modifier=Modifier.fillMaxWidth()) {
                 Text("Install package")
             }
-            Text("Compatible pure-Python wheels only. Progress and errors appear in Console.",style=MaterialTheme.typography.bodySmall,color=IdeDesign.muted)
+            Text("PyPI lists all projects. PY4U can install compatible pure-Python wheels; native packages may require Android builds. Progress appears in Console.",style=MaterialTheme.typography.bodySmall,color=IdeDesign.muted)
         }
     }
     if(showExitDialog) AlertDialog(onDismissRequest={showExitDialog=false},containerColor=IdeDesign.surface,
@@ -3782,6 +3844,8 @@ private fun AchievementNotice(
             .clickable(interactionSource=interaction,indication=null,onClick=onClick)
     ){
         Row(Modifier.padding(horizontal=16.dp,vertical=15.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+            Box(Modifier.width(3.dp).height(32.dp).background(accent,androidx.compose.foundation.shape.RoundedCornerShape(3.dp)))
+            Spacer(Modifier.width(12.dp))
             Box(Modifier.size(38.dp).background(accent.copy(alpha=0.13f),androidx.compose.foundation.shape.RoundedCornerShape(11.dp)),contentAlignment=androidx.compose.ui.Alignment.Center) {
                 IdeGlyph(title,accent,Modifier.size(21.dp))
             }

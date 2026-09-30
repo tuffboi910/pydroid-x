@@ -53,6 +53,7 @@ class RuntimePackageTests(unittest.TestCase):
                                          FakeIndex(wheel_bytes()))
                 self.assertEqual(42, importlib.import_module("py4usample").value)
                 self.assertIn(("py4usample", "1.0", "runtime"), runtime_packages.package_state(root))
+                self.assertIn("py4usample", runtime_packages.importable_module_state(root))
             finally:
                 sys.path.remove(str(bundled))
 

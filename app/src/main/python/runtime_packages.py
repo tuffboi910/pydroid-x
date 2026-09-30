@@ -10,6 +10,7 @@ import importlib.metadata
 import io
 import json
 import os
+import pkgutil
 import re
 import shutil
 import stat
@@ -65,6 +66,12 @@ def package_state(root):
         seen.add(normalized)
         rows.append((name, distribution.version, "runtime" if normalized in private else "bundled"))
     return sorted(rows, key=lambda row: row[0].lower())
+
+
+def importable_module_state(root):
+    """List top-level imports visible to this actual runtime, including installed wheels."""
+    activate(root)
+    return sorted(set(sys.builtin_module_names) | {module.name for module in pkgutil.iter_modules()})
 
 
 def _download(url, maximum, opener, cancelled):

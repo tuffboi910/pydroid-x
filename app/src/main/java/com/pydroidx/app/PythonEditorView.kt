@@ -589,6 +589,29 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         else -> open != null && open in QUOTE_CHARACTERS && close == open
     }
 
+    private var chromeAccent = AndroidColor.rgb(168,199,250)
+    private var chromeBackground = 0
+    private var usesAccentCursor = true
+
+    /** Color changes update cached paints only; no worker or text-layout restart. */
+    fun applyChrome(accent: Int, background: Int) {
+        if(chromeAccent == accent && chromeBackground == background) return
+        chromeAccent=accent;chromeBackground=background
+        activeLinePaint.color=AndroidColor.argb(18,AndroidColor.red(accent),AndroidColor.green(accent),AndroidColor.blue(accent))
+        gutterPaint.color=background
+        gutterDividerPaint.color=AndroidColor.rgb(53,57,64)
+        numberPaint.color=AndroidColor.rgb(135,141,151)
+        errorPaint.color=AndroidColor.rgb(240,171,168)
+        if(usesAccentCursor) updateAccentCursor()
+        invalidate()
+    }
+
+    private fun updateAccentCursor() {
+        if(android.os.Build.VERSION.SDK_INT >= 29) textCursorDrawable=GradientDrawable().apply {
+            setColor(chromeAccent);setSize((2*editorDensity).toInt().coerceAtLeast(2),(this@PythonEditorView.textSize*1.25f).toInt())
+        }
+    }
+
     fun applyPreferences(font: Float, wrap: Boolean, syntax: Boolean, family: String, spacing: Float,
                          padding: Float, highlightDelay: Float, cursor: String, autocomplete: Boolean,
                          ghostBrightness: Float, lineNumbers: Boolean, currentLine: Boolean,
@@ -623,7 +646,8 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         userPadding = pad
         setPadding(gutterWidth + pad, pad / 2, pad, pad / 2)
         if (android.os.Build.VERSION.SDK_INT >= 29) {
-            val cursorColor = when(cursor) { "Magenta" -> AndroidColor.rgb(255,77,255); "Green" -> AndroidColor.rgb(0,230,118); "White" -> AndroidColor.WHITE; else -> AndroidColor.rgb(0,229,255) }
+            usesAccentCursor=cursor=="Accent"
+            val cursorColor = when(cursor) { "Magenta" -> AndroidColor.rgb(255,77,255); "Green" -> AndroidColor.rgb(0,230,118); "White" -> AndroidColor.WHITE; "Accent" -> chromeAccent; else -> AndroidColor.rgb(0,229,255) }
             textCursorDrawable = GradientDrawable().apply { setColor(cursorColor); setSize(4, (this@PythonEditorView.textSize * 1.25f).toInt()) }
         }
         if (syntax) highlightNow() else {

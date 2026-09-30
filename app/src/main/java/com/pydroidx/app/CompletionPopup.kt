@@ -19,7 +19,7 @@ object CompletionPopup {
         typeface = Typeface.MONOSPACE
     }
     private val detail = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(166, 189, 214)
+        color = Color.rgb(165, 170, 180)
     }
     private val path = Path()
     private val fontMetrics = Paint.FontMetrics()
@@ -63,11 +63,11 @@ object CompletionPopup {
         val bottom = top + popupHeight
 
         fill.style = Paint.Style.FILL
-        fill.color = Color.rgb(30, 35, 43)
+        fill.color = Color.rgb(34, 37, 42)
         fill.strokeWidth = density
         canvas.drawRoundRect(left, top, right, bottom, 5 * density, 5 * density, fill)
         fill.style = Paint.Style.STROKE
-        fill.color = Color.rgb(67, 77, 90)
+        fill.color = Color.rgb(53, 57, 64)
         canvas.drawRoundRect(left, top, right, bottom, 5 * density, 5 * density, fill)
         canvas.save()
         canvas.clipRect(left, top, right, bottom)
@@ -79,7 +79,7 @@ object CompletionPopup {
                 val rowTop = top + index * rowHeight
                 if (index == selected) {
                     fill.style = Paint.Style.FILL
-                    fill.color = Color.rgb(9, 78, 135)
+                    fill.color = Color.rgb(51, 58, 69)
                     canvas.drawRoundRect(left + 3 * density, rowTop + density, right - 3 * density,
                         rowTop + rowHeight - density, 3 * density, 3 * density, fill)
                 }
@@ -101,7 +101,7 @@ object CompletionPopup {
                 path.lineTo(cx, cy + 5 * density)
                 fill.style = Paint.Style.STROKE
                 fill.strokeWidth = 1.1f * density
-                fill.color = Color.rgb(120, 190, 230)
+                fill.color = Color.rgb(168, 199, 250)
                 canvas.drawPath(path, fill)
 
                 val typeWidth = detail.measureText(item.type)
@@ -113,7 +113,7 @@ object CompletionPopup {
             if (docsHeight >= 27 * density) {
                 val docsTop = top + rowHeight * items.size
                 fill.style = Paint.Style.STROKE
-                fill.color = Color.rgb(67, 77, 90)
+                fill.color = Color.rgb(53, 57, 64)
                 fill.strokeWidth = density
                 canvas.drawLine(left + 6 * density, docsTop, right - 6 * density, docsTop, fill)
                 val item = items[selected.coerceIn(items.indices)]
@@ -145,7 +145,7 @@ object CompletionPopup {
                 layout.draw(canvas)
                 canvas.restore()
                 detail.textSize = 7.5f * density
-                detail.color = Color.rgb(144, 186, 225)
+                detail.color = Color.rgb(165, 170, 180)
                 val hint = "Tap a suggestion · Tab to accept"
                 canvas.drawText(hint, right - detail.measureText(hint) - 6 * density, bottom - 4 * density, detail)
             }

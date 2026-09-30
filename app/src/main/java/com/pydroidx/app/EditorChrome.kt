@@ -22,6 +22,25 @@ fun IdeGlyph(name: String, color: Color, modifier: Modifier = Modifier) {
         fun l(x: Float, y: Float) = path.lineTo(x*sx, y*sy)
         fun c(x1: Float,y1: Float,x2: Float,y2: Float,x3: Float,y3: Float) = path.cubicTo(x1*sx,y1*sy,x2*sx,y2*sy,x3*sx,y3*sy)
         when (name) {
+            "Home" -> { m(3f,11f);l(12f,3f);l(21f,11f);m(5f,10f);l(5f,21f);l(10f,21f);l(10f,14f);l(14f,14f);l(14f,21f);l(19f,21f);l(19f,10f) }
+            "Code", "Python" -> { m(8f,6f);l(2f,12f);l(8f,18f);m(16f,6f);l(22f,12f);l(16f,18f);m(14f,4f);l(10f,20f) }
+            "Astro" -> { m(12f,2f);l(15f,9f);l(22f,12f);l(15f,15f);l(12f,22f);l(9f,15f);l(2f,12f);l(9f,9f);path.close() }
+            "Run" -> { m(7f,4f);l(21f,12f);l(7f,20f);path.close() }
+            "Stop" -> { m(6f,6f);l(18f,6f);l(18f,18f);l(6f,18f);path.close() }
+            "Search" -> { drawCircle(color,6.5f*sx,androidx.compose.ui.geometry.Offset(10f*sx,10f*sy),style=Stroke(1.6f*sx));m(15f,15f);l(21f,21f) }
+            "Chevron" -> { m(9f,5f);l(16f,12f);l(9f,19f) }
+            "Packages" -> { m(3f,7f);l(12f,2f);l(21f,7f);l(21f,17f);l(12f,22f);l(3f,17f);path.close();m(3f,7f);l(12f,12f);l(21f,7f);m(12f,12f);l(12f,22f);m(7f,5f);l(16f,10f) }
+            "Tools" -> { m(4f,5f);l(20f,5f);m(4f,12f);l(20f,12f);m(4f,19f);l(20f,19f);m(8f,2f);l(8f,8f);m(16f,9f);l(16f,15f);m(10f,16f);l(10f,22f) }
+            "Delete" -> { m(3f,6f);l(21f,6f);m(8f,6f);l(8f,3f);l(16f,3f);l(16f,6f);m(5f,6f);l(6f,21f);l(18f,21f);l(19f,6f);m(10f,10f);l(10f,17f);m(14f,10f);l(14f,17f) }
+            "Tabs" -> { m(7f,7f);l(21f,7f);l(21f,21f);l(7f,21f);path.close();m(3f,17f);l(3f,3f);l(17f,3f) }
+            "Pin" -> { m(8f,3f);l(16f,3f);l(15f,10f);l(19f,14f);l(5f,14f);l(9f,10f);path.close();m(12f,14f);l(12f,22f) }
+            "Move" -> { m(3f,12f);l(21f,12f);m(17f,8f);l(21f,12f);l(17f,16f);m(7f,8f);l(3f,12f);l(7f,16f) }
+            "Replace" -> { m(4f,7f);l(20f,7f);l(16f,3f);m(20f,7f);l(16f,11f);m(20f,17f);l(4f,17f);l(8f,13f);m(4f,17f);l(8f,21f) }
+            "Refresh", "History" -> { m(3f,11f);c(3f,2f,20f,1f,21f,12f);c(22f,22f,5f,24f,3f,16f);m(3f,5f);l(3f,11f);l(9f,11f);m(12f,7f);l(12f,12f);l(16f,14f) }
+            "Save" -> { m(4f,3f);l(17f,3f);l(21f,7f);l(21f,21f);l(3f,21f);l(3f,3f);path.close();m(7f,3f);l(7f,9f);l(16f,9f);l(16f,3f);m(7f,21f);l(7f,14f);l(17f,14f);l(17f,21f) }
+            "Share" -> { m(12f,16f);l(12f,2f);l(7f,7f);m(12f,2f);l(17f,7f);m(4f,11f);l(4f,21f);l(20f,21f);l(20f,11f) }
+            "Attach" -> { m(8f,15f);l(15f,8f);c(19f,4f,23f,8f,19f,12f);l(10f,21f);c(3f,27f,-1f,18f,4f,13f);l(13f,4f) }
+            "Explain" -> { m(4f,3f);l(20f,3f);l(20f,17f);l(10f,17f);l(5f,22f);l(5f,17f);l(4f,17f);path.close();m(8f,7f);l(16f,7f);m(8f,12f);l(14f,12f) }
             "Folders" -> { m(3f,6f);l(9f,6f);l(11f,8f);l(21f,8f);l(21f,20f);l(3f,20f);path.close() }
             "Console" -> { m(3f,4f);l(21f,4f);l(21f,20f);l(3f,20f);path.close();m(6f,8f);l(10f,12f);l(6f,16f);m(13f,16f);l(18f,16f) }
             "Helper" -> { m(12f,5f);c(8f,2f,5f,3f,2f,4f);l(2f,20f);c(5f,18f,8f,18f,12f,21f);c(16f,18f,19f,18f,22f,20f);l(22f,4f);c(19f,3f,16f,2f,12f,5f);l(12f,21f) }

@@ -229,6 +229,13 @@ class PythonEditorViewTest {
         assertEquals("()", editor.text.toString())
         assertEquals(2, editor.selectionStart)
     }
+    @Test fun changingChromePreservesBufferAndCaret() {
+        editor.setCodeIfDifferent("print('hello')\n", revision = 20)
+        editor.setSelection(7)
+        editor.applyChrome(0xFFA8C7FA.toInt(), 0xFF101113.toInt())
+        assertEquals("print('hello')\n", editor.text.toString())
+        assertEquals(7, editor.selectionStart)
+    }
     private fun row(): RectF {
         looper.idleFor(Duration.ofMillis(1000))
         editor.draw(Canvas(Bitmap.createBitmap(1080,1200,Bitmap.Config.ARGB_8888)))

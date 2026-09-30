@@ -53,6 +53,13 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 
 ## Remaining source work
 
+## Premium interface redesign
+
+The neutral IDE design system now covers Home and project browsing, editor tabs and chrome, Console, Astro, Settings, package management, Quick Tools, file actions, navigation, sheets and empty states. Existing project, runtime, Astro and editor actions remain wired to their original implementations. `DESIGN_SYSTEM.md` lists the shared tokens. Native editor chrome updates preserve its buffer and caret.
+
+Host compilation, Android unit tests and debug APK packaging passed before the workspace was restored during publication; CI should verify the restored source commit. Physical 120 Hz and IME frame pacing still need testing on a device.
+
+
 - The editor still needs folding/sticky context if justified and more real-world IME testing. Find in Project scans nested Python files and caps results at 200. Project Problems scans nested Python files, caps at 300 files and 8 MB total, skips files above 1 MB, and requires an explicit scan. Failed writes have an on-disk draft journal for buffers up to 2 MB; explicit storage-error recovery and device process-death checks remain.
 - History uses at most 12 snapshots per file, throttled to one per minute; files over 1 MB skip automatic snapshots. Drafts larger than 2 MB and unavailable storage need an explicit recovery/error path; the new draft journal needs Android CI and device process-death validation.
 - Astro has constrained multi-file proposals, but lacks multi-step agent operations, cross-request planning, and device-tested provider output reliability.

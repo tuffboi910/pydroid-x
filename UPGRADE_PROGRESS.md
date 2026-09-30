@@ -57,6 +57,8 @@ Branch: `py4u/masterpiece-upgrade` in `tuffboi910/pydroid-x` (draft PR #5). The 
 
 Second pass: deeper blue-neutral surfaces, a stronger default accent, a workspace hero and clearer section, tab, Console, and Settings selection cues. Existing customized accent values stay available. The Package Library now lists importable modules from the real embedded runtime and offers an opt-in full PyPI Simple Index name sync with local SQLite prefix search instead of the nine hard-coded suggestions. Network and compatibility errors remain visible; runtime wheel installation still enforces Android compatibility.
 
+The full-index download and SQLite cache need an on-device network and storage check. Host Robolectric cannot load SQLite's native library in the Android CI runner, so catalog database behavior is not covered by a host SQLite test.
+
 The neutral IDE design system now covers Home and project browsing, editor tabs and chrome, Console, Astro, Settings, package management, Quick Tools, file actions, navigation, sheets and empty states. Existing project, runtime, Astro and editor actions remain wired to their original implementations. `DESIGN_SYSTEM.md` lists the shared tokens. Native editor chrome updates preserve its buffer and caret.
 
 Host compilation, Android unit tests and debug APK packaging passed before the workspace was restored during publication; CI should verify the restored source commit. Physical 120 Hz and IME frame pacing still need testing on a device.

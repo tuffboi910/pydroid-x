@@ -782,6 +782,7 @@ class IdeViewModel : ViewModel() {
         backgroundHex = settings.getString("background_hex", "#0D1118")?.let {
             if(it.equals("#101113",true) || it.equals("#11161D",true)) "#0D1118" else it
         } ?: "#0D1118"
+        IdeDesign.applyPalette(backgroundHex,accentHex)
         motionStyle = settings.getString("motion_style", "Aurora glide") ?: "Aurora glide"
         motionIntensity = settings.getFloat("motion_intensity", 0.7f)
         motionEnabled = settings.getBoolean("motion_enabled", true)
@@ -1528,8 +1529,20 @@ class IdeViewModel : ViewModel() {
             persistCode(directory, fileName, snapshot)
         }
     }
+    fun applyAppearancePreset(preset: AppearancePreset) {
+        accentHex=preset.accent; backgroundHex=preset.background
+        toolbarHex=preset.toolbar; tabBarHex=preset.tabBar
+        userBubbleHex=preset.userBubble; helperBubbleHex=preset.helperBubble
+        editorTextHex=preset.editorText; commentHex=preset.comment; stringHex=preset.string
+        numberHex=preset.number; keywordHex=preset.keyword
+        functionHex=preset.function; variableHex=preset.variable
+        consoleBackgroundHex=preset.background; consoleTextHex=preset.editorText
+        runButtonHex=preset.accent
+        saveAppearance()
+    }
     fun saveAppearance() {
         if (!::settings.isInitialized) return
+        IdeDesign.applyPalette(backgroundHex,accentHex)
         settings.edit().putFloat("editor_font",editorFontSize).putFloat("terminal_font",terminalFontSize)
             .putInt("tab_width",tabWidth).putFloat("ui_scale",uiScale).putBoolean("word_wrap",wordWrap)
             .putBoolean("syntax",syntaxHighlighting).putBoolean("autosave",autoSave).apply()
@@ -3068,6 +3081,29 @@ private fun AchievementNotice(
                             }
                         }
                         if(settingsSection=="Appearance" || searchMatches("appearance","theme","accent color","background","editor token colors","comments","strings","numbers","keywords","functions","variables")){
+                        Text("APPEARANCE PRESETS",color=accent,fontSize=12.sp,fontWeight=FontWeight.SemiBold)
+                        AppearancePresets.all.chunked(2).forEach { pair ->
+                            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                                pair.forEach { preset ->
+                                    val previewAccent=IdeDesign.color(preset.accent,IdeDesign.accent)
+                                    val previewBackground=IdeDesign.color(preset.background,IdeDesign.background)
+                                    val selected=vm.accentHex.equals(preset.accent,true) && vm.backgroundHex.equals(preset.background,true)
+                                    Surface(onClick={vm.applyAppearancePreset(preset)},
+                                        color=previewBackground,shape=IdeDesign.card,
+                                        border=BorderStroke(if(selected) 2.dp else 1.dp,
+                                            if(selected) previewAccent else IdeDesign.outline),modifier=Modifier.weight(1f)) {
+                                        Column(Modifier.background(Brush.linearGradient(listOf(previewAccent.copy(alpha=.18f),previewBackground)),IdeDesign.card)
+                                            .padding(14.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                                            Row(horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+                                                repeat(3) { index -> Box(Modifier.size(if(index==0) 16.dp else 10.dp)
+                                                    .background(if(index==0) previewAccent else previewAccent.copy(alpha=.32f),androidx.compose.foundation.shape.CircleShape)) }
+                                            }
+                                            Text(preset.name,color=Color.White,style=MaterialTheme.typography.titleMedium,maxLines=1)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         Text("ACCENT COLOR",color=accent,fontSize=12.sp)
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){
                             listOf("#78ADFF","#76C7AC","#B39CFA","#E7A781","#DBBE77","#84BDD5","#F0F1F3").forEach{hex->

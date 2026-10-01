@@ -59,6 +59,8 @@ Second pass: deeper blue-neutral surfaces, a stronger default accent, a workspac
 
 Rounded-surface pass: 16–32 dp shared geometry, rounded native completion UI, static gradients in the workspace and key cards, and working empty-project actions. User chat bubble radius is bounded to 16 dp to avoid square bubbles. The code viewport and streaming output keep solid backgrounds so decoration stays off typing and output paths.
 
+Uploaded source integration: compared the supplied archive (62 files, 2,280-line MainActivity) with the upgrade branch (newer 4,000-line MainActivity and additional recovery, Astro, editor, and package modules). Preserved the newer implementations, integrated the archive's P4 launcher identity and six legible dark appearance presets, and made shared surfaces adapt to those palettes. The archive's incomplete Light and neon Cyber presets were not copied into production.
+
 The full-index download and SQLite cache need an on-device network and storage check. Host Robolectric cannot load SQLite's native library in the Android CI runner, so catalog database behavior is not covered by a host SQLite test.
 
 The neutral IDE design system now covers Home and project browsing, editor tabs and chrome, Console, Astro, Settings, package management, Quick Tools, file actions, navigation, sheets and empty states. Existing project, runtime, Astro and editor actions remain wired to their original implementations. `DESIGN_SYSTEM.md` lists the shared tokens. Native editor chrome updates preserve its buffer and caret.

@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -29,11 +30,11 @@ import androidx.compose.ui.unit.sp
 
 /** Shared production chrome. Content colors (syntax/ANSI) remain independent. */
 object IdeDesign {
-    val background = Color(0xFF0D1118)
-    val surface = Color(0xFF171D28)
-    val raised = Color(0xFF222B39)
-    val highest = Color(0xFF2C3748)
-    val outline = Color(0xFF3A4657)
+    var background by mutableStateOf(Color(0xFF0D1118)); private set
+    var surface by mutableStateOf(Color(0xFF171D28)); private set
+    var raised by mutableStateOf(Color(0xFF222B39)); private set
+    var highest by mutableStateOf(Color(0xFF2C3748)); private set
+    var outline by mutableStateOf(Color(0xFF3A4657)); private set
     val text = Color(0xFFF0F1F3)
     val muted = Color(0xFFAAB8CB)
     val accent = Color(0xFF78ADFF)
@@ -48,6 +49,19 @@ object IdeDesign {
     const val enter = 240
     fun color(hex: String, fallback: Color): Color =
         runCatching { Color(AndroidColor.parseColor(hex)) }.getOrDefault(fallback)
+    private var paletteKey = "#0D1118:#78ADFF"
+    fun applyPalette(backgroundHex: String, accentHex: String) {
+        val key="$backgroundHex:$accentHex"
+        if (paletteKey.equals(key,true)) return
+        paletteKey=key
+        val bg=color(backgroundHex,background)
+        val tint=color(accentHex,accent)
+        background=bg
+        surface=lerp(lerp(bg,Color.White,.045f),tint,.035f)
+        raised=lerp(lerp(bg,Color.White,.10f),tint,.055f)
+        highest=lerp(lerp(bg,Color.White,.16f),tint,.065f)
+        outline=lerp(lerp(bg,Color.White,.24f),tint,.09f)
+    }
     fun foreground(color: Color): Color = if (
         .2126f*color.red + .7152f*color.green + .0722f*color.blue > .58f
     ) Color(0xFF0D1118) else text

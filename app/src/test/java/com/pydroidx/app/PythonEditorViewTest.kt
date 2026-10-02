@@ -43,6 +43,23 @@ class PythonEditorViewTest {
             View.MeasureSpec.makeMeasureSpec(1200, View.MeasureSpec.EXACTLY))
         editor.layout(0, 0, 1080, 1200)
     }
+    @Test fun dragKeepsCaretAndSuppressesKeyboardButTapEnablesIt() {
+        editor.setText((1..100).joinToString("\n") { "print($it)" })
+        editor.setSelection(0)
+        fun send(action: Int, y: Float) {
+            val event = MotionEvent.obtain(0, 10, action, 200f, y, 0)
+            editor.onTouchEvent(event)
+            event.recycle()
+        }
+        send(MotionEvent.ACTION_DOWN, 600f)
+        send(MotionEvent.ACTION_MOVE, 150f)
+        send(MotionEvent.ACTION_UP, 150f)
+        assertEquals(0, editor.selectionStart)
+        assertFalse(editor.showSoftInputOnFocus)
+        send(MotionEvent.ACTION_DOWN, 200f)
+        send(MotionEvent.ACTION_UP, 200f)
+        assertTrue(editor.showSoftInputOnFocus)
+    }
     @Test fun waitsOneSecondAndRestartsOnEveryKeystroke() {
         looper.idleFor(Duration.ofMillis(999)); assertEquals(0, requests)
         editor.text.append("r")

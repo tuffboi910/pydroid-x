@@ -2,6 +2,10 @@ package com.pydroidx.app
 
 import android.animation.ValueAnimator
 import android.graphics.Color as AndroidColor
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.ui.composed
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -27,6 +31,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+private val LocalIdeMotion = staticCompositionLocalOf { true }
+
+/** One-shot entrance, never an idle animation loop. */
+private fun Modifier.revealMotion(key: Any = Unit): Modifier = composed {
+    val allowed = LocalIdeMotion.current && ValueAnimator.areAnimatorsEnabled()
+    var entered by remember(key) { mutableStateOf(false) }
+    LaunchedEffect(key) { entered = true }
+    val progress by animateFloatAsState(if (entered || !allowed) 1f else 0f,
+        animationSpec=tween(if (allowed) 260 else 0), label="surface entrance")
+    graphicsLayer {
+        alpha=progress
+        translationY=(1f-progress)*12.dp.toPx()
+        scaleX=.97f+.03f*progress; scaleY=scaleX
+    }
+}
 
 /** Shared production chrome. Content colors (syntax/ANSI) remain independent. */
 object IdeDesign {
@@ -72,7 +92,7 @@ object IdeDesign {
 }
 
 @Composable
-fun IdeTheme(accentHex: String, backgroundHex: String, content: @Composable () -> Unit) {
+fun IdeTheme(accentHex: String, backgroundHex: String, motion: Boolean = true, content: @Composable () -> Unit) {
     val accent = IdeDesign.color(accentHex, IdeDesign.accent)
     val background = IdeDesign.color(backgroundHex, IdeDesign.background)
     val scheme = darkColorScheme(
@@ -92,6 +112,7 @@ fun IdeTheme(accentHex: String, backgroundHex: String, content: @Composable () -
         errorContainer=Color(0xFF392526), onErrorContainer=IdeDesign.error,
         surfaceTint=Color.Transparent
     )
+    CompositionLocalProvider(LocalIdeMotion provides motion) {
     MaterialTheme(colorScheme=scheme,
         shapes=Shapes(extraSmall=RoundedCornerShape(12.dp), small=IdeDesign.compact,
             medium=RoundedCornerShape(20.dp), large=IdeDesign.card, extraLarge=RoundedCornerShape(32.dp)),
@@ -107,11 +128,12 @@ fun IdeTheme(accentHex: String, backgroundHex: String, content: @Composable () -
             labelMedium=TextStyle(fontSize=12.sp,lineHeight=16.sp,fontWeight=FontWeight.Medium),
             labelSmall=TextStyle(fontSize=11.sp,lineHeight=16.sp,fontWeight=FontWeight.Medium)
         ),content=content)
+    }
 }
 
 @Composable
 fun IdePageHeading(title: String, subtitle: String, actions: @Composable RowScope.() -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().heightIn(min=60.dp),verticalAlignment=Alignment.CenterVertically,
+    Row(Modifier.fillMaxWidth().revealMotion(title).heightIn(min=60.dp),verticalAlignment=Alignment.CenterVertically,
         horizontalArrangement=Arrangement.spacedBy(12.dp)) {
         Box(Modifier.width(3.dp).height(32.dp).background(MaterialTheme.colorScheme.primary,
             RoundedCornerShape(3.dp)))
@@ -128,7 +150,7 @@ fun IdePageHeading(title: String, subtitle: String, actions: @Composable RowScop
 fun IdeWorkspaceHero(project: String, files: Int, onOpen: () -> Unit) {
     val accent = MaterialTheme.colorScheme.primary
     Surface(onClick=onOpen, color=Color.Transparent, shape=IdeDesign.card,
-        border=BorderStroke(1.dp,accent.copy(alpha=.25f)),modifier=Modifier.fillMaxWidth()
+        border=BorderStroke(1.dp,accent.copy(alpha=.25f)),modifier=Modifier.fillMaxWidth().revealMotion(project)
             .background(Brush.linearGradient(listOf(accent.copy(alpha=.20f),IdeDesign.raised,IdeDesign.surface)),IdeDesign.card)) {
         Row(Modifier.heightIn(min=140.dp)) {
             Column(Modifier.weight(1f).padding(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -149,7 +171,7 @@ fun IdeWorkspaceHero(project: String, files: Int, onOpen: () -> Unit) {
 fun IdeAssistantWelcome() {
     val accent=MaterialTheme.colorScheme.primary
     Surface(color=Color.Transparent,shape=IdeDesign.card,
-        border=BorderStroke(1.dp,accent.copy(alpha=.28f)),modifier=Modifier.fillMaxWidth()
+        border=BorderStroke(1.dp,accent.copy(alpha=.28f)),modifier=Modifier.fillMaxWidth().revealMotion()
             .background(Brush.linearGradient(listOf(accent.copy(alpha=.19f),IdeDesign.raised,IdeDesign.surface)),IdeDesign.card)) {
         Row(Modifier.padding(20.dp),verticalAlignment=Alignment.CenterVertically,
             horizontalArrangement=Arrangement.spacedBy(16.dp)) {
@@ -175,7 +197,7 @@ fun IdeActionTile(title: String, subtitle: String = "", glyph: String, enabled: 
         animationSpec=if(motion && ValueAnimator.areAnimatorsEnabled()) spring(dampingRatio=1f,stiffness=Spring.StiffnessHigh) else tween(0),label="tile feedback")
     val accent=MaterialTheme.colorScheme.primary
     Surface(color=Color.Transparent,shape=IdeDesign.card,border=BorderStroke(1.dp,accent.copy(alpha=.18f)),
-        modifier=modifier.graphicsLayer { scaleX=scale;scaleY=scale;alpha=if(enabled) 1f else .45f }
+        modifier=modifier.revealMotion(title).graphicsLayer { scaleX=scale;scaleY=scale;alpha=if(enabled) 1f else .45f }
             .background(Brush.linearGradient(listOf(accent.copy(alpha=.15f),IdeDesign.raised,IdeDesign.surface)),IdeDesign.card)
             .clickable(enabled=enabled,interactionSource=interaction,indication=ripple(),onClick=onClick)) {
         Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
@@ -193,7 +215,7 @@ fun IdeActionTile(title: String, subtitle: String = "", glyph: String, enabled: 
 @Composable
 fun IdeEmptyState(title: String, description: String, glyph: String, modifier: Modifier = Modifier,
                   action: @Composable () -> Unit = {}) {
-    Column(modifier.padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally,
+    Column(modifier.revealMotion(title).padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally,
         verticalArrangement=Arrangement.spacedBy(12.dp)) {
         Box(Modifier.size(56.dp).background(IdeDesign.raised,IdeDesign.card),contentAlignment=Alignment.Center) {
             IdeGlyph(glyph,IdeDesign.muted,Modifier.size(26.dp))
@@ -212,11 +234,18 @@ fun IdeNavigation(selected: Int, height: Float, onSelected: (Int) -> Unit) {
         windowInsets=WindowInsets(0,0,0,0),modifier=Modifier.height(height.coerceIn(64f,88f).dp)) {
         listOf("Home" to "Home","Code" to "Code","Console" to "Console","Astro" to "Astro","Settings" to "Settings")
             .forEachIndexed { index,(title,glyph) ->
+                val allowed=LocalIdeMotion.current && ValueAnimator.areAnimatorsEnabled()
+                val iconScale by animateFloatAsState(if(selected==index) 1.12f else 1f,
+                    animationSpec=if(allowed) spring(dampingRatio=.65f,stiffness=400f) else tween(0),label="navigation spring")
+                val underline by animateDpAsState(if(selected==index) 14.dp else 0.dp,
+                    animationSpec=tween(if(allowed) 220 else 0),label="navigation underline")
+                val tint by animateColorAsState(if(selected==index) accent else IdeDesign.muted,
+                    animationSpec=tween(if(allowed) 180 else 0),label="navigation tint")
                 NavigationBarItem(selected=selected==index,onClick={onSelected(index)},
                     icon={Column(horizontalAlignment=Alignment.CenterHorizontally) {
-                        IdeGlyph(glyph,if(selected==index) accent else IdeDesign.muted)
+                        IdeGlyph(glyph,tint,Modifier.graphicsLayer { scaleX=iconScale;scaleY=iconScale })
                         Spacer(Modifier.height(3.dp))
-                        Box(Modifier.width(if(selected==index) 14.dp else 0.dp).height(2.dp)
+                        Box(Modifier.width(underline).height(2.dp)
                             .background(accent, RoundedCornerShape(2.dp)))
                     }},
                     label={Text(title,fontSize=11.sp,maxLines=1)},
@@ -235,7 +264,7 @@ fun IdeSheet(title: String, subtitle: String = "", onDismiss: () -> Unit,
     ModalBottomSheet(onDismissRequest=onDismiss,containerColor=IdeDesign.surface,
         contentColor=IdeDesign.text,shape=IdeDesign.sheet,
         sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true)) {
-        Column(Modifier.fillMaxWidth().padding(horizontal=20.dp).navigationBarsPadding()
+        Column(Modifier.fillMaxWidth().revealMotion(title).animateContentSize(tween(if(LocalIdeMotion.current) 220 else 0)).padding(horizontal=20.dp).navigationBarsPadding()
             .padding(bottom=20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
             IdePageHeading(title,subtitle)
             content()
@@ -248,7 +277,7 @@ fun IdeSheetAction(label: String, glyph: String, enabled: Boolean = true, destru
                    onClick: () -> Unit) {
     val tint=if(destructive) IdeDesign.error else IdeDesign.text
     Surface(onClick=onClick,enabled=enabled,color=Color.Transparent,shape=IdeDesign.compact,
-        modifier=Modifier.fillMaxWidth()) {
+        modifier=Modifier.fillMaxWidth().revealMotion(label)) {
         Row(Modifier.padding(horizontal=12.dp,vertical=14.dp),verticalAlignment=Alignment.CenterVertically,
             horizontalArrangement=Arrangement.spacedBy(16.dp)) {
             IdeGlyph(glyph,tint.copy(alpha=if(enabled) 1f else .38f))

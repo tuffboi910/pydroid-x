@@ -2013,7 +2013,7 @@ private fun AchievementNotice(
 }
 
 @Composable fun PyDroidX(vm: IdeViewModel) {
-    IdeTheme(vm.accentHex, vm.backgroundHex) { PyDroidXContent(vm) }
+    IdeTheme(vm.accentHex, vm.backgroundHex, vm.motionEnabled) { PyDroidXContent(vm) }
 }
 
 @Composable private fun PyDroidXContent(vm: IdeViewModel) {

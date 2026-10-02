@@ -80,3 +80,11 @@ Host compilation, Android unit tests and debug APK packaging passed before the w
 - Exercise folder moves/delete recovery, Astro preview and sharing, on-device/online AI with configured models or credentials, and real PyPI downloads/imports under network and storage failure conditions.
 
 The older `b119229` checkout was left intact. The previously lost `f386e22` object was not recovered; this branch reconstructs new work from the valid `a86c076` remote base.
+
+## 0.4.6 editor gesture and motion update
+
+Based on latest pushed a3b3637, confined to masterpiece-upgrade. Added one-shot entrances for shared page headings, workspace/assistant cards, action tiles, empty states, and sheet actions; animated navigation icon scale, tint and underline; sheet content size transitions. Respects motion switch and Android animator setting for entrances/navigation. No perpetual decorative loops. New compact rounded {4} adaptive and monochrome icon.
+
+Editor drag cancels native pending tap/long press and scrolls without requesting IME; a stationary tap opens IME. Vertical gestures retain horizontal position. Background lexer work computes matching parentheses, brackets, braces, and single/triple quoted strings, excluding comments and escapes. Active innermost pair receives endpoint ticks and connecting rail. Pair cache is invalidated immediately after edits.
+
+Validation: 36 Python tests passed after installing required Jedi/packaging dependencies; diff whitespace check passed. New Robolectric gesture and delimiter parser tests are included but unexecuted: this workspace has no Gradle/Android SDK. Device IME, selection handles, long files, 120 Hz motion and icon rendering require validation. GitHub push was rejected by automatic approval review; changes remain local.

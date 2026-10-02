@@ -49,6 +49,7 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     private var highlightTask: Future<*>? = null
     private val syntaxSpans = ArrayList<ForegroundColorSpan>()
     private var cachedSyntaxRanges: List<SyntaxRange>? = null
+    private var delimiterPairs: List<DelimiterPair> = emptyList()
     private var syntaxWindowStart = 0
     private var syntaxWindowEnd = 0
     private val visibleSyntaxRunnable = Runnable {
@@ -69,6 +70,8 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
     private var touchStartX = 0f
     private var touchStartY = 0f
+    private var touchMaxScrollX = 0
+    private var touchStartScrollY = 0
     private var touchStartScrollX = 0
     private var touchAxis = 0
     private var diagnostics: List<CodeDiagnostic> = emptyList()
@@ -92,10 +95,12 @@ internal class PythonEditorView(context: Context) : EditText(context) {
     private fun updateRenderSource(source: CharSequence) {
         renderSource = source
         lineBreakIndex.rebuild(source)
+        delimiterPairs = emptyList()
     }
     private fun updateRenderSource(source: CharSequence, start: Int, before: Int, count: Int) {
         renderSource = source
         lineBreakIndex.update(source, start, before, count)
+        delimiterPairs = emptyList()
     }
     private fun syncCodeChange() {
         if (!codeDirty) return
@@ -686,6 +691,11 @@ internal class PythonEditorView(context: Context) : EditText(context) {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             touchStartX = event.x; touchStartY = event.y
             touchStartScrollX = scrollX
+            touchStartScrollY = scrollY
+            val content = layout
+            touchMaxScrollX = ((0 until (content?.lineCount ?: 0)).maxOfOrNull { content!!.getLineRight(it).toInt() } ?: 0)
+                .plus(totalPaddingLeft + totalPaddingRight - width).coerceAtLeast(0)
+            showSoftInputOnFocus = false
             touchAxis = 0
             completionTouchIndex = completionIndexAt(event.x, event.y)
             popupOwnsGesture = completionTouchIndex >= 0
@@ -721,7 +731,31 @@ internal class PythonEditorView(context: Context) : EditText(context) {
             val dy = kotlin.math.abs(event.y - touchStartY)
             if (touchAxis == 0 && maxOf(dx, dy) > touchSlop) touchAxis = if (dx > dy * 1.5f) 2 else 1
         }
+        if (touchAxis != 0) {
+            // Cancel TextView's pending tap/long press before it can move the caret or show IME.
+            val cancel = MotionEvent.obtain(event)
+            cancel.action = MotionEvent.ACTION_CANCEL
+            super.onTouchEvent(cancel)
+            cancel.recycle()
+            val content = layout
+            val maxY = ((content?.height ?: 0) + totalPaddingTop + totalPaddingBottom - height).coerceAtLeast(0)
+            if (touchAxis == 1) scrollTo(touchStartScrollX,
+                (touchStartScrollY + touchStartY - event.y).toInt().coerceIn(0, maxY))
+            else scrollTo((touchStartScrollX + touchStartX - event.x).toInt().coerceIn(0, touchMaxScrollX), touchStartScrollY)
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                touchAxis = 0
+                parent?.requestDisallowInterceptTouchEvent(false)
+            }
+            return true
+        }
+        if (event.actionMasked == MotionEvent.ACTION_UP) showSoftInputOnFocus = true
         val handled = super.onTouchEvent(event)
+        if (event.actionMasked == MotionEvent.ACTION_UP) {
+            requestFocus()
+            (context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+                .showSoftInput(this, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            parent?.requestDisallowInterceptTouchEvent(false)
+        }
         if (event.actionMasked == MotionEvent.ACTION_UP && touchAxis == 0 &&
             kotlin.math.abs(event.x - touchStartX) <= touchSlop &&
             kotlin.math.abs(event.y - touchStartY) <= touchSlop) {
@@ -916,6 +950,36 @@ internal class PythonEditorView(context: Context) : EditText(context) {
             }
         }
 
+        if (editorLayout != null && selectionStart >= 0 && selectionStart == selectionEnd) {
+            val cursor = selectionStart
+            val pair = delimiterPairs.filter { cursor in it.open..(it.close + it.width) }
+                .minByOrNull { it.close - it.open }
+            if (pair != null && pair.close < text.length) {
+                canvas.save()
+                canvas.clipRect(gutterWidth.toFloat(), 0f, width.toFloat(), height.toFloat())
+                val a = editorLayout.getLineForOffset(pair.open)
+                val b = editorLayout.getLineForOffset(pair.close)
+                val x1 = editorLayout.getPrimaryHorizontal(pair.open) + totalPaddingLeft - scrollX
+                val x2 = editorLayout.getPrimaryHorizontal(pair.close) + totalPaddingLeft - scrollX
+                val y1 = editorLayout.getLineBottom(a) + totalPaddingTop - scrollY - editorDensity
+                val y2 = editorLayout.getLineBottom(b) + totalPaddingTop - scrollY - editorDensity
+                val oldColor = guidePaint.color
+                guidePaint.color = AndroidColor.argb(180, 120, 173, 255)
+                val tick = paint.measureText(" ") * pair.width
+                canvas.drawLine(x1, y1, x1 + tick, y1, guidePaint)
+                canvas.drawLine(x2, y2, x2 + tick, y2, guidePaint)
+                if (a == b) canvas.drawLine(x1, y1 + 2 * editorDensity, x2 + tick, y2 + 2 * editorDensity, guidePaint)
+                else {
+                    val rail = minOf(x1, x2) - 4 * editorDensity
+                    canvas.drawLine(rail, y1, x1, y1, guidePaint)
+                    canvas.drawLine(rail, y1, rail, y2, guidePaint)
+                    canvas.drawLine(rail, y2, x2, y2, guidePaint)
+                }
+                guidePaint.color = oldColor
+                canvas.restore()
+            }
+        }
+
         if (editorLayout != null && editorLayout.lineCount > 0 && diagnostics.isNotEmpty()) {
             diagnostics.forEach { issue ->
                 val start = issue.start.coerceIn(0, text.length)
@@ -1073,9 +1137,11 @@ internal class PythonEditorView(context: Context) : EditText(context) {
             keywordColor, functionColor, variableColor)
         highlightTask = SYNTAX_EXECUTOR.submit {
             val ranges = PythonSyntaxHighlighter.ranges(source, palette)
+            val pairs = PythonDelimiterGuides.pairs(source)
             post {
                 if (generation != highlightGeneration || !highlightingEnabled || text !== editable) return@post
                 cachedSyntaxRanges = ranges
+                delimiterPairs = pairs
                 applyVisibleSyntax(ranges)
             }
         }

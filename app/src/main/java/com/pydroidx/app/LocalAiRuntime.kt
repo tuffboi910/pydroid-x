@@ -70,15 +70,20 @@ object LocalAiRuntime {
         require(path.endsWith(".gguf", true) && File(path).isFile) { "Choose an imported GGUF model in AI settings" }
         val engine = AiChat.getInferenceEngine(context)
         engine.state.first { it !is InferenceEngine.State.Initializing && it !is InferenceEngine.State.Uninitialized }
-        if (engine.state.value is InferenceEngine.State.Error) throw IllegalStateException("On-device runtime could not start")
+        if (engine.state.value is InferenceEngine.State.Error) {
+            engine.cleanUp()
+            loadedPath = null
+            loadedContext = 0
+            loadedThreads = 0
+        }
         if (loadedPath != path || loadedContext != contextSize || loadedThreads != threads || !engine.state.value.isModelLoaded) {
-            if (engine.state.value.isModelLoaded || engine.state.value is InferenceEngine.State.Error) engine.cleanUp()
+            if (engine.state.value.isModelLoaded) engine.cleanUp()
             onStatus("Loading on-device model…")
             engine.loadModel(path, contextSize, threads)
             loadedPath = path
             loadedContext = contextSize
             loadedThreads = threads
-            engine.setSystemPrompt("You are Astro, a helpful Python coding assistant. Give accurate, concise answers. When asked to change code, include a complete python fenced code block for the proposed file.")
+            engine.setSystemPrompt("You are Astro, a helpful Python coding assistant. Give accurate, concise answers. For a single file, include its complete fenced python content. For explicitly shared project files, head each changed file with File: exact/path.py and include its complete fenced python content. Only propose changes to files fully provided in the request.")
         }
         val message = buildString {
             history.takeLast(8).forEach { append(if (it.fromUser) "User: " else "Assistant: ").append(it.text.take(4000)).append("\n") }

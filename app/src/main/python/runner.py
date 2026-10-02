@@ -1,4 +1,5 @@
 import ast
+import bisect
 import builtins
 import contextlib
 import importlib
@@ -11,6 +12,11 @@ import traceback
 import difflib
 import shlex
 import importlib.metadata
+import runtime_packages
+
+
+def _package_root(project_dir):
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(project_dir))), "runtime-packages")
 
 
 class _Scope:
@@ -284,6 +290,22 @@ class _UndefinedNameAnalyzer(ast.NodeVisitor):
 
 def diagnose(source):
     """Return syntax errors and conservative unresolved-name warnings with exact ranges."""
+    def serialize(issues):
+        offsets = sorted({min(len(source), max(0, issue[key]))
+                          for issue in issues for key in ("start", "end")})
+        utf16_offsets = {}
+        codepoint = 0
+        utf16 = 0
+        for target in offsets:
+            while codepoint < target:
+                utf16 += 2 if ord(source[codepoint]) > 0xFFFF else 1
+                codepoint += 1
+            utf16_offsets[target] = utf16
+        for issue in issues:
+            issue["start_utf16"] = utf16_offsets[min(len(source), max(0, issue["start"]))]
+            issue["end_utf16"] = utf16_offsets[min(len(source), max(0, issue["end"]))]
+        return json.dumps(issues)
+
     try:
         compile(source, "<editor>", "exec")
         tree = ast.parse(source)
@@ -292,7 +314,7 @@ def diagnose(source):
         line = max(1, exc.lineno or 1)
         start = sum(len(value) for value in lines[:line - 1]) + max(0, (exc.offset or 1) - 1)
         end = min(len(source), start + 1)
-        return json.dumps([{
+        return serialize([{
             "start": start,
             "end": end,
             "message": exc.msg,
@@ -312,7 +334,87 @@ def diagnose(source):
     for item in tree.body:
         analyzer.visit(item)
     issues.sort(key=lambda item: (item["start"], item["end"]))
-    return json.dumps(issues)
+    return serialize(issues)
+
+
+def diagnose_project(current_source, current_filename, project_dir, max_files=300,
+                     max_file_bytes=1_000_000, max_total_bytes=8_000_000):
+    """Diagnose bounded project Python files, using the live buffer for the active file."""
+    root = os.path.realpath(project_dir)
+    current_filename = os.path.normpath(current_filename.replace("\\", os.sep))
+    if (os.path.isabs(current_filename) or current_filename in ("", ".", "..")
+            or current_filename.startswith(".." + os.sep)):
+        current_filename = ""
+
+    ignored_directories = {".git", ".history", ".recovery", "__pycache__", ".venv", "venv", "node_modules"}
+    names = []
+    max_files = max(1, int(max_files))
+    max_directories = max(32, min(2_000, max_files * 4))
+    visited_directories = 0
+    try:
+        for directory, subdirectories, filenames in os.walk(root, followlinks=False):
+            visited_directories += 1
+            if visited_directories > max_directories:
+                break
+            if len(names) >= max_files:
+                break
+            subdirectories[:] = sorted(
+                name for name in subdirectories
+                if name not in ignored_directories and not name.startswith(".")
+                and not os.path.islink(os.path.join(directory, name)))
+            for name in filenames:
+                if not name.lower().endswith(".py"):
+                    continue
+                path = os.path.realpath(os.path.join(directory, name))
+                if path.startswith(root + os.sep):
+                    relative = os.path.relpath(path, root)
+                    if relative != current_filename:
+                        names.append(relative)
+                    if len(names) >= max_files:
+                        break
+    except OSError:
+        names = []
+    names = sorted(set(names))
+    if current_filename and current_filename.lower().endswith(".py"):
+        names = [current_filename] + [name for name in names if name != current_filename][:max_files - 1]
+
+    results = []
+    total_bytes = 0
+    for name in names[:max_files]:
+        path = os.path.join(root, name)
+        if name == current_filename:
+            source = current_source
+        else:
+            try:
+                size = os.path.getsize(path)
+                if size > max_file_bytes:
+                    continue
+                with open(path, "r", encoding="utf-8", errors="replace") as stream:
+                    source = stream.read(max_file_bytes + 1)
+            except (OSError, UnicodeError):
+                continue
+        encoded_size = len(source.encode("utf-8", errors="replace"))
+        if encoded_size > max_file_bytes or total_bytes + encoded_size > max_total_bytes:
+            continue
+        total_bytes += encoded_size
+        lines = source.splitlines()
+        line_starts = [0]
+        line_starts.extend(index + 1 for index, character in enumerate(source) if character == "\n")
+        for issue in json.loads(diagnose(source)):
+            start = issue["start"]
+            line = bisect.bisect_right(line_starts, start)
+            preview = lines[line - 1].strip()[:160] if line <= len(lines) else ""
+            results.append({
+                "file": name,
+                "line": line,
+                "severity": "error" if issue.get("fatal") else "warning",
+                "message": issue["message"],
+                "preview": preview,
+                "start_utf16": issue["start_utf16"],
+                "end_utf16": issue["end_utf16"],
+                "fatal": issue.get("fatal", False),
+            })
+    return json.dumps(results)
 
 
 def complete(source, cursor, project_dir):
@@ -379,7 +481,7 @@ class _Stream(io.TextIOBase):
         return None
 
 
-def _purge_project_modules(project_dir):
+def _purge_project_modules(project_dir, clear_bytecode=True):
     root = os.path.realpath(project_dir)
     prefix = root + os.sep
     for name, module in list(sys.modules.items()):
@@ -392,10 +494,11 @@ def _purge_project_modules(project_dir):
             continue
         if real_path == root or real_path.startswith(prefix):
             sys.modules.pop(name, None)
-    for current_root, directories, _ in os.walk(root):
-        if "__pycache__" in directories:
-            shutil.rmtree(os.path.join(current_root, "__pycache__"), ignore_errors=True)
-            directories.remove("__pycache__")
+    if clear_bytecode:
+        for current_root, directories, _ in os.walk(root):
+            if "__pycache__" in directories:
+                shutil.rmtree(os.path.join(current_root, "__pycache__"), ignore_errors=True)
+                directories.remove("__pycache__")
     importlib.invalidate_caches()
 
 
@@ -433,6 +536,7 @@ def run_code(source, filename, project_dir, bridge):
         _purge_project_modules(project_dir)
         if project_dir not in sys.path:
             sys.path.insert(0, project_dir)
+        runtime_packages.activate(_package_root(project_dir))
         builtins.input = android_input
         sys.dont_write_bytecode = True
         scope = {"__name__": "__main__", "__file__": filename}
@@ -455,9 +559,12 @@ def run_code(source, filename, project_dir, bridge):
     except BaseException as exc:
         raw = traceback.format_exc()
         extracted = traceback.extract_tb(exc.__traceback__)
-        frame = next((item for item in reversed(extracted) if item.filename == filename), extracted[-1] if extracted else None)
-        line = frame.lineno if frame else 1
-        code_line = (frame.line or "").strip() if frame else ""
+        project_root = os.path.realpath(project_dir)
+        frame = next((item for item in reversed(extracted)
+                      if os.path.realpath(item.filename).startswith(project_root + os.sep)), None)
+        source_file = (exc.filename or filename) if isinstance(exc, SyntaxError) else (frame.filename if frame else filename)
+        line = (exc.lineno or 1) if isinstance(exc, SyntaxError) else (frame.lineno if frame else 1)
+        code_line = (exc.text or "").strip() if isinstance(exc, SyntaxError) else ((frame.line or "").strip() if frame else "")
         title = type(exc).__name__
         replace_from = ""
         replace_to = ""
@@ -492,11 +599,13 @@ def run_code(source, filename, project_dir, bridge):
         else:
             explanation = str(exc) or "Python stopped because of an unexpected error."
             hint = "Open Details for the technical traceback, or ask Astro for help."
-        bridge.reportError(title, explanation, line, code_line, hint, raw, replace_from, replace_to)
+        bridge.reportError(title, explanation, line, code_line, hint, raw,
+                           source_file, replace_from, replace_to)
         err.write("\n%s on line %s: %s\n" % (title, line, explanation))
         bridge.exited(1)
     finally:
         sys.settrace(old_trace)
+        _purge_project_modules(project_dir, clear_bytecode=False)
         builtins.input = old_input
         sys.dont_write_bytecode = old_dont_write_bytecode
         os.chdir(old_cwd)
@@ -517,6 +626,7 @@ def run_terminal_command(command, project_dir, bridge):
             return
         name, args = parts[0].lower(), parts[1:]
         root = os.path.realpath(project_dir)
+        runtime_packages.activate(_package_root(root))
 
         def project_path(value):
             path = os.path.realpath(os.path.join(root, value))
@@ -525,7 +635,7 @@ def run_terminal_command(command, project_dir, bridge):
             return path
 
         if name == "help":
-            out.write("Commands: help, pwd, ls, cat FILE, python FILE.py, packages, mkdir DIR, touch FILE, clear\n")
+            out.write("Commands: help, pwd, ls, cat FILE, python FILE.py, packages, pip install NAME, mkdir DIR, touch FILE, clear\n")
         elif name == "pwd":
             out.write(root + "\n")
         elif name in ("ls", "dir"):
@@ -543,8 +653,8 @@ def run_terminal_command(command, project_dir, bridge):
             if not args: raise ValueError("Usage: touch FILE")
             open(project_path(args[0]), "a", encoding="utf-8").close()
         elif name == "packages" or (name == "pip" and (not args or args[0] == "list")):
-            rows = sorted((d.metadata.get("Name", d.name), d.version) for d in importlib.metadata.distributions())
-            out.write("Installed packages:\n" + "\n".join("%s %s" % row for row in rows) + "\n")
+            rows = runtime_packages.package_state(_package_root(root))
+            out.write("Installed packages:\n" + "\n".join("%s %s (%s)" % row for row in rows) + "\n")
         elif name in ("python", "py"):
             if not args:
                 out.write(sys.version + "\n")
@@ -554,7 +664,10 @@ def run_terminal_command(command, project_dir, bridge):
                     run_code(handle.read(), filename, root, bridge)
                 return
         elif name == "pip" and args and args[0] == "install":
-            raise ValueError("Only Android-compatible packages can be installed; the full installer is not ready yet")
+            if len(args) < 2:
+                raise ValueError("Usage: pip install PACKAGE[==VERSION] (pure-Python wheels only)")
+            runtime_packages.install(args[1:], _package_root(root), out.write,
+                                     cancelled=lambda: bool(bridge.shouldStop()))
         else:
             raise ValueError("Unknown command: %s. Type help." % name)
         bridge.exited(0)

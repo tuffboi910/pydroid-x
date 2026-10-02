@@ -26,13 +26,15 @@ fun ConsoleKeyToolbar(
     externalText: String,
     outputLength: Int,
     outputScroll: ScrollState,
-    containerColor: Color = Color(0xFF050505)
+    containerColor: Color = Color(0xFF050505),
+    autoScroll: Boolean = true
 ) {
     var ctrl by remember { mutableStateOf(false) }
     var alt by remember { mutableStateOf(false) }
     var lastNonBlank by remember { mutableStateOf("") }
 
-    LaunchedEffect(outputLength) {
+    LaunchedEffect(outputLength, autoScroll) {
+        if (!autoScroll) return@LaunchedEffect
         withFrameNanos { }
         outputScroll.scrollTo(outputScroll.maxValue)
     }
@@ -86,13 +88,13 @@ fun ConsoleKeyToolbar(
                     }
                 },
                 colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = if ((key == "Ctrl" && ctrl) || (key == "Alt" && alt)) Color.White.copy(alpha = .16f) else Color.White.copy(alpha = .025f),
+                    containerColor = if ((key == "Ctrl" && ctrl) || (key == "Alt" && alt)) MaterialTheme.colorScheme.primary.copy(alpha = .12f) else IdeDesign.surface,
                     contentColor = Color.White
                 ),
-                border = BorderStroke(1.dp, Color.White.copy(alpha = .16f)),
+                border = BorderStroke(1.dp, IdeDesign.outline),
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
                 contentPadding = PaddingValues(horizontal = 13.dp),
-                modifier = Modifier.height(38.dp)
+                modifier = Modifier.height(44.dp)
             ) {
                 Text(key, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
             }

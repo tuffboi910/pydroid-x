@@ -114,6 +114,7 @@ internal class InferenceEngineImpl private constructor(
     override val state: StateFlow<InferenceEngine.State> = _state.asStateFlow()
 
     private var _readyForSystemPrompt = false
+    @Volatile private var nativeReady = false
     @Volatile
     private var _cancelGeneration = false
 
@@ -134,6 +135,7 @@ internal class InferenceEngineImpl private constructor(
                 Log.i(TAG, "Loading native library...")
                 System.loadLibrary("ai-chat")
                 init(nativeLibDir)
+                nativeReady = true
                 _state.value = InferenceEngine.State.Initialized
                 Log.i(TAG, "Native library loaded! System info: \n${systemInfo()}")
 
@@ -230,8 +232,7 @@ internal class InferenceEngineImpl private constructor(
 
             processUserPrompt(message, predictLength).let { result ->
                 if (result != 0) {
-                    Log.e(TAG, "Failed to process user prompt: $result")
-                    return@flow
+                    throw IllegalArgumentException("Prompt exceeds the on-device context or could not be decoded (code $result)")
                 }
             }
 
@@ -295,7 +296,10 @@ internal class InferenceEngineImpl private constructor(
                 }
 
                 is InferenceEngine.State.Error -> {
-                    Log.i(TAG, "Resetting error states...")
+                    if (!nativeReady) throw state.exception
+                    Log.i(TAG, "Unloading partial model resources after an error...")
+                    unload()
+                    _readyForSystemPrompt = false
                     _state.value = InferenceEngine.State.Initialized
                     Log.i(TAG, "States reset!")
                     Unit
@@ -313,11 +317,13 @@ internal class InferenceEngineImpl private constructor(
         _cancelGeneration = true
         runBlocking(llamaDispatcher) {
             _readyForSystemPrompt = false
+            if (!nativeReady) return@runBlocking
             when(_state.value) {
                 is InferenceEngine.State.Uninitialized -> {}
                 is InferenceEngine.State.Initialized -> shutdown()
                 else -> { unload(); shutdown() }
             }
+            nativeReady = false
         }
         llamaScope.cancel()
     }

@@ -1,10 +1,12 @@
 import importlib.util
 import json
 import pathlib
+import sys
 import tempfile
 import unittest
 
 PATH = pathlib.Path(__file__).parents[2] / "main" / "python" / "runner.py"
+sys.path.insert(0, str(PATH.parent))
 SPEC = importlib.util.spec_from_file_location("completion_runner", PATH)
 runner = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runner)

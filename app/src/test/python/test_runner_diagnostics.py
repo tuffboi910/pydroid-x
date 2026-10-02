@@ -1,10 +1,12 @@
 import importlib.util
 import json
 import pathlib
+import sys
 import tempfile
 import unittest
 
 RUNNER_PATH = pathlib.Path(__file__).parents[2] / "main" / "python" / "runner.py"
+sys.path.insert(0, str(RUNNER_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("py4u_runner", RUNNER_PATH)
 runner = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runner)
@@ -17,6 +19,7 @@ class FakeBridge:
     def __init__(self):
         self.output = []
         self.exit_code = None
+        self.error = None
 
     def write(self, value, error):
         self.output.append(value)
@@ -29,6 +32,9 @@ class FakeBridge:
 
     def exited(self, code):
         self.exit_code = code
+
+    def reportError(self, *details):
+        self.error = details
 
 
 class DiagnosticTests(unittest.TestCase):
@@ -100,6 +106,38 @@ def outer(items):
         issue = json.loads(runner.diagnose(source))[0]
         self.assertEqual(source.index("not_defined"), issue["start"])
         self.assertEqual("not_defined", source[issue["start"]:issue["end"]])
+        self.assertEqual(len(source[:source.index("not_defined")].encode("utf-16-le")) // 2,
+                         issue["start_utf16"])
+
+    def test_project_diagnostics_use_live_buffer_and_report_file_line_severity(self):
+        with tempfile.TemporaryDirectory() as project:
+            pathlib.Path(project, "main.py").write_text("print(stale)\n", encoding="utf-8")
+            pathlib.Path(project, "helper.py").write_text(
+                "label = '🐍'\nprint(helper_missing)\n", encoding="utf-8")
+            pathlib.Path(project, "src/nested.py").parent.mkdir()
+            pathlib.Path(project, "src/nested.py").write_text(
+                "print(nested_missing)\n", encoding="utf-8")
+            results = json.loads(runner.diagnose_project(
+                "# live\nprint(buffer_missing)\n", "main.py", project))
+            self.assertEqual(
+                [("main.py", 2, "warning", "Undefined name: buffer_missing"),
+                 ("helper.py", 2, "warning", "Undefined name: helper_missing"),
+                 ("src/nested.py", 1, "warning", "Undefined name: nested_missing")],
+                [(item["file"], item["line"], item["severity"], item["message"])
+                 for item in results])
+            helper = next(item for item in results if item["file"] == "helper.py")
+            helper_source = "label = '🐍'\nprint(helper_missing)\n"
+            prefix = helper_source[:helper_source.index("helper_missing")]
+            self.assertEqual(len(prefix.encode("utf-16-le")) // 2, helper["start_utf16"])
+
+    def test_project_diagnostics_skip_non_python_and_oversized_files(self):
+        with tempfile.TemporaryDirectory() as project:
+            pathlib.Path(project, "notes.txt").write_text("print(missing)", encoding="utf-8")
+            pathlib.Path(project, "large.py").write_text("x" * 40, encoding="utf-8")
+            results = json.loads(runner.diagnose_project("print(ok)\n", "main.py", project,
+                                                        max_file_bytes=32))
+            self.assertEqual([("main.py", "Undefined name: ok")],
+                             [(item["file"], item["message"]) for item in results])
 
     def test_match_capture_is_defined(self):
         source = """
@@ -146,6 +184,24 @@ class Example:
         self.assertFalse(name["fatal"])
 
 class RunnerExecutionTests(unittest.TestCase):
+    def test_runtime_error_reports_source_file_and_line(self):
+        with tempfile.TemporaryDirectory() as project:
+            helper = pathlib.Path(project) / "helper.py"
+            helper.write_text("raise ValueError('bad')\n", encoding="utf-8")
+            bridge = FakeBridge()
+            runner.run_code("import helper\n", "main.py", project, bridge)
+            self.assertEqual(1, bridge.exit_code)
+            self.assertEqual(1, bridge.error[2])
+            self.assertEqual(str(helper), bridge.error[6])
+
+    def test_syntax_error_uses_python_source_line(self):
+        with tempfile.TemporaryDirectory() as project:
+            bridge = FakeBridge()
+            runner.run_code("print('ok')\nif True print('bad')\n", "main.py", project, bridge)
+            self.assertEqual(1, bridge.exit_code)
+            self.assertEqual(2, bridge.error[2])
+            self.assertEqual("main.py", bridge.error[6])
+
     def test_system_exit_uses_requested_exit_code_without_traceback(self):
         with tempfile.TemporaryDirectory() as project:
             bridge = FakeBridge()
